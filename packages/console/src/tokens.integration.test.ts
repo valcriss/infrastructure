@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
+import { ROUTE_DOCS } from "./openapi.js";
 import { createPool, migrate, type Pool } from "./db.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -194,6 +195,17 @@ describe.skipIf(!url)("jetons API et variables par service (intégration)", () =
     });
     expect(r.status).toBe(422);
     expect(r.json.error.code).toBe("unsupported_compose_structure");
+  });
+
+  it("documente exactement les routes enregistrées (contrat OpenAPI sans dérive)", async () => {
+    const registered = built.routes.filter((r) => r.split(" ")[1]?.startsWith("/api/v1") || r.endsWith(" /status")).sort();
+    const documented = ROUTE_DOCS.map((d) => `${d.method} ${d.path}`).sort();
+    expect(registered).toEqual(documented);
+
+    const res = await call("GET", "/api/v1/openapi.json");
+    expect(res.status).toBe(200);
+    expect(res.json.openapi).toBe("3.1.0");
+    expect(Object.keys(res.json.paths)).toContain("/api/v1/stacks/{id}/deploy");
   });
 
   // Dernier test : il épuise le limiteur d'échecs de l'adresse locale.

@@ -137,3 +137,12 @@ export interface ChangeResult {
 
 export const fmtDate = (iso: string | null | undefined): string =>
   iso ? new Date(iso).toLocaleString("fr-FR") : "jamais";
+
+export interface ObservedProject {
+  name: string;
+  managedStackId: string | null;
+  importable: boolean;
+  total: number;
+  running: number;
+  services: { service: string; image: string }[];
+}

@@ -357,6 +357,49 @@ describe.skipIf(!url)("stacks et opérations (intégration)", () => {
     expect(text).toContain('event: end\ndata: "Flux terminé."');
   });
 
+  // --- Import d'une stack observée ---------------------------------------------------
+
+  it("liste les projets observés et n'importe un projet existant que sur demande explicite", async () => {
+    const containers = [
+      { id: "c1", names: ["legacy-web-1"], image: "nginx:1.25", imageId: "sha256:1", state: "running", status: "Up", created: 1, composeProject: "legacy", composeService: "web" },
+      { id: "c2", names: ["legacy-db-1"], image: "postgres:16", imageId: "sha256:2", state: "exited", status: "Exited", created: 1, composeProject: "legacy", composeService: "db" },
+      { id: "c3", names: ["console-docker-console-1"], image: "x", imageId: "sha256:3", state: "running", status: "Up", created: 1, composeProject: "console-docker", composeService: "console" },
+    ];
+    await pool.query("UPDATE hosts SET inventory = $2, inventory_observed_at = now() WHERE id = $1", [hostId, JSON.stringify(containers)]);
+
+    const list = (await call("GET", `/api/v1/hosts/${hostId}/projects`)).json.projects as any[];
+    const legacy = list.find((p) => p.name === "legacy");
+    expect(legacy).toMatchObject({ importable: true, managedStackId: null, total: 2, running: 1 });
+    expect(legacy.services).toEqual([{ service: "web", image: "nginx:1.25" }, { service: "db", image: "postgres:16" }]);
+    expect(list.find((p) => p.name === "console-docker").importable).toBe(false);
+
+    const refused = await createStack("legacy");
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("project_exists_on_host");
+    expect((await createStack("fantome", { adopt: true })).json.error.code).toBe("project_not_observed");
+    expect((await createStack("console-docker", { adopt: true })).status).toBe(400);
+
+    const created = await createStack("legacy", { adopt: true });
+    expect(created.status).toBe(201);
+    const id = created.json.id as string;
+    const after = (await call("GET", `/api/v1/hosts/${hostId}/projects`)).json.projects as any[];
+    expect(after.find((p) => p.name === "legacy")).toMatchObject({ importable: false, managedStackId: id });
+
+    // Premier déploiement : reprise autorisée ; elle ne l'est plus ensuite.
+    const before = agent.runs.length;
+    const first = (await call("POST", `/api/v1/stacks/${id}/deploy`)).json.operationId as string;
+    await waitFor(() => agent.runs.length > before);
+    expect(agent.runs[agent.runs.length - 1]?.options).toMatchObject({ adoptExisting: true });
+    agent.send({ type: "operation_result", operationId: first, status: "succeeded" });
+    await waitFor(async () => ((await call("GET", `/api/v1/operations/${first}`)).json as any).status === "succeeded");
+
+    const second = (await call("POST", `/api/v1/stacks/${id}/deploy`)).json.operationId as string;
+    await waitFor(() => agent.runs.length > before + 1);
+    expect(agent.runs[agent.runs.length - 1]?.options?.adoptExisting).toBeUndefined();
+    agent.send({ type: "operation_result", operationId: second, status: "succeeded" });
+    await waitFor(async () => ((await call("GET", `/api/v1/operations/${second}`)).json as any).status === "succeeded");
+  });
+
   it("marque une opération « inconnue » à la perte de l'agent, sans la rejouer, et refuse si hors ligne", async () => {
     const id = (await createStack("app8")).json.id as string;
     const before = agent.runs.length;

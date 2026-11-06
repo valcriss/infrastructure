@@ -162,6 +162,8 @@ export interface CreateStackInput {
   description: string;
   compose: string;
   variables: Record<string, VariableInput>;
+  /** Reprend un projet Compose existant non géré (import d'une stack observée). */
+  adopt?: boolean;
   author: string;
 }
 
@@ -183,9 +185,13 @@ export async function createStack(pool: Pool, input: CreateStackInput): Promise<
     );
     if (!host.rows[0]) throw new HttpError(404, "host_not_found", "Hôte introuvable");
 
-    // Évite de prendre le contrôle d'un projet Compose existant non géré.
-    const conflict = (host.rows[0].inventory ?? []).some((ct) => ct.composeProject === input.name);
-    if (conflict) {
+    // Évite de prendre le contrôle d'un projet Compose existant non géré, sauf
+    // import explicite (adopt) d'un projet qui existe réellement sur l'hôte.
+    const exists = (host.rows[0].inventory ?? []).some((ct) => ct.composeProject === input.name);
+    if (input.adopt && !exists) {
+      throw new HttpError(400, "project_not_observed", `Aucun projet Compose « ${input.name} » n'a été observé sur cet hôte.`);
+    }
+    if (exists && !input.adopt) {
       throw new HttpError(
         409,
         "project_exists_on_host",
@@ -196,9 +202,9 @@ export async function createStack(pool: Pool, input: CreateStackInput): Promise<
     let id: string;
     try {
       const ins = await c.query<{ id: string }>(
-        `INSERT INTO stacks (name, host_id, description, current_revision)
-         VALUES ($1, $2, $3, 1) RETURNING id`,
-        [input.name, input.hostId, input.description],
+        `INSERT INTO stacks (name, host_id, description, current_revision, adopt_pending)
+         VALUES ($1, $2, $3, 1, $4) RETURNING id`,
+        [input.name, input.hostId, input.description, input.adopt === true],
       );
       id = ins.rows[0]?.id ?? "";
     } catch (err) {

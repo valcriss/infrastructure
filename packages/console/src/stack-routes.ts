@@ -1,5 +1,6 @@
 import {
   ComposeEditError,
+  RESERVED_STACK_NAMES,
   editServiceEnvironment,
   validateEnvironmentName,
   validateFilePath,
@@ -27,28 +28,30 @@ const VariableInput = z.union([
 const Message = z.string().max(200).optional();
 const Expected = z.number().int().positive();
 
-const CreateBody = z.object({
+export const CreateBody = z.object({
   name: z.string().min(1).max(63),
   hostId: z.uuid(),
   description: z.string().max(500).default(""),
   compose: z.string(),
   variables: z.record(z.string(), VariableInput).default({}),
+  /** Importe un projet Compose déjà présent sur l'hôte au lieu de le refuser. */
+  adopt: z.boolean().default(false),
 });
-const ComposeBody = z.object({ expectedRevision: Expected, compose: z.string(), message: Message });
-const VariablesBody = z.object({
+export const ComposeBody = z.object({ expectedRevision: Expected, compose: z.string(), message: Message });
+export const VariablesBody = z.object({
   expectedRevision: Expected,
   set: z.record(z.string(), VariableInput).optional(),
   unset: z.array(z.string()).max(200).optional(),
   message: Message,
 });
-const ServiceEnvBody = z.object({
+export const ServiceEnvBody = z.object({
   expectedRevision: Expected,
   set: z.record(z.string(), z.string()).optional(),
   unset: z.array(z.string()).max(200).optional(),
   message: Message,
 });
-const FileBody =z.object({ expectedRevision: Expected, content: z.string(), message: Message });
-const DeployBody = z
+export const FileBody = z.object({ expectedRevision: Expected, content: z.string(), message: Message });
+export const DeployBody = z
   .object({
     revision: z.number().int().positive().optional(),
     pullImages: z.boolean().optional(),
@@ -132,6 +135,39 @@ export function registerStackRoutes(
     const body = CreateBody.parse(request.body);
     const { id } = await createStack(pool, { ...body, author: request.actor });
     return reply.code(201).send({ id, revision: 1, backup: BACKUP });
+  });
+
+  // Projets Compose observés sur un hôte : gérés par une stack ou à importer.
+  app.get("/api/v1/hosts/:id/projects", { preHandler: auth }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const host = await pool.query<{ inventory: Container[] | null; inventory_observed_at: Date | null }>(
+      "SELECT inventory, inventory_observed_at FROM hosts WHERE id = $1 AND revoked_at IS NULL",
+      [id],
+    );
+    if (!host.rows[0]) throw new HttpError(404, "host_not_found", "Hôte introuvable");
+    const managed = await pool.query<{ id: string; name: string }>("SELECT id, name FROM stacks WHERE host_id = $1", [id]);
+    const byName = new Map(managed.rows.map((r) => [r.name, r.id]));
+    const projects = new Map<string, Container[]>();
+    for (const c of host.rows[0].inventory ?? []) {
+      if (!c.composeProject) continue;
+      projects.set(c.composeProject, [...(projects.get(c.composeProject) ?? []), c]);
+    }
+    return {
+      observedAt: host.rows[0].inventory_observed_at?.toISOString() ?? null,
+      projects: [...projects.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, containers]) => ({
+          name,
+          managedStackId: byName.get(name) ?? null,
+          // Les projets de la console elle-même ne sont jamais importables.
+          importable: !byName.has(name) && !RESERVED_STACK_NAMES.includes(name),
+          total: containers.length,
+          running: containers.filter((c) => c.state === "running").length,
+          services: [...new Map(containers.map((c) => [c.composeService ?? c.names[0] ?? "?", c.image])).entries()].map(
+            ([service, image]) => ({ service, image }),
+          ),
+        })),
+    };
   });
 
   app.get("/api/v1/stacks/:id", { preHandler: auth }, async (request) => {

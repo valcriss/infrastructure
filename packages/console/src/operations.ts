@@ -156,8 +156,8 @@ export class OperationsService {
       }
     }
 
-    const stack = await this.pool.query<{ name: string; host_id: string; current_revision: number }>(
-      "SELECT name, host_id, current_revision FROM stacks WHERE id = $1",
+    const stack = await this.pool.query<{ name: string; host_id: string; current_revision: number; adopt_pending: boolean }>(
+      "SELECT name, host_id, current_revision, adopt_pending FROM stacks WHERE id = $1",
       [input.stackId],
     );
     const s = stack.rows[0];
@@ -185,7 +185,12 @@ export class OperationsService {
       payload = { number: rev.revision, compose: rev.compose, variables, sensitive, files: rev.files };
     }
 
-    const options = { pullImages: input.pullImages ?? false, forceRecreate: input.forceRecreate ?? false };
+    const options = {
+      pullImages: input.pullImages ?? false,
+      forceRecreate: input.forceRecreate ?? false,
+      // Premier déploiement d'une stack importée : reprise explicite du projet existant.
+      ...(s.adopt_pending ? { adoptExisting: true } : {}),
+    };
     let id: string;
     try {
       const ins = await this.pool.query<{ id: string }>(
@@ -259,7 +264,7 @@ export class OperationsService {
     if (!op) return; // inconnue, d'un autre hôte ou déjà terminée : ignorée
     if (op.type === "deploy" && msg.status === "succeeded" && op.revision !== null) {
       await this.pool.query(
-        "UPDATE stacks SET deployed_revision = $2, deployed_at = now() WHERE id = $1",
+        "UPDATE stacks SET deployed_revision = $2, deployed_at = now(), adopt_pending = false WHERE id = $1",
         [op.stack_id, op.revision],
       );
     }

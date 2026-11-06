@@ -158,7 +158,15 @@ export const RunSchema = z.object({
   /** Obligatoire pour `deploy`, absent pour `stop` et `start`. */
   revision: RevisionPayloadSchema.optional(),
   options: z
-    .object({ pullImages: z.boolean(), forceRecreate: z.boolean() })
+    .object({
+      pullImages: z.boolean(),
+      forceRecreate: z.boolean(),
+      /**
+       * Premier déploiement d'une stack importée : autorise l'agent à reprendre
+       * un projet Compose existant (sans supprimer les services hors Compose).
+       */
+      adoptExisting: z.boolean().optional(),
+    })
     .optional(),
 });
 export type RunMessage = z.infer<typeof RunSchema>;

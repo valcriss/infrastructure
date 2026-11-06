@@ -7,7 +7,7 @@ import { HttpError } from "./http-error.js";
 
 const MAX_ACTIVE_TOKENS = 50;
 
-const CreateBody = z.object({
+export const CreateTokenBody = z.object({
   name: z.string().trim().min(1).max(64),
   scope: z.enum(["read", "write"]).default("write"),
   expiresInDays: z.number().int().min(1).max(3650).optional(),
@@ -25,7 +25,7 @@ export function registerTokenRoutes(
   const { pool, auth } = deps;
 
   app.post("/api/v1/api-tokens", { preHandler: auth }, async (request, reply) => {
-    const body = CreateBody.parse(request.body);
+    const body = CreateTokenBody.parse(request.body);
     const active = await pool.query<{ n: number }>(
       "SELECT count(*)::int AS n FROM api_tokens WHERE revoked_at IS NULL",
     );

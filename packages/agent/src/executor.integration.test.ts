@@ -147,6 +147,30 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
     expect(after).not.toBe("");
   }, 240_000);
 
+  it("reprend un projet existant sur demande explicite sans supprimer ses autres services", async () => {
+    const project = "it-" + randomBytes(4).toString("hex");
+    projects.push(project);
+    const foreign = mkdtempSync(join(tmpdir(), "infra-adopt-"));
+    execFileSync("sh", ["-c", `printf "services:\n  ancien:\n    image: alpine:3.20\n    command: ['sleep','120']\n" > ${foreign}/compose.yaml`]);
+    dockerOut("compose", "--project-name", project, "--project-directory", foreign, "-f", `${foreign}/compose.yaml`, "up", "-d");
+    try {
+      const compose = ["services:", "  nouveau:", "    image: alpine:3.20", "    command: ['sleep', '120']", ""].join("\n");
+      const msg = deployMsg(project, randomUUID(), compose, {}, {});
+      msg.options = { pullImages: false, forceRecreate: false, adoptExisting: true };
+      const { result, log } = await runAction(msg);
+      expect(result.status, result.error ?? log).toBe("succeeded");
+      expect(log).toContain("Reprise du projet existant");
+      const running = dockerOut("ps", "--format", "{{.Label \"com.docker.compose.service\"}}", "--filter", `label=com.docker.compose.project=${project}`)
+        .split(/\s+/)
+        .filter(Boolean)
+        .sort();
+      // Le service d'origine, absent du Compose fourni, n'est pas supprimé.
+      expect(running).toEqual(["ancien", "nouveau"]);
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  }, 240_000);
+
   it("refuse de prendre le contrôle d'un projet Compose existant non géré", async () => {
     const project = "it-" + randomBytes(4).toString("hex");
     projects.push(project);

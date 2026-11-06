@@ -30,6 +30,7 @@ import { AgentGateway } from "./gateway.js";
 import { HttpError } from "./http-error.js";
 import { LogStreams } from "./log-streams.js";
 import { OperationsService } from "./operations.js";
+import { buildOpenApi, toOpenApiPath } from "./openapi.js";
 import { registerStackRoutes } from "./stack-routes.js";
 import { registerTokenRoutes } from "./token-routes.js";
 
@@ -49,6 +50,8 @@ export interface BuiltApp {
   setup: SetupState;
   gateway: AgentGateway;
   ops: OperationsService;
+  /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
+  routes: string[];
 }
 
 const apiError = (code: string, message: string) => ({ error: { code, message } });
@@ -70,6 +73,13 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
   const setup: SetupState = { token: (await adminExists()) ? null : randomToken(24) };
   const gateway = new AgentGateway(pool, config.sharedDir, app.log);
 
+  const routes: string[] = [];
+  app.addHook("onRoute", (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    for (const m of methods) {
+      if (m !== "HEAD" && m !== "OPTIONS") routes.push(`${m.toLowerCase()} ${toOpenApiPath(route.url)}`);
+    }
+  });
   app.decorateRequest("actor", "");
   await app.register(cookie);
   await app.register(websocket, { options: { maxPayload: MAX_MESSAGE_BYTES } });
@@ -126,6 +136,8 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
   });
 
   // --- Statut public minimal ------------------------------------------------
+  app.get("/api/v1/openapi.json", async () => buildOpenApi());
+
   app.get("/status", async () => ({ status: "ok", initialized: setup.token === null }));
 
   // --- Initialisation (une seule fois) --------------------------------------
@@ -350,5 +362,5 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     });
   }
 
-  return { app, setup, gateway, ops };
+  return { app, setup, gateway, ops, routes };
 }

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ApiError, api, type Host, type HostDetail } from "../api";
+import { ApiError, api, type Host, type HostDetail, type ObservedProject } from "../api";
 
 const hosts = ref<Host[]>([]);
 const loading = ref(true);
 const error = ref("");
 const selected = ref<HostDetail | null>(null);
 const newToken = ref<{ token: string; expiresAt: string } | null>(null);
+const projects = ref<ObservedProject[]>([]);
 let timer: number | undefined;
 
 async function load() {
@@ -23,6 +24,7 @@ async function load() {
 
 async function select(id: string) {
   selected.value = await api<HostDetail>(`/api/v1/hosts/${id}`);
+  projects.value = (await api<{ projects: ObservedProject[] }>(`/api/v1/hosts/${id}/projects`)).projects;
 }
 
 async function createToken() {
@@ -103,6 +105,24 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </div>
       </li>
     </ul>
+
+    <section v-if="selected && projects.length" class="space-y-3">
+      <h2 class="text-lg font-semibold">Projets Compose observés sur {{ selected.name }}</h2>
+      <p class="text-sm text-slate-600">
+        Ces projets sont seulement observés : la console n'y touche pas tant que vous ne les avez pas importés avec leur fichier Compose.
+      </p>
+      <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white text-sm">
+        <li v-for="p in projects" :key="p.name" class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+          <div>
+            <span class="font-medium">{{ p.name }}</span>
+            <span class="ml-2 text-xs text-slate-500">{{ p.running }}/{{ p.total }} en marche · {{ p.services.map((s) => s.service).join(", ") }}</span>
+          </div>
+          <RouterLink v-if="p.managedStackId" :to="`/stacks/${p.managedStackId}`" class="underline">Gérée par une stack</RouterLink>
+          <RouterLink v-else-if="p.importable" :to="{ path: '/stacks/new', query: { adopt: '1', host: selected.id, name: p.name } }" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100">Importer</RouterLink>
+          <span v-else class="text-xs text-slate-500">projet de la console (non importable)</span>
+        </li>
+      </ul>
+    </section>
 
     <section v-if="selected" class="space-y-4">
       <h2 class="text-lg font-semibold">Conteneurs de {{ selected.name }}</h2>

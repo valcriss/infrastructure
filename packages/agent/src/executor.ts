@@ -125,12 +125,17 @@ export class Executor {
 
     // Ne jamais prendre le contrôle d'un projet Compose qui n'est pas le nôtre
     // (y compris la console elle-même).
+    let adopting = false;
     if (!(await isManaged(dir))) {
       const existing = await this.projectContainers(project);
-      if (existing > 0) {
+      if (existing > 0 && !options.adoptExisting) {
         throw new Error(
           `Un projet Compose « ${project} » existe déjà sur cet hôte et n'est pas géré par la console : déploiement refusé.`,
         );
+      }
+      if (existing > 0) {
+        adopting = true;
+        log(`Reprise du projet existant « ${project} » (${existing} conteneur(s)). Les services absents de ce Compose ne seront pas supprimés.`);
       }
     }
 
@@ -160,13 +165,23 @@ export class Executor {
       log("Téléchargement des images…");
       await this.docker([...this.composeArgs(project, dir), "pull"], onOutput);
     }
+    if (adopting) {
+      // Information seulement : montre ce que la reprise va recréer. Un échec n'est pas bloquant.
+      log("Prévisualisation des changements (aucune modification) :");
+      try {
+        await this.docker([...this.composeArgs(project, dir), "--dry-run", "up", "--detach"], onOutput);
+      } catch {
+        log("Prévisualisation indisponible avec cette version de Docker Compose.");
+      }
+    }
     log("Application de la configuration…");
     await this.docker(
       [
         ...this.composeArgs(project, dir),
         "up",
         "--detach",
-        "--remove-orphans",
+        // Une reprise ne supprime jamais les conteneurs que le Compose fourni ne décrit pas.
+        ...(adopting ? [] : ["--remove-orphans"]),
         ...(options.forceRecreate ? ["--force-recreate"] : []),
       ],
       onOutput,

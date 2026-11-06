@@ -2,21 +2,24 @@
 
 Outil auto-hébergé de gestion de stacks Docker. Cadrage complet : [project.md](project.md). Décisions techniques : [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md). Backlog : [docs/backlog.md](docs/backlog.md).
 
-État : **Phase 1 terminée**, **Phase 2 quasi terminée** : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage, jetons API, logs en direct et interface complète des stacks (éditeur Compose, différences, historique, opérations). Reste le contrat OpenAPI et l'import des stacks déjà présentes sur l'hôte.
+État : **Phases 1 et 2 terminées** : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage, jetons API, logs en direct et interface complète des stacks (éditeur Compose, différences, historique, opérations). Contrat OpenAPI 3.1 dans [docs/openapi.json](docs/openapi.json) (servi par `GET /api/v1/openapi.json`) et import des projets Compose déjà présents sur l'hôte. Prochaine étape : Phase 3 (sauvegarde Git et restauration).
 
 ## API (extrait)
+
+Contrat complet : [docs/openapi.json](docs/openapi.json), généré depuis le code (`npm run build && npm run openapi -w @infra/console`) ; un test vérifie qu'il décrit exactement les routes enregistrées et qu'il est à jour.
 
 Authentification : jeton API (`Authorization: Bearer cdt_…`) ou cookie de session (`POST /api/v1/session`). Les jetons se gèrent depuis une session (`POST /api/v1/api-tokens`, `GET`, `DELETE /{id}`) : ils sont affichés une seule fois, stockés par empreinte, révocables, avec expiration facultative et une portée `read` (GET uniquement) ou `write`. Un jeton ne peut ni gérer les jetons ni modifier le compte administrateur. Toute modification de stack exige `expectedRevision` (409 en cas de conflit).
 
 ```bash
 # Créer une stack (révision 1) : le Compose doit référencer une image, pas de « build »
-POST /api/v1/stacks                        {"name","hostId","compose","variables":{"PORT":"8080","PWD":{"value":"…","sensitive":true}}}
+POST /api/v1/stacks                        {"name","hostId","compose","variables":{"PORT":"8080","PWD":{"value":"…","sensitive":true}},"adopt":false}
 PUT  /api/v1/stacks/{id}/compose           {"expectedRevision":1,"compose":"…"}
 PATCH /api/v1/stacks/{id}/variables        {"expectedRevision":2,"set":{"IMAGE_TAG":"1.4.2"},"unset":["OLD"]}
 PATCH /api/v1/stacks/{id}/services/{service}/environment   {"expectedRevision":3,"set":{"LOG_LEVEL":"debug"},"unset":["OLD"]}
 PUT  /api/v1/stacks/{id}/files/{chemin}    {"expectedRevision":3,"content":"…"}
 POST /api/v1/stacks/{id}/deploy            {"revision":4,"pullImages":true}   → 202 + operationId (en-tête Idempotency-Key accepté)
 POST /api/v1/stacks/{id}/stop | start
+GET  /api/v1/hosts/{id}/projects             projets Compose observés (gérés ou importables)
 GET  /api/v1/operations/{id}               état, journal expurgé, images déployées (digests)
 GET  /api/v1/stacks/{id}/logs?service=web&tail=100   logs en direct (Server-Sent Events : `lines`, `end`)
 ```
@@ -78,6 +81,7 @@ TypeScript est volontairement limité à la version 6 : `vue-tsc` ne fonctionne 
 - L'interface n'a été vérifiée que par navigation automatisée (pas de contrôle visuel de la mise en page, ni sur mobile) ; le bundle JavaScript fait environ 580 Ko à cause de l'éditeur.
 - L'édition des variables d'un service conserve commentaires, ordre et expressions `${…}`, mais refuse les alias YAML et les clés de fusion `<<`. Avec une indentation de 4 espaces et des listes non indentées, la bibliothèque YAML décale les listes de 2 espaces. Les valeurs écrites dans `environment` restent dans le texte du Compose : mettre les secrets dans des variables de stack sensibles (`${NOM}`).
 - Les valeurs de variables sont stockées en clair dans PostgreSQL (le chiffrement concerne l'export Git de la Phase 3) et transmises à l'agent par la connexion WebSocket : utiliser `wss://` hors réseau de confiance.
+- Import d'un projet existant (`adopt: true`) : la console n'en reconstitue pas le Compose, vous le fournissez. Le premier déploiement recrée les conteneurs dont la configuration diffère (prévisualisation dans le journal) et ne supprime jamais les services absents du Compose fourni.
 - Le Compose doit utiliser des images préconstruites : `build` et `include` sont rejetés.
 - L'espace de travail de l'agent (`WORKSPACE_DIR`, défaut `/var/lib/console-docker/workspace`) est monté au même chemin absolu sur l'hôte et dans le conteneur ; ne pas le changer sans adapter le montage.
 - Pas encore de sauvegarde Git (Phase 3). La clé de restauration (age) est générée à l'initialisation et montrée une seule fois ; la console n'en conserve que la partie publique. Rotation de la clé non implémentée.
