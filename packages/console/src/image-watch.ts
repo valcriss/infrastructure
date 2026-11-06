@@ -1,4 +1,4 @@
-import type { ImageInfo } from "@infra/shared";
+import { listComposeServices, type ImageInfo } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { loadUsedImages } from "./images.js";
@@ -293,9 +293,26 @@ export class ImageWatcher {
           }
         }
       }
+      await this.pruneRemovedServices(stackId);
     } finally {
       this.checking.delete(stackId);
     }
+  }
+
+  /**
+   * Retire les vérifications des services qui ne figurent plus dans le Compose déployé : sans cela, une alerte
+   * « mise à jour disponible » ou « vérification impossible » resterait affichée pour un service supprimé.
+   */
+  private async pruneRemovedServices(stackId: string): Promise<void> {
+    const { rows } = await this.pool.query<{ compose: string | null }>(
+      `SELECT r.compose FROM stacks s LEFT JOIN stack_revisions r ON r.stack_id = s.id AND r.revision = s.deployed_revision WHERE s.id = $1`,
+      [stackId],
+    );
+    const compose = rows[0]?.compose;
+    if (!compose) return; // Compose indisponible (jamais déployée, chiffrée) : on ne supprime rien
+    const services = listComposeServices(compose).map((s) => s.name);
+    if (services.length === 0) return; // YAML illisible : prudence
+    await this.pool.query("DELETE FROM image_checks WHERE stack_id = $1 AND service <> ALL($2::text[])", [stackId, services]);
   }
 
   async scheduledPass(now = Date.now()): Promise<number> {

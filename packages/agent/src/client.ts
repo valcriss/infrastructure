@@ -14,6 +14,7 @@ import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { ReplayGuard, SelfProtection } from "./guard.js";
 import { HostMetricsCollector } from "./host-metrics.js";
+import { fitInventory } from "./inventory-fit.js";
 import { LogStreamer } from "./logs.js";
 import { MetricsCollector } from "./metrics.js";
 import { TrivyScanner } from "./scanner.js";
@@ -65,7 +66,9 @@ export class AgentClient {
   private readonly executor: Executor;
   private readonly logs: LogStreamer;
   private readonly scanner: TrivyScanner;
-  private readonly guard = new ReplayGuard();
+  /** Écart entre l'horloge de la console et celle de l'hôte (mesuré à la connexion), pour l'échéance des demandes. */
+  private clockOffsetMs = 0;
+  private readonly guard = new ReplayGuard(() => Date.now() + this.clockOffsetMs);
   private readonly protection: SelfProtection;
   /** Résultats terminés pendant une coupure : renvoyés à la reconnexion. */
   private unsent: AgentMessage[] = [];
@@ -78,7 +81,7 @@ export class AgentClient {
       workspaceDir: config.workspaceDir,
       dockerSocket: config.dockerSocket,
     });
-    this.protection = new SelfProtection(config.dockerSocket, config.selfContainer, config.protectedProjects);
+    this.protection = new SelfProtection(config.dockerSocket, config.selfContainer, config.protectedProjects, { warn: (m) => this.log(m) });
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
     this.scanner = new TrivyScanner({
       workspaceDir: config.workspaceDir,
@@ -146,6 +149,7 @@ export class AgentClient {
       const send = (m: AgentMessage): void => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
       };
+      let lastDropped = "";
       const sendMetrics = async (): Promise<void> => {
         try {
           const samples = await collector.collect();
@@ -157,7 +161,11 @@ export class AgentClient {
       };
       const sendInventory = async (): Promise<void> => {
         try {
-          send({ type: "inventory", inventory: await collectInventory(this.config.dockerSocket) });
+          // Un inventaire trop gros ferait fermer la connexion : on abandonne les détails facultatifs plutôt que l'état.
+          const { inventory, dropped } = fitInventory(await collectInventory(this.config.dockerSocket), MAX_MESSAGE_BYTES * 0.9);
+          if (dropped.length > 0 && dropped.join() !== lastDropped) this.log(`inventaire réduit pour tenir dans la limite de taille : ${dropped.join(", ")} omis`);
+          lastDropped = dropped.join();
+          send({ type: "inventory", inventory });
         } catch (err) {
           this.log(`inventaire Docker impossible : ${(err as Error).message}`);
         }
@@ -192,6 +200,7 @@ export class AgentClient {
               } else {
                 this.log("connecté à la console");
               }
+              if (msg.serverTime) this.clockOffsetMs = Date.parse(msg.serverTime) - Date.now();
               heartbeat = setInterval(() => send({ type: "heartbeat" }), msg.heartbeatIntervalSec * 1000);
               inventoryTimer = setInterval(() => void sendInventory(), msg.inventoryIntervalSec * 1000);
               // Période de collecte fixée par la console (30 s par défaut).
@@ -206,7 +215,7 @@ export class AgentClient {
               if (verdict !== "ok") {
                 this.log(`demande de scan ${verdict === "replayed" ? "rejouée" : "expirée"} ignorée (${msg.scanId})`);
                 if (verdict === "expired") {
-                  this.emit({ type: "scan_result", scanId: msg.scanId, status: "failed", error: "Demande de scan expirée (vérifiez l'horloge de l'hôte)." });
+                  this.emit({ type: "scan_result", scanId: msg.scanId, status: "failed", error: "Demande de scan expirée avant exécution." });
                 }
                 break;
               }
@@ -234,7 +243,7 @@ export class AgentClient {
               }
               const refuse = (error: string): void => this.emit({ type: "operation_result", operationId: msg.operationId, status: "failed", error });
               if (verdict === "expired") {
-                refuse("Demande expirée avant exécution (vérifiez l'horloge de l'hôte).");
+                refuse("Demande expirée avant exécution.");
                 break;
               }
               // Traité en tâche de fond ; le résultat repasse par emit().

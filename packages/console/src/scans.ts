@@ -7,6 +7,10 @@ import { getSecuritySettings } from "./settings.js";
 const MAX_RUNNING_TOTAL = 3;
 const SCAN_TIMEOUT_MIN = 30;
 const KEEP_PER_IMAGE = 5;
+/** Verrou consultatif PostgreSQL qui sérialise le démarrage des scans (limites par hôte et globale). */
+const PUMP_LOCK = 7_305_001;
+/** Un scan en attente sur un hôte hors ligne depuis plus longtemps que ça est abandonné. */
+const STALE_PENDING_MIN = 10;
 
 export interface ScanTransport {
   isOnline(hostId: string): boolean;
@@ -177,7 +181,16 @@ export class ScanService {
       `SELECT ${COLUMNS} FROM image_scans WHERE image_id = $1 AND platform = $2 AND status IN ('pending', 'running')`,
       [input.imageId, input.platform],
     );
-    if (active.rows[0]) return { scan: toRow(active.rows[0]), created: false };
+    const existing = active.rows[0];
+    if (existing) {
+      const stuck = existing.status === "pending" && existing.host_id !== input.hostId && !this.transport.isOnline(existing.host_id) && this.transport.isOnline(input.hostId);
+      if (!stuck) return { scan: toRow(existing), created: false };
+      // Le scan en attente est sur un hôte hors ligne : il bloquerait ce contenu pour tous les autres hôtes.
+      await this.pool.query(
+        "UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Hôte hors ligne : scan repris sur un autre hôte.' WHERE id = $1 AND status = 'pending'",
+        [existing.id],
+      );
+    }
     if (!this.transport.isOnline(input.hostId)) {
       throw new HttpError(409, "host_offline", "L'agent de l'hôte est hors ligne : le scan n'a pas été lancé.");
     }
@@ -211,15 +224,28 @@ export class ScanService {
   /** Démarre le prochain scan en attente d'un hôte, s'il n'en exécute pas déjà un. */
   async pump(hostId: string): Promise<void> {
     if (!this.transport.isOnline(hostId)) return;
-    const { rows } = await this.pool.query<{ id: string; image_id: string; image_ref: string }>(
-      `UPDATE image_scans SET status = 'running', started_at = now()
-        WHERE id = (SELECT id FROM image_scans WHERE host_id = $1 AND status = 'pending' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-          AND NOT EXISTS (SELECT 1 FROM image_scans WHERE host_id = $1 AND status = 'running')
-          AND (SELECT count(*) FROM image_scans WHERE status = 'running') < $2
-        RETURNING id, image_id, image_ref`,
-      [hostId, MAX_RUNNING_TOTAL],
-    );
-    const next = rows[0];
+    // Sans verrou, deux appels simultanés voient tous deux « aucun scan en cours » et en démarrent chacun un.
+    const client = await this.pool.connect();
+    let next: { id: string; image_id: string; image_ref: string } | undefined;
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock($1)", [PUMP_LOCK]);
+      const { rows } = await client.query<{ id: string; image_id: string; image_ref: string }>(
+        `UPDATE image_scans SET status = 'running', started_at = now()
+          WHERE id = (SELECT id FROM image_scans WHERE host_id = $1 AND status = 'pending' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+            AND NOT EXISTS (SELECT 1 FROM image_scans WHERE host_id = $1 AND status = 'running')
+            AND (SELECT count(*) FROM image_scans WHERE status = 'running') < $2
+          RETURNING id, image_id, image_ref`,
+        [hostId, MAX_RUNNING_TOTAL],
+      );
+      await client.query("COMMIT");
+      next = rows[0];
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
     if (!next) return;
     const sent = this.transport.send(hostId, { type: "scan", scanId: next.id, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), imageId: next.image_id, imageRef: next.image_ref });
     if (!sent) {
@@ -262,7 +288,9 @@ export class ScanService {
       await this.pool.query(
         `DELETE FROM image_scans WHERE id IN (
            SELECT id FROM image_scans WHERE image_id = $1 AND platform = $2 AND status IN ('succeeded', 'failed')
-           ORDER BY created_at DESC OFFSET $3)`,
+           ORDER BY created_at DESC OFFSET $3)
+         -- Le dernier résultat réussi reste toujours disponible, même après une longue série d'échecs.
+         AND id NOT IN (SELECT id FROM image_scans WHERE image_id = $1 AND platform = $2 AND status = 'succeeded' ORDER BY finished_at DESC LIMIT 1)`,
         [done.image_id, done.platform, KEEP_PER_IMAGE],
       );
     }
@@ -284,20 +312,35 @@ export class ScanService {
         WHERE status = 'running' AND started_at < now() - make_interval(mins => $1)`,
       [SCAN_TIMEOUT_MIN],
     );
+    await this.abandonStalePending();
     const { scanIntervalHours } = await getSecuritySettings(this.pool);
     if (scanIntervalHours > 0) await this.scheduledPass(scanIntervalHours);
     const hosts = await this.pool.query<{ host_id: string }>("SELECT DISTINCT host_id FROM image_scans WHERE status = 'pending'");
     for (const h of hosts.rows) await this.pump(h.host_id);
   }
 
+  /** Abandonne les scans en attente depuis un moment sur un hôte hors ligne (ou révoqué) : ils bloqueraient l'image. */
+  private async abandonStalePending(): Promise<void> {
+    const pending = await this.pool.query<{ host_id: string }>("SELECT DISTINCT host_id FROM image_scans WHERE status = 'pending'");
+    const offline = pending.rows.map((r) => r.host_id).filter((id) => !this.transport.isOnline(id));
+    if (offline.length === 0) return;
+    await this.pool.query(
+      `UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Hôte hors ligne : scan abandonné, relancez-le.'
+        WHERE status = 'pending' AND host_id = ANY($1::uuid[]) AND created_at < now() - make_interval(mins => $2)`,
+      [offline, STALE_PENDING_MIN],
+    );
+  }
+
   async scheduledPass(intervalHours: number, now = Date.now()): Promise<number> {
     let requested = 0;
+    // Une seule requête pour tous les contenus d'image, au lieu d'une par image.
+    const latest = await this.latestAll();
     for (const img of await loadUsedImages(this.pool)) {
       // Seules les images de stacks gérées sont scannées automatiquement.
       const users = img.usedBy.filter((u: ImageUser) => u.stackId !== null && this.transport.isOnline(u.hostId));
       const user = users[0];
       if (!user) continue;
-      const last = await this.latest(img.imageId, img.platform);
+      const last = latest.get(`${img.imageId}|${img.platform}`)?.attempt ?? null;
       if (last && (last.status === "pending" || last.status === "running")) continue;
       const age = last?.finishedAt ? now - last.finishedAt.getTime() : Number.POSITIVE_INFINITY;
       // Un échec est retenté au plus tard après une heure, un succès après la période configurée.

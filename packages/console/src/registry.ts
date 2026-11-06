@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { rootCertificates } from "node:tls";
 import type { ImageRef } from "./image-ref.js";
@@ -148,7 +149,9 @@ export class RegistryClient {
     if (url.protocol !== "https:" && !(creds?.insecure && url.protocol === "http:")) {
       throw new RegistryError("unsupported", "Service d'authentification en HTTP refusé (HTTPS requis).");
     }
-    const key = `${ref.registry}|${challenge.params.service ?? ""}|${scope}`;
+    // L'empreinte des identifiants évite de réutiliser un jeton obtenu avec d'anciens identifiants (modifiés ou supprimés).
+    const who = creds?.username ? createHash("sha256").update(`${creds.username}:${creds.password ?? ""}`).digest("hex").slice(0, 16) : "anonyme";
+    const key = `${ref.registry}|${challenge.params.service ?? ""}|${scope}|${who}`;
     const cached = this.tokens.get(key);
     if (!fresh && cached && cached.expires > Date.now()) return cached.token;
 

@@ -267,6 +267,8 @@ export const WelcomeSchema = z.object({
   heartbeatIntervalSec: z.number().int().positive(),
   inventoryIntervalSec: z.number().int().positive(),
   metricsIntervalSec: z.number().int().positive().optional(),
+  /** Heure de la console : l'agent en déduit son décalage d'horloge pour juger l'échéance des demandes. */
+  serverTime: z.iso.datetime().optional(),
 });
 
 export const ErrorMessageSchema = z.object({

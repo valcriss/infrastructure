@@ -143,6 +143,19 @@ describe("RegistryClient — registre privé", () => {
     expect(f.tokenHits).toBe(1); // un seul jeton pour tous les appels
   });
 
+  it("ne réutilise pas un jeton obtenu avec d'anciens identifiants (modifiés ou supprimés)", async () => {
+    const f = await fake({ auth: "bearer" });
+    let creds: RegistryCredentials | null = ALICE;
+    const c = new RegistryClient({ credentials: async () => creds, minGapMs: 0 });
+    expect((await c.headManifest(refFor(f), "1.0")).digest).toBe(INDEX); // jeton mis en cache pour alice
+    creds = { ...ALICE, password: "faux" };
+    await expect(c.headManifest(refFor(f), "1.0")).rejects.toMatchObject({ code: "auth" });
+    creds = INSECURE; // identifiants supprimés
+    await expect(c.headManifest(refFor(f), "1.0")).rejects.toMatchObject({ code: "auth" });
+    creds = ALICE; // retour aux bons identifiants : un jeton valide est de nouveau obtenu
+    expect((await c.headManifest(refFor(f), "1.0")).digest).toBe(INDEX);
+  });
+
   it("Basic : envoie les identifiants uniquement après le défi", async () => {
     const f = await fake({ auth: "basic" });
     expect((await client(ALICE).headManifest(refFor(f), "1.0")).digest).toBe(INDEX);

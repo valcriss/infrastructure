@@ -136,6 +136,8 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
 
     const first = await hello({ kind: "enrollment", token });
     expect(first.type).toBe("welcome");
+    // L'heure de la console permet à l'agent de juger l'échéance des demandes sans dépendre de son horloge.
+    expect(Math.abs(Date.parse(first.serverTime as string) - Date.now())).toBeLessThan(5000);
     const creds = first.credentials as { agentId: string; secret: string };
     expect(creds.secret.length).toBeGreaterThan(20);
 

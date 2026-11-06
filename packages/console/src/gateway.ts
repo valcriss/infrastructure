@@ -150,6 +150,7 @@ export class AgentGateway {
             heartbeatIntervalSec: HEARTBEAT_INTERVAL_SEC,
             inventoryIntervalSec: INVENTORY_INTERVAL_SEC,
             metricsIntervalSec: this.metricsIntervalSec,
+            serverTime: new Date().toISOString(),
           });
           return;
         }

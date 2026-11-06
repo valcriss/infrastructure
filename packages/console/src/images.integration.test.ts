@@ -9,6 +9,7 @@ import WebSocket from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
 import { createPool, migrate, type Pool } from "./db.js";
+import { ScanService } from "./scans.js";
 
 const url = process.env.TEST_DATABASE_URL;
 const sha = (c: string) => "sha256:" + c.repeat(64);
@@ -407,6 +408,78 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect((await call("PUT", "/api/v1/settings/security", { scanIntervalHours: 0, imageCheckIntervalHours: 12, minSeverity: "URGENT" })).status).toBe(400);
     expect((await call("PUT", "/api/v1/settings/security", { scanIntervalHours: -1, imageCheckIntervalHours: 12 })).status).toBe(400);
     expect((await call("PUT", "/api/v1/settings/security", { scanIntervalHours: 1.5, imageCheckIntervalHours: 12 })).status).toBe(400);
+  });
+
+  const insertScan = (image: string, status: string, ageHours: number, extra = "") =>
+    pool.query(
+      `INSERT INTO image_scans (image_id, platform, host_id, image_ref, status, trigger, requested_by, created_at, finished_at, counts, total)
+       VALUES ($1, 'linux/amd64', $2, 'x:1', $3, 'manual', 'test', now() - make_interval(hours => $4), ${status === "pending" || status === "running" ? "NULL" : "now() - make_interval(hours => $4)"}, ${status === "succeeded" ? "'{\"critical\":1,\"high\":0,\"medium\":0,\"low\":0,\"unknown\":0}'::jsonb" : "NULL"}, ${status === "succeeded" ? "1" : "NULL"})
+       RETURNING id${extra}`,
+      [image, hostId, status, ageHours],
+    );
+
+  it("conserve le dernier scan réussi même après une longue série d'échecs", async () => {
+    const img = sha("7");
+    await insertScan(img, "succeeded", 240);
+    for (let h = 1; h <= 6; h++) await insertScan(img, "failed", h);
+    const running = (await insertScan(img, "running", 0)).rows[0].id as string;
+    await built.scans.onResult(hostId, { type: "scan_result", scanId: running, status: "failed", error: "Trivy indisponible" } as never);
+    const rows = (await pool.query("SELECT status FROM image_scans WHERE image_id = $1", [img])).rows as { status: string }[];
+    expect(rows.filter((r) => r.status === "succeeded")).toHaveLength(1); // le dernier résultat réussi n'a pas été purgé
+    expect(rows.length).toBeLessThanOrEqual(6); // l'historique reste borné
+    expect((await built.scans.latestSucceeded(img, "linux/amd64"))?.total).toBe(1);
+  });
+
+  it("n'exécute jamais deux scans à la fois sur un hôte, même si deux démarrages se font concurrence", async () => {
+    await pool.query("UPDATE image_scans SET status = 'failed', finished_at = now() WHERE status IN ('pending', 'running')");
+    const [a, b] = [sha("8"), sha("9")];
+    await insertScan(a, "pending", 0);
+    await insertScan(b, "pending", 0);
+    await Promise.all([built.scans.pump(hostId), built.scans.pump(hostId), built.scans.pump(hostId)]);
+    const running = (await pool.query("SELECT count(*)::int AS n FROM image_scans WHERE host_id = $1 AND status = 'running'", [hostId])).rows[0].n;
+    expect(running).toBe(1);
+    await pool.query("UPDATE image_scans SET status = 'failed', finished_at = now() WHERE status IN ('pending', 'running')");
+  });
+
+  it("un scan en attente sur un hôte hors ligne ne bloque pas l'image pour les autres hôtes", async () => {
+    await pool.query("UPDATE image_scans SET status = 'failed', finished_at = now() WHERE status IN ('pending', 'running')");
+    const other = (await pool.query("INSERT INTO hosts (name, secret_hash) VALUES ('autre-hote', 'x') RETURNING id")).rows[0].id as string;
+    const sent: string[] = [];
+    const svc = new ScanService(pool, { isOnline: (id) => id === hostId, send: (id, m) => (sent.push(`${id}:${m.type}`), true) });
+
+    const img = sha("6");
+    await pool.query(
+      `INSERT INTO image_scans (image_id, platform, host_id, image_ref, status, trigger, requested_by, created_at) VALUES ($1, 'linux/amd64', $2, 'x:1', 'pending', 'manual', 'test', now())`,
+      [img, other],
+    );
+    // Un autre hôte, en ligne, demande le même contenu : le scan bloqué est abandonné et un nouveau est lancé ici.
+    const { scan, created } = await svc.request({ imageId: img, platform: "linux/amd64", hostId, imageRef: "x:1", trigger: "manual", requestedBy: "test" });
+    expect(created).toBe(true);
+    expect(scan.hostId).toBe(hostId);
+    expect((await pool.query("SELECT status, error FROM image_scans WHERE host_id = $1 AND image_id = $2", [other, img])).rows[0]).toMatchObject({ status: "failed" });
+
+    // Sans autre demande, un scan en attente depuis longtemps sur un hôte hors ligne est abandonné par la planification.
+    const old = sha("5");
+    await pool.query(
+      `INSERT INTO image_scans (image_id, platform, host_id, image_ref, status, trigger, requested_by, created_at) VALUES ($1, 'linux/amd64', $2, 'x:1', 'pending', 'manual', 'test', now() - interval '30 minutes')`,
+      [old, other],
+    );
+    await (svc as unknown as { abandonStalePending(): Promise<void> }).abandonStalePending();
+    expect((await pool.query("SELECT status FROM image_scans WHERE image_id = $1", [old])).rows[0].status).toBe("failed");
+    await pool.query("DELETE FROM hosts WHERE id = $1", [other]);
+    await pool.query("UPDATE image_scans SET status = 'failed', finished_at = now() WHERE status IN ('pending', 'running')");
+  });
+
+  it("retire les vérifications de versions d'un service qui n'existe plus dans le Compose déployé", async () => {
+    await pool.query(
+      `INSERT INTO image_checks (stack_id, service, checked_at, status, kind, detail, last_success_at)
+       VALUES ($1, 'fantome', now(), 'ok', 'update_available', '{"ref":"x:1","candidates":["x:2"],"notes":[],"contentChanged":false,"policy":"minor"}'::jsonb, now())`,
+      [stackId],
+    );
+    expect((await pool.query("SELECT count(*)::int AS n FROM image_checks WHERE service = 'fantome'")).rows[0].n).toBe(1);
+    await checkNow();
+    expect((await pool.query("SELECT count(*)::int AS n FROM image_checks WHERE service = 'fantome'")).rows[0].n).toBe(0);
+    expect((await pool.query("SELECT count(*)::int AS n FROM image_checks WHERE stack_id = $1 AND service = 'web'", [stackId])).rows[0].n).toBe(1); // les services existants restent
   });
 
   it("supprime un registre configuré", async () => {
