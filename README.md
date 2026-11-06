@@ -1,6 +1,6 @@
 # Console Docker, sécurité et supervision
 
-Outil auto-hébergé de gestion de stacks Docker. Cadrage complet : [project.md](project.md). Décisions techniques : [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md). Backlog : [docs/backlog.md](docs/backlog.md).
+Outil auto-hébergé de gestion de stacks Docker. Cadrage complet : [project.md](project.md). Décisions techniques : [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md). Backlog : [docs/backlog.md](docs/backlog.md). Exploitation : [docs/exploitation.md](docs/exploitation.md). Exemples d'API : [docs/api-exemples.md](docs/api-exemples.md).
 
 État : **Phases 1 et 2 terminées** : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage, jetons API, logs en direct et interface complète des stacks (éditeur Compose, différences, historique, opérations). Contrat OpenAPI 3.1 dans [docs/openapi.json](docs/openapi.json) (servi par `GET /api/v1/openapi.json`) et import des projets Compose déjà présents sur l'hôte.
 
