@@ -13,13 +13,20 @@
   },
   "scripts": {
     "build": "npm run build -w @infra/shared && npm run build -w @infra/console && npm run build -w @infra/agent && npm run build -w @infra/web",
+    "lint": "eslint .",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "typecheck": "npm run build -w @infra/shared && npm run typecheck -w @infra/console -w @infra/agent -w @infra/web",
     "test": "npm run build -w @infra/shared && npm run test -w @infra/shared -w @infra/console -w @infra/agent"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "eslint-plugin-vue": "^10.12.0",
+    "globals": "^17.14.0",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
     "vitest": "^5.1.0"
   }
 }

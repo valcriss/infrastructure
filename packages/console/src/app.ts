@@ -2,6 +2,7 @@ import cookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
+  ChangeCredentialsSchema,
   LoginRequestSchema,
   MAX_MESSAGE_BYTES,
   OFFLINE_AFTER_SEC,
@@ -11,8 +12,10 @@ import {
 import Fastify, { type FastifyInstance } from "fastify";
 import { existsSync } from "node:fs";
 import { z, ZodError } from "zod";
+import { createRestorationKey } from "./restoration.js";
 import {
   LoginLimiter,
+  SESSION_COOKIE,
   createSession,
   destroySession,
   isAuthenticated,
@@ -115,13 +118,14 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
       return reply.code(403).send(apiError("invalid_setup_token", "Secret d'initialisation invalide"));
     }
     const passwordHash = await hashPassword(body.password);
+    const restoration = await createRestorationKey();
     try {
       // La clé primaire `singleton` garantit un seul administrateur, même si
       // deux requêtes concurrentes passent la vérification ci-dessus.
-      await pool.query("INSERT INTO admin (username, password_hash) VALUES ($1, $2)", [
-        body.username,
-        passwordHash,
-      ]);
+      await pool.query(
+        "INSERT INTO admin (username, password_hash, restoration_recipient) VALUES ($1, $2, $3)",
+        [body.username, passwordHash, restoration.recipient],
+      );
     } catch (err) {
       if ((err as { code?: string }).code === "23505") {
         setup.token = null;
@@ -133,7 +137,13 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     await audit(pool, body.username, "setup", null, "success");
     await ensureBootstrapToken(pool, config.sharedDir);
     await createSession(pool, config, reply);
-    return reply.code(201).send({ username: body.username });
+    // La clé privée de restauration n'est montrée qu'ici, une seule fois.
+    reply.header("Cache-Control", "no-store");
+    return reply.code(201).send({
+      username: body.username,
+      restorationKey: restoration.identity,
+      restorationRecipient: restoration.recipient,
+    });
   });
 
   // --- Session ----------------------------------------------------------------
@@ -165,6 +175,43 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     }
     const { rows } = await pool.query<{ username: string }>("SELECT username FROM admin");
     return { username: rows[0]?.username };
+  });
+
+  // --- Compte administrateur ----------------------------------------------------
+  app.get("/api/v1/admin/restoration-key", { preHandler: auth }, async () => {
+    const { rows } = await pool.query<{ restoration_recipient: string | null }>(
+      "SELECT restoration_recipient FROM admin",
+    );
+    return { recipient: rows[0]?.restoration_recipient ?? null };
+  });
+
+  app.put("/api/v1/admin/credentials", { preHandler: auth }, async (request, reply) => {
+    const body = ChangeCredentialsSchema.parse(request.body);
+    const key = `credentials|${request.ip}`;
+    if (limiter.isBlocked(key)) {
+      return reply.code(429).send(apiError("too_many_attempts", "Trop de tentatives, réessayez plus tard"));
+    }
+    const { rows } = await pool.query<{ username: string; password_hash: string }>(
+      "SELECT username, password_hash FROM admin",
+    );
+    const admin = rows[0];
+    if (!admin || !(await verifyPassword(body.currentPassword, admin.password_hash))) {
+      limiter.recordFailure(key);
+      await audit(pool, "admin", "credentials.change", null, "failure");
+      return reply.code(403).send(apiError("invalid_credentials", "Mot de passe actuel invalide"));
+    }
+    limiter.reset(key);
+    const username = body.newUsername ?? admin.username;
+    const passwordHash = body.newPassword ? await hashPassword(body.newPassword) : admin.password_hash;
+    await pool.query(
+      "UPDATE admin SET username = $1, password_hash = $2, updated_at = now()",
+      [username, passwordHash],
+    );
+    // Toute autre session est révoquée ; seule la session courante est conservée.
+    const current = request.cookies[SESSION_COOKIE];
+    await pool.query("DELETE FROM sessions WHERE id_hash <> $1", [sha256(current ?? "")]);
+    await audit(pool, username, "credentials.change", null, "success");
+    return { username };
   });
 
   app.delete("/api/v1/session", async (request, reply) => {

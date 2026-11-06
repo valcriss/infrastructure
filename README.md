@@ -2,7 +2,7 @@
 
 Outil auto-hébergé de gestion de stacks Docker. Cadrage complet : [project.md](project.md). Décisions techniques : [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md). Backlog : [docs/backlog.md](docs/backlog.md).
 
-État : **Phase 1 en cours** (installation, compte administrateur, agent, inventaire Docker).
+État : **Phase 1 terminée** (installation, compte administrateur, clé de restauration, agent, inventaire Docker). Prochaine étape : Phase 2 (stacks et API).
 
 ## Installation
 
@@ -26,6 +26,7 @@ Node.js 24 (voir `mise.toml`) et npm.
 
 ```bash
 npm install
+npm run lint
 npm run build
 npm run typecheck
 npm test
@@ -45,7 +46,6 @@ TypeScript est volontairement limité à la version 6 : `vue-tsc` ne fonctionne 
 ## Limites actuelles
 
 - Pas encore de gestion de stacks, de variables, d'API de déploiement ni de logs (Phase 2).
-- Pas encore de clé de restauration ni de sauvegarde Git (Phase 3).
-- Changement d'identifiants administrateur non implémenté.
+- Pas encore de sauvegarde Git (Phase 3). La clé de restauration (age) est générée à l'initialisation et montrée une seule fois ; la console n'en conserve que la partie publique. Rotation de la clé non implémentée.
 - Aucun HTTPS intégré : placer la console derrière un reverse proxy TLS et activer `SECURE_COOKIES=true`. Hors réseau de confiance, l'agent doit utiliser `wss://`.
 - L'agent monte le socket Docker : cela équivaut à un accès root à l'hôte.

@@ -19,6 +19,9 @@ async function logout() {
         <RouterLink to="/hosts" class="text-sm text-slate-600 hover:text-slate-900" active-class="font-medium text-slate-900">
           Hôtes
         </RouterLink>
+        <RouterLink to="/settings" class="text-sm text-slate-600 hover:text-slate-900" active-class="font-medium text-slate-900">
+          Paramètres
+        </RouterLink>
       </div>
       <div class="flex items-center gap-3 text-sm text-slate-600">
         <span>{{ session.username }}</span>

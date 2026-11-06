@@ -28,12 +28,28 @@ export const useSession = defineStore("session", {
       });
       this.username = r.username;
     },
-    async setup(setupToken: string, username: string, password: string): Promise<void> {
-      const r = await api<{ username: string }>("/api/v1/setup", {
-        method: "POST",
-        body: JSON.stringify({ setupToken, username, password }),
-      });
+    async setup(
+      setupToken: string,
+      username: string,
+      password: string,
+    ): Promise<{ restorationKey: string; restorationRecipient: string }> {
+      const r = await api<{ username: string; restorationKey: string; restorationRecipient: string }>(
+        "/api/v1/setup",
+        { method: "POST", body: JSON.stringify({ setupToken, username, password }) },
+      );
       this.initialized = true;
+      this.username = r.username;
+      return { restorationKey: r.restorationKey, restorationRecipient: r.restorationRecipient };
+    },
+    async changeCredentials(body: {
+      currentPassword: string;
+      newUsername?: string;
+      newPassword?: string;
+    }): Promise<void> {
+      const r = await api<{ username: string }>("/api/v1/admin/credentials", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
       this.username = r.username;
     },
     async logout(): Promise<void> {

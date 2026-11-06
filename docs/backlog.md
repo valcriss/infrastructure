@@ -24,7 +24,11 @@ Dérivé de `project.md` §17–18 et de `docs/adr/0001-architecture.md`. Chaque
 9. Frontend Vue 3 + Tailwind : squelette, routeur, écrans d'initialisation et de connexion
 10. Mesure de l'empreinte mémoire de l'agent au repos
 
-État Phase 1 (6 novembre 2026) : faits et vérifiés sur Docker réel : 0, 1, 2, 3 (sans changement d'identifiants), 5, 6, 7, 8, 9. Restent : 3 (modification des identifiants), 4 (clé de restauration age, export), 10 (mesure mémoire), CI, lint, revocation d'hôte testée en conditions réelles côté interface uniquement via API.
+État Phase 1 (6 novembre 2026) : **terminée**, vérifiée sur Docker réel. Points ajoutés lors du solde : changement d'identifiants (révocation des autres sessions), clé de restauration age (privée montrée une fois, publique stockée), lint ESLint, CI GitHub Actions (lint, typecheck, build, tests avec PostgreSQL, audit des dépendances de production, build des images).
+
+Mesure mémoire de l'agent au repos (Node 24 alpine, ~30 s après démarrage, 7 conteneurs sur l'hôte) : environ 33 MiB, CPU ~0 %. À remesurer sur une longue durée et avec plus de conteneurs. Console : ~49 MiB, PostgreSQL : ~38 MiB.
+
+Limites connues : la rotation de la clé de restauration n'est pas implémentée ; l'écran d'affichage de la clé à l'initialisation est couvert par le typecheck mais pas par un test automatisé de l'interface ; la CI n'a pas encore tourné sur GitHub.
 
 ## Phase 2 — Stacks et API (AC 3 à 7, 15)
 1. Modèle stack/révision ; édition YAML préservant commentaires

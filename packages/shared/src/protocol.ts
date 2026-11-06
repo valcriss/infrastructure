@@ -111,6 +111,16 @@ export const SetupRequestSchema = z.object({
   password: PasswordSchema,
 });
 
+export const ChangeCredentialsSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(256),
+    newUsername: UsernameSchema.optional(),
+    newPassword: PasswordSchema.optional(),
+  })
+  .refine((v) => v.newUsername !== undefined || v.newPassword !== undefined, {
+    message: "Rien à modifier",
+  });
+
 export const LoginRequestSchema = z.object({
   username: z.string().min(1).max(64),
   password: z.string().min(1).max(256),

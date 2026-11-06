@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import { useSession } from "./stores/session";
 import HostsView from "./views/HostsView.vue";
 import LoginView from "./views/LoginView.vue";
+import SettingsView from "./views/SettingsView.vue";
 import SetupView from "./views/SetupView.vue";
 
 export const router = createRouter({
@@ -11,6 +12,7 @@ export const router = createRouter({
     { path: "/setup", component: SetupView, meta: { public: true } },
     { path: "/login", component: LoginView, meta: { public: true } },
     { path: "/hosts", component: HostsView },
+    { path: "/settings", component: SettingsView },
   ],
 });
 

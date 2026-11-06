@@ -74,6 +74,14 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
     const ok = attempts.find((r) => r.status === 201) as Response;
     cookie = (ok.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     expect(cookie).toContain("sid=");
+
+    // La clé de restauration est remise une seule fois ; seule sa partie publique est stockée.
+    const body = (await ok.json()) as { restorationKey: string; restorationRecipient: string };
+    expect(body.restorationKey).toMatch(/^AGE-SECRET-KEY-/);
+    const stored = (await pool.query("SELECT restoration_recipient FROM admin")).rows[0];
+    expect(stored.restoration_recipient).toBe(body.restorationRecipient);
+    const dump = JSON.stringify((await pool.query("SELECT * FROM admin")).rows);
+    expect(dump).not.toContain(body.restorationKey);
   });
 
   it("ferme la route d'initialisation après coup", async () => {
@@ -154,6 +162,37 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
     expect(del.status).toBe(204);
     const revoked = await hello({ kind: "credentials", ...creds });
     expect(revoked.type).toBe("error");
+  });
+
+  it("change les identifiants et révoque les autres sessions", async () => {
+    const admin = (await pool.query("SELECT username FROM admin")).rows[0].username as string;
+    const otherLogin = await post("/api/v1/session", { username: admin, password: "mot-de-passe-solide-1" });
+    const other = (otherLogin.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const put = (body: unknown, c = cookie) =>
+      fetch(`${baseUrl}/api/v1/admin/credentials`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", cookie: c },
+        body: JSON.stringify(body),
+      });
+
+    expect((await put({ currentPassword: "faux", newPassword: "nouveau-mot-de-passe-2" })).status).toBe(403);
+    expect((await put({ currentPassword: "mot-de-passe-solide-1" })).status).toBe(400);
+    expect((await put({ currentPassword: "mot-de-passe-solide-1", newPassword: "court" })).status).toBe(400);
+    expect((await put({ currentPassword: "mot-de-passe-solide-1", newPassword: "nouveau-mot-de-passe-2", newUsername: "root" })).status).toBe(200);
+
+    // La session courante survit, l'autre est révoquée.
+    expect((await fetch(`${baseUrl}/api/v1/session`, { headers: { cookie } })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/v1/session`, { headers: { cookie: other } })).status).toBe(401);
+    // Anciens identifiants refusés, nouveaux acceptés.
+    expect((await post("/api/v1/session", { username: "root", password: "mot-de-passe-solide-1" })).status).toBe(401);
+    expect((await post("/api/v1/session", { username: "root", password: "nouveau-mot-de-passe-2" })).status).toBe(200);
+  });
+
+  it("expose la clé publique de restauration uniquement aux utilisateurs connectés", async () => {
+    expect((await fetch(`${baseUrl}/api/v1/admin/restoration-key`)).status).toBe(401);
+    const res = await fetch(`${baseUrl}/api/v1/admin/restoration-key`, { headers: { cookie } });
+    const { recipient } = (await res.json()) as { recipient: string };
+    expect(recipient).toMatch(/^age1/);
   });
 
   it("n'enrôle pas avec un jeton manuel expiré ou inconnu", async () => {
