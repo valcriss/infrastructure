@@ -5,13 +5,13 @@ import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import type { ImageWatcher } from "./image-watch.js";
 import { POLICIES } from "./image-tags.js";
-import { loadUsedImages, isScanStale, scanState, type UsedImage } from "./images.js";
+import { briefOf, loadUsedImages, isScanStale, scanState, type UsedImage } from "./images.js";
 import { normalizeRegistry } from "./image-ref.js";
 import type { RegistryClient } from "./registry.js";
 import { RegistryError } from "./registry.js";
 import type { RegistryStore } from "./registries.js";
 import type { ScanRow, ScanService } from "./scans.js";
-import { getSecuritySettings, setSecuritySettings } from "./settings.js";
+import { MIN_SEVERITIES, getSecuritySettings, isReported, reportedCounts, setSecuritySettings, type SecuritySettings } from "./settings.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -30,6 +30,10 @@ export const PolicyBody = z.object({ policy: z.enum(POLICIES as [string, ...stri
 export const SecuritySettingsBody = z.object({
   scanIntervalHours: z.number().int().min(0).max(720),
   imageCheckIntervalHours: z.number().int().min(0).max(720),
+  /** Gravité minimale signalée (les scans restent complets). */
+  minSeverity: z.enum(MIN_SEVERITIES).default("LOW"),
+  /** Signaler aussi les vulnérabilités de gravité « inconnue ». */
+  includeUnknown: z.boolean().default(true),
 });
 export const RegistryBody = z.object({
   username: z.string().max(255).nullable().optional(),
@@ -39,8 +43,10 @@ export const RegistryBody = z.object({
   insecure: z.boolean().default(false),
 });
 
-const scanSummary = (s: ScanRow | null) =>
-  s
+/** Résumé d'un scan : compteurs et total limités aux gravités signalées ; `hidden` = résultats masqués par le seuil. */
+const scanSummary = (s: ScanRow | null, settings: SecuritySettings) => {
+  const reported = s ? reportedCounts(s.counts, settings) : null;
+  return s
     ? {
         id: s.id,
         status: s.status,
@@ -52,11 +58,13 @@ const scanSummary = (s: ScanRow | null) =>
         dbUpdatedAt: s.dbUpdatedAt?.toISOString() ?? null,
         dbDownloadedAt: s.dbDownloadedAt?.toISOString() ?? null,
         os: s.os,
-        counts: s.counts,
-        total: s.total,
+        counts: reported ? reported.counts : s.counts,
+        total: reported ? reported.total : s.total,
+        hidden: reported ? reported.hidden : 0,
         truncated: s.truncated,
       }
     : null;
+};
 
 export function registerImageRoutes(
   app: FastifyInstance,
@@ -76,7 +84,7 @@ export function registerImageRoutes(
   /** Vue d'un contenu d'image : état du scan (jamais confondu avec « sain »), utilisateurs, dernier résultat réussi. */
   const view = async (img: UsedImage) => {
     const [attempt, ok, settings] = await Promise.all([scans.latest(img.imageId, img.platform), scans.latestSucceeded(img.imageId, img.platform), getSecuritySettings(pool)]);
-    const state = scanState(attempt ? { id: attempt.id, status: attempt.status, finishedAt: attempt.finishedAt, total: attempt.total } : null);
+    const state = scanState(attempt ? briefOf(attempt, settings) : null);
     return {
       imageId: img.imageId,
       platform: img.platform,
@@ -88,9 +96,9 @@ export function registerImageRoutes(
       scan: {
         state,
         stale: isScanStale(ok, settings.scanIntervalHours),
-        lastAttempt: scanSummary(attempt),
+        lastAttempt: scanSummary(attempt, settings),
         // Dernier résultat réussi : conservé et daté même si la dernière tentative a échoué.
-        current: scanSummary(ok),
+        current: scanSummary(ok, settings),
       },
     };
   };
@@ -109,10 +117,11 @@ export function registerImageRoutes(
     if (!scan) throw new HttpError(404, "scan_not_found", "Aucun scan réussi pour cette image.");
     const sev = q.severity as Severity | undefined;
     const needle = q.q?.toLowerCase();
+    const settings = await getSecuritySettings(pool);
     const all = (await scans.vulnerabilities(scan.id)).filter(
-      (v) => (!sev || v.severity === sev) && (!needle || v.id.toLowerCase().includes(needle) || v.pkg.toLowerCase().includes(needle)),
+      (v) => isReported(v.severity, settings) && (!sev || v.severity === sev) && (!needle || v.id.toLowerCase().includes(needle) || v.pkg.toLowerCase().includes(needle)),
     );
-    return { scan: scanSummary(scan), total: all.length, vulnerabilities: all.slice(q.offset, q.offset + q.limit) };
+    return { scan: scanSummary(scan, settings), total: all.length, vulnerabilities: all.slice(q.offset, q.offset + q.limit) };
   });
 
   const requestScan = async (img: UsedImage, hostId: string | undefined, actor: string) => {
@@ -137,7 +146,7 @@ export function registerImageRoutes(
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const scan = await scans.get(id);
     if (!scan) throw new HttpError(404, "scan_not_found", "Scan introuvable.");
-    return scanSummary(scan);
+    return scanSummary(scan, await getSecuritySettings(pool));
   });
 
   // --- Par stack ---------------------------------------------------------------------------

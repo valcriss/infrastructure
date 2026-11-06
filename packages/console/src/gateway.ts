@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
   type ConsoleMessage,
   type Inventory,
+  type HostMetrics,
   type MetricSample,
   type ScanResult,
   type OperationResultSchema,
@@ -27,7 +28,7 @@ export interface GatewayHandlers {
   onDisconnect(hostId: string): Promise<void>;
   onLogChunk(hostId: string, streamId: string, lines: string[]): void;
   onLogEnd(hostId: string, streamId: string, reason: string): void;
-  onMetrics(hostId: string, samples: MetricSample[]): Promise<void>;
+  onMetrics(hostId: string, samples: MetricSample[], host?: HostMetrics): Promise<void>;
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
 }
 
@@ -165,7 +166,7 @@ export class AgentGateway {
             await this.storeInventory(hostId, msg.inventory);
             break;
           case "metrics":
-            await this.handlers?.onMetrics(hostId, msg.samples);
+            await this.handlers?.onMetrics(hostId, msg.samples, msg.host);
             break;
           case "scan_result":
             await this.handlers?.onScanResult(hostId, msg);

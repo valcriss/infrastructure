@@ -28,6 +28,9 @@ GET  /api/v1/operations/{id}               état, journal expurgé, images dépl
 GET  /api/v1/stacks/{id}/logs?service=web&tail=100   logs en direct (Server-Sent Events : `lines`, `end`)
 GET  /api/v1/dashboard[?hostId=…&stackId=…]   agents, stacks (état + raison), conteneurs, utilisation, alertes
 GET  /api/v1/stacks/{id}/metrics?range=1h|6h|24h|7d[&service=…]   séries CPU / mémoire / réseau
+GET  /api/v1/applications                  applications gérées et observées (état, utilisation, images, mises à jour)
+GET  /api/v1/hosts/{id}/projects/{nom}     fiche en lecture seule d'un projet Compose (+ /metrics, + /logs?container=…)
+GET  /api/v1/dashboard/overview?range=…    totaux CPU / mémoire / réseau, top 5, utilisation des hôtes
 GET  /api/v1/backup/status                 sauvegarde Git : état, dernier push confirmé, révisions en attente, erreur
 POST /api/v1/backup/sync[?wait=true]       demander une synchronisation (jamais de force push)
 ```
@@ -55,6 +58,19 @@ Hôte supplémentaire : générer un jeton dans l'interface (« Enrôler un hôt
 ```bash
 CONSOLE_URL=wss://console.exemple.org/agent/ws ENROLLMENT_TOKEN=<jeton> docker compose -f docker-compose.agent.yml up -d
 ```
+
+## Interface
+
+En-tête (nom du produit défini à un seul endroit, `packages/web/src/brand.ts`, indicateur de santé global, menu utilisateur avec thème clair / sombre / automatique), menu latéral repliable et contenu pleine largeur.
+
+- **Tableau de bord** : indicateurs, anneaux (applications, conteneurs, images), courbes CPU / mémoire / réseau avec animation à l'affichage, utilisation des machines hôtes, top 5 CPU et mémoire, alertes. Un conteneur terminé avec le code 0 est « terminé », jamais en erreur.
+- **Applications** : une tuile par projet Compose. Les applications **gérées** par la console (icône pleine) se distinguent de celles **observées**, qui tournent sans que la console ait leur Compose (bordure en pointillés, bouton « Prendre en charge »). Chaque tuile indique état, conteneurs, CPU / mémoire, images avec badges de vulnérabilités (jamais de badge à zéro), mises à jour et boutons démarrer / arrêter / déployer. Un clic sur une application **observée** ouvre une **fiche en lecture seule** (`/hosts/{hôte}/projects/{nom}`) : conteneurs avec ports, réseaux, montages et libellés Compose (dossier et fichiers d'origine, chemins de l'hôte), sécurité des images, métriques et logs en direct d'un conteneur. Les variables d'environnement des conteneurs ne sont jamais lues, et le contenu du fichier Compose n'est pas accessible à l'agent : « Prendre en charge » reste le moyen de la gérer.
+- **Images** : tableau des images avec vulnérabilités par gravité, détails et scan à la demande.
+- **Statut** : agents et hôtes (CPU, mémoire, disque), sauvegarde Git, sécurité des images.
+- **Paramètres de l'application** (menu latéral, `/settings`) : onglet « Sauvegarde Git » (dépôt, jeton, clé de restauration, synchronisation) et onglet « Sécurité des images » (périodicité des scans et de la recherche de versions, **gravité minimale signalée** et prise en compte des vulnérabilités « inconnues », registres d'images). Le seuil s'applique à la lecture (compteurs, badges, alertes, graphiques) : les scans restent complets et un changement est immédiat, sans nouveau scan. Le graphique « Images » du tableau de bord ne compte que les CVE critiques et élevées.
+- **Paramètres de l'utilisateur** (menu utilisateur en haut à droite, `/account`) : mot de passe (et identifiant) de l'administrateur, thème clair / sombre.
+
+Les graphiques utilisent Apache ECharts (chargé à la demande) et les icônes Font Awesome Free. L'utilisation de la **machine hôte** (CPU global, mémoire hors cache, disque de la partition de l'espace de travail) est mesurée par l'agent depuis `/proc` : elle n'apparaît qu'avec un agent à jour, sur un hôte Linux.
 
 ## Supervision
 

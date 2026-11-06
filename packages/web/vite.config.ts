@@ -8,8 +8,9 @@ export default defineConfig({
   plugins: [vue(), tailwindcss()],
   server: {
     proxy: {
-      "/api": consoleUrl,
-      "/status": consoleUrl,
+      // Host inchangé : la console refuse les requêtes dont l'Origin ne correspond pas à l'hôte demandé.
+      "/api": { target: consoleUrl, changeOrigin: false },
+      "/status": { target: consoleUrl, changeOrigin: false },
     },
   },
 });

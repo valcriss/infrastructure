@@ -51,7 +51,7 @@ function finish() {
       Sans elle, les secrets sauvegardés sont irrécupérables. Conservez-la dans un gestionnaire de mots de passe, séparément du dépôt Git.
     </p>
     <template v-if="!restorationKey">
-      <button :disabled="busy" class="mt-4 rounded bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50" @click="generate">
+      <button :disabled="busy" class="mt-4 rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50" @click="generate">
         Générer la clé de restauration
       </button>
     </template>
@@ -62,7 +62,7 @@ function finish() {
         <input v-model="saved" type="checkbox" />
         J'ai sauvegardé cette clé en lieu sûr.
       </label>
-      <button :disabled="!saved" class="mt-4 w-full rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50" @click="finish">Continuer</button>
+      <button :disabled="!saved" class="mt-4 w-full rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="finish">Continuer</button>
     </template>
     <p v-if="error" role="alert" class="mt-3 text-sm text-red-700">{{ error }}</p>
   </section>

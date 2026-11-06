@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { api, describeError, fmtDate, type BackupState, type BackupStatus } from "../api";
-import GitRepoForm from "../components/GitRepoForm.vue";
-import KeyReveal from "../components/KeyReveal.vue";
-import { useSession } from "../stores/session";
+import { api, describeError, fmtDate, type BackupState, type BackupStatus } from "../../api";
+import GitRepoForm from "../../components/GitRepoForm.vue";
+import KeyReveal from "../../components/KeyReveal.vue";
+import { useSession } from "../../stores/session";
 
 const session = useSession();
 const status = ref<BackupStatus | null>(null);
@@ -73,8 +73,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
 </script>
 
 <template>
-  <div class="space-y-8">
-    <h1 class="text-2xl font-semibold">Sauvegarde Git</h1>
+  <div class="space-y-6">
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
 
@@ -117,7 +116,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <div v-if="showForm" class="mt-4">
         <GitRepoForm :status="status" @saved="saved">
           <template #actions="{ busy, save }">
-            <button type="button" :disabled="busy" class="rounded bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50" @click="save">Enregistrer</button>
+            <button type="button" :disabled="busy" class="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50" @click="save">Enregistrer</button>
             <button type="button" class="rounded px-3 py-2 text-sm text-slate-600 underline" @click="showForm = false">Annuler</button>
             <button v-if="status.configured" type="button" class="ml-auto rounded border border-red-300 px-3 py-2 text-sm text-red-700 hover:bg-red-50" @click="disable">Désactiver</button>
           </template>

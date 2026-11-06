@@ -19,7 +19,9 @@ import { registerImageRoutes } from "./image-routes.js";
 import { RegistryStore } from "./registries.js";
 import { RegistryClient, createFetch } from "./registry.js";
 import { ScanService } from "./scans.js";
+import { listApplications } from "./applications.js";
 import { registerDashboardRoutes } from "./dashboard-routes.js";
+import { registerProjectRoutes } from "./project-routes.js";
 import { MetricsStore } from "./metrics-store.js";
 import { registerBackupRoutes } from "./backup-routes.js";
 import { GitRunner, validateRepoUrl } from "./git.js";
@@ -375,8 +377,8 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     },
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
-    onMetrics: async (hostId, samples) => {
-      await metrics.ingest(hostId, samples);
+    onMetrics: async (hostId, samples, host) => {
+      await metrics.ingest(hostId, samples, host);
     },
     onScanResult: (hostId, result) => scans.onResult(hostId, result),
   });
@@ -401,7 +403,8 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   });
   const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, isOnline: (id) => gateway.isOnline(id) });
   registerImageRoutes(app, { pool, session: auth, apiAuth, scans, watcher, registries, registryClient, isOnline: (id) => gateway.isOnline(id) });
-  registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool });
+  registerProjectRoutes(app, { pool, auth: apiAuth, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
+  registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
   registerBackupRoutes(app, { backup, session: auth, apiAuth });

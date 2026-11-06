@@ -40,7 +40,7 @@ async function run(action: "deploy" | "stop" | "start") {
         L'agent de l'hôte est hors ligne : l'état affiché est la dernière observation, et aucune action ne peut être lancée.
       </p>
       <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
-        <button :disabled="busy || stack.hostPresence === 'offline'" class="rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50" @click="run('deploy')">
+        <button :disabled="busy || stack.hostPresence === 'offline'" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="run('deploy')">
           Déployer la révision {{ stack.currentRevision }}
         </button>
         <label class="flex items-center gap-1"><input v-model="pull" type="checkbox" /> Télécharger les images</label>

@@ -56,6 +56,17 @@ export interface Container {
   restartCount?: number;
   startedAt?: string;
   exitCode?: number;
+  ports?: { privatePort: number; publicPort?: number; type: string; ip?: string }[];
+  networks?: string[];
+  mounts?: { type: string; source?: string; destination: string; rw: boolean }[];
+  composeWorkingDir?: string;
+  composeConfigFiles?: string;
+}
+
+/** Projet Compose dont on suit l'activité (stack gérée ou projet observé). */
+export interface ProjectRef {
+  hostId: string;
+  name: string;
 }
 
 export interface Host {
@@ -243,11 +254,29 @@ export interface Dashboard {
     items: { id: string; name: string; presence: "online" | "offline"; lastSeenAt: string | null; agentVersion: string | null; dockerVersion: string | null; inventoryObservedAt: string | null; hostInfo: HostInfo | null }[];
   };
   stacks: { counts: Record<StackStatus, number>; items: DashboardStack[] };
-  containers: { total: number; running: number; stopped: number; unhealthy: number; noHealthcheck: number; unmanagedProjects: number };
+  containers: { total: number; running: number; stopped: number; completed: number; failed: number; unhealthy: number; noHealthcheck: number; unmanagedProjects: number };
   usage: { top: { containerId: string; name: string; project: string | null; service: string | null; cpuPercent: number | null; memBytes: number; memLimitBytes: number; hostName: string }[] };
   backup: { state: BackupState; lastPushAt: string | null; pendingRevisions: number; configured: boolean } | null;
-  security: { images: { images: number; never: number; failed: number; clean: number; vulnerable: number; critical: number; high: number }; updates: { available: number; errors: number } };
+  security: { images: { images: number; never: number; failed: number; clean: number; vulnerable: number; critical: number; high: number; withCritical: number; withHigh: number; noSevere: number }; updates: { available: number; errors: number } };
   alerts: DashboardAlert[];
+}
+
+export type OverviewRange = "1h" | "6h" | "24h" | "7d";
+
+export interface OverviewResult {
+  rangeSec: number;
+  stepSec: number;
+  intervalSec: number;
+  retentionDays: number;
+  totals: { points: { t: string; cpu: number | null; mem: number; rxBps: number | null; txBps: number | null }[] };
+  top: { cpu: { project: string; hostName: string; value: number }[]; mem: { project: string; hostName: string; value: number }[] };
+  hosts: {
+    hostId: string;
+    name: string;
+    cpus: number | null;
+    latest: { cpuPercent: number | null; memUsed: number | null; memTotal: number | null; diskUsed: number | null; diskTotal: number | null; observedAt: string } | null;
+    points: { t: string; cpu: number | null; mem: number | null; disk: number | null }[];
+  }[];
 }
 
 export interface MetricPoint {
@@ -308,6 +337,8 @@ export interface ScanSummary {
   os: { family: string; name: string; eosl: boolean | null } | null;
   counts: { critical: number; high: number; medium: number; low: number; unknown: number } | null;
   total: number | null;
+  /** Vulnérabilités masquées par le seuil de gravité des paramètres. */
+  hidden?: number;
   truncated: boolean;
 }
 
@@ -392,9 +423,45 @@ export interface RegistryEntry {
   insecure: boolean;
 }
 
+export type MinSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
 export interface SecuritySettings {
   scanIntervalHours: number;
   imageCheckIntervalHours: number;
+  minSeverity: MinSeverity;
+  includeUnknown: boolean;
 }
 
 export const shortId = (id: string): string => id.replace(/^sha256:/, "").slice(0, 12);
+
+// --- Applications -----------------------------------------------------------------------------------
+
+export interface ApplicationImage {
+  imageId: string;
+  platform: string;
+  ref: string;
+  scan: ScanStateName;
+  stale: boolean;
+  counts: { critical: number; high: number; medium: number; low: number; unknown: number } | null;
+}
+
+export interface Application {
+  kind: "managed" | "observed";
+  stackId: string | null;
+  name: string;
+  hostId: string;
+  hostName: string;
+  hostPresence: "online" | "offline";
+  status: StackStatus;
+  reason: string;
+  containers: { total: number; running: number; failed: number; completed: number; unhealthy: number };
+  services: string[];
+  usage: { cpuPercent: number; memBytes: number } | null;
+  images: ApplicationImage[];
+  updatesAvailable: number;
+  currentRevision: number | null;
+  deployedRevision: number | null;
+  pendingDeploy: boolean;
+  lastDeployAt: string | null;
+  importable: boolean;
+}

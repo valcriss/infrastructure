@@ -2,9 +2,9 @@ import { INVENTORY_INTERVAL_SEC, listComposeServices, type ComposeService, type 
 import type { SeverityCounts } from "@infra/shared";
 import type { BackupService, BackupStatus } from "./backup.js";
 import type { CheckDetail, ImageWatcher } from "./image-watch.js";
-import { isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
+import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
 import type { ScanService } from "./scans.js";
-import { getSecuritySettings } from "./settings.js";
+import { getSecuritySettings, reportedCounts } from "./settings.js";
 import type { Pool } from "./db.js";
 import type { LatestSample, MetricsStore } from "./metrics-store.js";
 
@@ -445,26 +445,40 @@ export class Dashboard {
     const settings = await getSecuritySettings(pool);
     const [usedImages, scanMap, allChecks] = await Promise.all([loadUsedImages(pool, filter), this.deps.scans.latestAll(), this.deps.watcher.allChecks()]);
     const securityImages: SecurityAlertInput["images"] = [];
-    const sec = { images: 0, never: 0, failed: 0, clean: 0, vulnerable: 0, critical: 0, high: 0 };
+    const sec = { images: 0, never: 0, failed: 0, clean: 0, vulnerable: 0, critical: 0, high: 0, withCritical: 0, withHigh: 0, noSevere: 0 };
+    // Les graphiques couvrent les images de tous les projets Compose (gérés ou observés) ; les alertes, seulement les gérées.
+    const inCompose = new Set<string>();
+    for (const h of hosts) for (const c of h.inventory ?? []) if (c.composeProject) inCompose.add(`${h.id}|${c.id}`);
     for (const img of usedImages) {
       const stackNames = [...new Set(img.usedBy.map((u) => u.stackName).filter((n): n is string => n !== null))];
-      if (stackNames.length === 0) continue;
+      const managed = stackNames.length > 0;
+      if (!managed && !img.usedBy.some((u) => inCompose.has(`${u.hostId}|${u.containerId}`))) continue;
       const entry = scanMap.get(`${img.imageId}|${img.platform}`);
-      const state = scanState(entry ? { id: entry.attempt.id, status: entry.attempt.status, finishedAt: entry.attempt.finishedAt, total: entry.attempt.total } : null);
+      const state = scanState(entry ? briefOf(entry.attempt, settings) : null);
+      // Seules les gravités signalées par les réglages comptent (seuil minimal, « inconnues »).
+      const reported = reportedCounts(entry?.ok?.counts ?? null, settings)?.counts ?? null;
       sec.images++;
       if (state === "never") sec.never++;
       if (state === "failed") sec.failed++;
       if (state === "clean") sec.clean++;
       if (state === "vulnerable") sec.vulnerable++;
-      sec.critical += entry?.ok?.counts?.critical ?? 0;
-      sec.high += entry?.ok?.counts?.high ?? 0;
+      // Répartition par image sur les seules CVE critiques et élevées : quasiment toute image a des vulnérabilités
+      // mineures, ce qui n'est pas un signal utile. Un scan en échec ou absent n'est jamais rangé parmi les sains.
+      if (state === "clean" || state === "vulnerable") {
+        if ((reported?.critical ?? 0) > 0) sec.withCritical++;
+        else if ((reported?.high ?? 0) > 0) sec.withHigh++;
+        else sec.noSevere++;
+      }
+      sec.critical += reported?.critical ?? 0;
+      sec.high += reported?.high ?? 0;
+      if (!managed) continue;
       securityImages.push({
         imageId: img.imageId,
         label: img.refs[0] ?? img.imageId.slice(0, 19),
         stacks: stackNames,
         state,
         stale: isScanStale(entry?.ok ?? null, settings.scanIntervalHours, now),
-        counts: entry?.ok?.counts ?? null,
+        counts: reported,
         error: entry?.attempt.error ?? null,
         since: entry?.attempt.finishedAt ?? null,
       });
@@ -545,6 +559,9 @@ export class Dashboard {
         total: containers.length,
         running: containers.filter((c) => c.state === "running").length,
         stopped: containers.filter((c) => c.state !== "running").length,
+        // Un conteneur terminé avec le code 0 (migration, tâche ponctuelle) n'est pas une erreur.
+        completed: containers.filter((c) => c.state === "exited" && c.exitCode === 0).length,
+        failed: containers.filter((c) => c.state === "dead" || c.state === "restarting" || (c.state === "exited" && c.exitCode !== undefined && c.exitCode !== 0)).length,
         // Un healthcheck « en échec » ne concerne que les conteneurs en marche ; un conteneur arrêté n'est pas « unhealthy ».
         unhealthy: containers.filter((c) => c.state === "running" && c.health === "unhealthy").length,
         noHealthcheck: containers.filter((c) => c.state === "running" && c.health === "none").length,

@@ -35,6 +35,13 @@ export const ContainerSchema = z.object({
   /** Dernier démarrage du conteneur (ISO 8601), vide s'il n'a jamais démarré. */
   startedAt: z.string().max(40).optional(),
   exitCode: z.number().int().optional(),
+  /** Ports publiés ou exposés (sans variables d'environnement ni configuration sensible). */
+  ports: z.array(z.object({ privatePort: z.number().int(), publicPort: z.number().int().optional(), type: z.string().max(10), ip: z.string().max(64).optional() })).max(50).optional(),
+  networks: z.array(z.string().max(128)).max(20).optional(),
+  mounts: z.array(z.object({ type: z.string().max(20), source: z.string().max(500).optional(), destination: z.string().max(500), rw: z.boolean() })).max(50).optional(),
+  /** Dossier du projet Compose et fichiers Compose, tels qu'indiqués par les libellés Docker (chemins de l'hôte). */
+  composeWorkingDir: z.string().max(500).optional(),
+  composeConfigFiles: z.string().max(1000).optional(),
 });
 export type Container = z.infer<typeof ContainerSchema>;
 
@@ -165,10 +172,22 @@ export const MetricSampleSchema = z.object({
 });
 export type MetricSample = z.infer<typeof MetricSampleSchema>;
 
+/** Utilisation de la machine hôte (CPU global, mémoire, disque de l'espace de travail). Champs absents si non mesurables. */
+export const HostMetricsSchema = z.object({
+  /** Pourcentage de l'ensemble des cœurs (0 à 100) ; null au premier relevé. */
+  cpuPercent: z.number().min(0).max(100).nullable(),
+  memTotalBytes: z.number().min(0).optional(),
+  memUsedBytes: z.number().min(0).optional(),
+  diskTotalBytes: z.number().min(0).optional(),
+  diskUsedBytes: z.number().min(0).optional(),
+});
+export type HostMetrics = z.infer<typeof HostMetricsSchema>;
+
 export const MetricsMessageSchema = z.object({
   type: z.literal("metrics"),
   observedAt: z.iso.datetime(),
   samples: z.array(MetricSampleSchema).max(1000),
+  host: HostMetricsSchema.optional(),
 });
 
 export const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"] as const;
@@ -296,7 +315,10 @@ export type RunMessage = z.infer<typeof RunSchema>;
 export const LogsStartSchema = z.object({
   type: z.literal("logs_start"),
   streamId: z.uuid(),
-  stack: z.object({ id: z.uuid(), project: z.string() }),
+  /** Stack gérée par la console. Absente pour les logs d'un conteneur d'un projet observé (voir `containerId`). */
+  stack: z.object({ id: z.uuid(), project: z.string() }).optional(),
+  /** Conteneur d'un projet non géré : l'agent suit ses logs avec `docker logs`. */
+  containerId: z.string().regex(/^[0-9a-f]{12,64}$/).optional(),
   /** Service Compose ciblé ; tous les services si absent. */
   service: z.string().min(1).max(128).optional(),
   tail: z.number().int().min(0).max(1000),

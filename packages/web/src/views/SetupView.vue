@@ -146,7 +146,7 @@ async function finish() {
           <input v-model="confirm" type="password" required autocomplete="new-password" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
         </label>
         <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
-        <button :disabled="busy" class="w-full rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50">Créer le compte</button>
+        <button :disabled="busy" class="w-full rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50">Créer le compte</button>
       </form>
     </section>
 
@@ -165,7 +165,7 @@ async function finish() {
                 v-if="result && result.remote !== 'has_backup' && result.remote !== 'foreign_content'"
                 type="button"
                 :disabled="formBusy || gitBusy"
-                class="rounded bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
+                class="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
                 @click="saveAndContinue"
               >
                 Enregistrer et continuer
@@ -214,7 +214,7 @@ async function finish() {
             </div>
           </div>
           <p v-if="preview.hasSecrets" class="text-xs text-slate-600">Les secrets ont été déchiffrés avec votre clé ; elle sera reprise comme clé de restauration de cette console.</p>
-          <button :disabled="gitBusy || Object.values(mapping).some((v) => !v)" class="rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50" @click="restore">
+          <button :disabled="gitBusy || Object.values(mapping).some((v) => !v)" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="restore">
             Restaurer la configuration
           </button>
         </div>

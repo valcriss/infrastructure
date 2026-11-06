@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
 import { createPool, migrate, type Pool } from "./db.js";
+import { MetricsStore } from "./metrics-store.js";
 
 const url = process.env.TEST_DATABASE_URL;
 const COMPOSE = "services:\n  web:\n    image: nginx\n  db:\n    image: postgres\n";
@@ -228,6 +229,99 @@ describe.skipIf(!url)("supervision (intégration)", () => {
     expect((await call("GET", "/api/v1/stacks/00000000-0000-4000-8000-000000000000/metrics")).status).toBe(404);
     const filtered = (await call("GET", `/api/v1/stacks/${stackId}/metrics?service=db`)).json;
     expect(filtered.containers).toEqual([]);
+  });
+
+  it("enregistre l'utilisation de la machine hôte et l'expose dans la vue d'ensemble (totaux, top 5, hôtes)", async () => {
+    // Une nouvelle instance : la protection anti-bavardage de l'instance de l'application ne s'applique pas ici.
+    const store = new MetricsStore(pool, 30, 7);
+    const sample = (id: string, project: string, cpu: number, mem: number, rx: number) => ({
+      containerId: id, name: id, project, service: "svc", cpuPercent: cpu, memBytes: mem, memLimitBytes: 1e9, netRxBytes: rx, netTxBytes: rx,
+    });
+    expect(await store.ingest(hostId, [sample("o1", "app", 50, 100e6, 0)], { cpuPercent: 12.5, memTotalBytes: 8e9, memUsedBytes: 2e9, diskTotalBytes: 100e9, diskUsedBytes: 40e9 })).toBe(true);
+    const host = (await pool.query("SELECT cpu_percent, mem_used, disk_total FROM host_metric_samples ORDER BY observed_at DESC LIMIT 1")).rows[0];
+    expect(host).toMatchObject({ cpu_percent: 12.5, mem_used: "2000000000", disk_total: "100000000000" });
+
+    await pool.query("DELETE FROM metric_samples");
+    const base = Math.floor(Date.now() / 30000) * 30000 - 90_000;
+    for (const [off, id, project, cpu, mem, rx] of [
+      [0, "o1", "app", 40, 100e6, 0],
+      [30000, "o1", "app", 60, 100e6, 3000],
+      [0, "o2", "autre", 10, 300e6, 0],
+      [30000, "o2", "autre", 20, 300e6, 600],
+    ] as const) {
+      await pool.query(
+        `INSERT INTO metric_samples (host_id, observed_at, container_id, container_name, project, service, cpu_percent, mem_bytes, mem_limit, net_rx, net_tx)
+         VALUES ($1, to_timestamp($2), $3, $3, $4, 'svc', $5, $6, 1000000000, $7, $7)`,
+        [hostId, (base + off) / 1000, id, project, cpu, mem, rx],
+      );
+    }
+    const o = (await call("GET", "/api/v1/dashboard/overview?range=1h")).json;
+    // Totaux : CPU et mémoire des deux conteneurs additionnés, débit réseau déduit du compteur de chacun.
+    expect(o.totals.points.map((p: any) => p.cpu)).toEqual([50, 80]);
+    expect(o.totals.points.map((p: any) => p.mem)).toEqual([400e6, 400e6]);
+    expect(o.totals.points.map((p: any) => p.rxBps)).toEqual([null, 120]); // (3000 + 600) o / 30 s
+    // Top 5 : trié par utilisation moyenne.
+    expect(o.top.cpu.map((a: any) => a.project)).toEqual(["app", "autre"]);
+    expect(o.top.mem.map((a: any) => a.project)).toEqual(["autre", "app"]);
+    const h = o.hosts.find((x: any) => x.hostId === hostId);
+    expect(h.cpus).toBe(4);
+    expect(h.latest).toMatchObject({ cpuPercent: 12.5, memTotal: 8e9, memUsed: 2e9, diskTotal: 100e9, diskUsed: 40e9 });
+    expect((await call("GET", "/api/v1/dashboard/overview?range=1an")).status).toBe(400);
+  });
+
+  it("liste les applications gérées et observées, sans compter une tâche terminée (code 0) comme un échec", async () => {
+    await sendInventory([
+      ctr("web"),
+      ctr("db"),
+      ctr("migrate", { state: "exited", exitCode: 0, status: "Exited (0)" }),
+      ctr("old", { composeProject: "legacy", state: "running" }),
+      ctr("crash", { composeProject: "legacy", state: "exited", exitCode: 3, status: "Exited (3)" }),
+    ]);
+    const apps = (await call("GET", "/api/v1/applications")).json.applications as any[];
+    const managed = apps.find((a) => a.name === "app");
+    const observed = apps.find((a) => a.name === "legacy");
+    expect(managed).toMatchObject({ kind: "managed", stackId, importable: false, containers: { total: 3, running: 2, completed: 1, failed: 0 } });
+    expect(managed.status).toBe("running");
+    expect(observed).toMatchObject({ kind: "observed", stackId: null, importable: true, containers: { total: 2, running: 1, failed: 1, completed: 0 } });
+    expect(observed.status).toBe("degraded");
+    const d = (await call("GET", "/api/v1/dashboard")).json;
+    expect(d.containers).toMatchObject({ completed: 1, failed: 1 });
+    expect((await fetch(baseUrl + "/api/v1/applications")).status).toBe(401);
+  });
+
+  it("ouvre la fiche d'un projet observé en lecture seule (conteneurs, ports, montages, métriques, logs)", async () => {
+    await sendInventory([
+      ctr("web"),
+      ctr("old", {
+        composeProject: "legacy",
+        id: "abcdef123456abcdef",
+        ports: [{ privatePort: 80, publicPort: 8080, type: "tcp", ip: "0.0.0.0" }],
+        networks: ["legacy_default"],
+        mounts: [{ type: "bind", source: "/srv/legacy/data", destination: "/data", rw: true }],
+        composeWorkingDir: "/srv/legacy",
+        composeConfigFiles: "/srv/legacy/docker-compose.yml",
+      }),
+    ]);
+    const detail = (await call("GET", `/api/v1/hosts/${hostId}/projects/legacy`)).json;
+    expect(detail.application).toMatchObject({ kind: "observed", name: "legacy", importable: true });
+    expect(detail.containers).toHaveLength(1);
+    expect(detail.containers[0]).toMatchObject({
+      ports: [{ privatePort: 80, publicPort: 8080, type: "tcp" }],
+      networks: ["legacy_default"],
+      mounts: [{ source: "/srv/legacy/data", destination: "/data", rw: true }],
+      composeConfigFiles: "/srv/legacy/docker-compose.yml",
+    });
+    // Un projet géré s'ouvre aussi ; un projet ou un hôte inconnu donne 404.
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/app`)).json.application.kind).toBe("managed");
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/inconnu`)).status).toBe(404);
+    expect((await call("GET", "/api/v1/hosts/00000000-0000-4000-8000-000000000000/projects/legacy")).status).toBe(404);
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/metrics?range=1h`)).status).toBe(200);
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/metrics?range=1an`)).status).toBe(400);
+    // Logs : le conteneur doit être précisé et appartenir au projet.
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/logs`)).status).toBe(400);
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/logs?container=ffffffffffff`)).status).toBe(404);
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/logs?container=c-web`)).status).toBe(400);
+    expect((await fetch(baseUrl + `/api/v1/hosts/${hostId}/projects/legacy`)).status).toBe(401);
   });
 
   it("purge les échantillons au-delà de la rétention (7 jours)", async () => {

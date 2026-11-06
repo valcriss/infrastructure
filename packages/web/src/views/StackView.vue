@@ -20,15 +20,15 @@ const tab = ref("overview");
 let timer: number | undefined;
 
 const tabs = [
-  { key: "overview", label: "Vue d'ensemble" },
-  { key: "compose", label: "Compose" },
-  { key: "variables", label: "Variables" },
-  { key: "files", label: "Fichiers" },
-  { key: "security", label: "Sécurité et versions" },
-  { key: "metrics", label: "Métriques" },
-  { key: "logs", label: "Logs" },
-  { key: "history", label: "Historique" },
-  { key: "operations", label: "Opérations" },
+  { key: "overview", label: "Vue d'ensemble", icon: "gauge-high" },
+  { key: "compose", label: "Compose", icon: "file-code" },
+  { key: "variables", label: "Variables", icon: "sliders" },
+  { key: "files", label: "Fichiers", icon: "folder-open" },
+  { key: "security", label: "Sécurité et versions", icon: "shield-halved" },
+  { key: "metrics", label: "Métriques", icon: "chart-line" },
+  { key: "logs", label: "Logs", icon: "terminal" },
+  { key: "history", label: "Historique", icon: "clock-rotate-left" },
+  { key: "operations", label: "Opérations", icon: "list-check" },
 ];
 
 async function load() {
@@ -52,8 +52,11 @@ onBeforeUnmount(() => window.clearInterval(timer));
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
     <template v-if="stack">
       <div>
-        <RouterLink to="/stacks" class="text-sm text-slate-500 underline">← Stacks</RouterLink>
-        <h1 class="mt-1 text-2xl font-semibold">{{ stack.name }}</h1>
+        <RouterLink to="/stacks" class="text-sm text-slate-500 hover:underline">← Applications</RouterLink>
+        <h1 class="mt-1 flex items-center gap-3 text-2xl font-semibold">
+          <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-lg text-blue-700"><FaIcon :icon="['fas', 'boxes-stacked']" /></span>
+          {{ stack.name }}
+        </h1>
         <p class="text-sm text-slate-500">
           Hôte {{ stack.hostName }} ({{ stack.hostPresence === "online" ? "en ligne" : "hors ligne" }}) ·
           enregistrée r{{ stack.currentRevision }} · déployée {{ stack.deployedRevision ? "r" + stack.deployedRevision : "jamais" }}
@@ -67,10 +70,11 @@ onBeforeUnmount(() => window.clearInterval(timer));
           :key="t.key"
           role="tab"
           :aria-selected="tab === t.key"
-          class="-mb-px border-b-2 px-3 py-2 text-sm"
-          :class="tab === t.key ? 'border-slate-900 font-medium' : 'border-transparent text-slate-600 hover:text-slate-900'"
+          class="-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm"
+          :class="tab === t.key ? 'border-blue-600 font-medium text-blue-700' : 'border-transparent text-slate-600 hover:text-slate-900'"
           @click="tab = t.key"
         >
+          <FaIcon :icon="['fas', t.icon]" />
           {{ t.label }}
         </button>
       </div>

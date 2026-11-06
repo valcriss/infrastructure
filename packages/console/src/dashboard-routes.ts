@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { Application } from "./applications.js";
 import type { Dashboard } from "./dashboard.js";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
@@ -19,14 +20,23 @@ export const MetricsQuery = z.object({
 
 export function registerDashboardRoutes(
   app: FastifyInstance,
-  deps: { auth: Guard; dashboard: Dashboard; metrics: MetricsStore; pool: Pool },
+  deps: { auth: Guard; dashboard: Dashboard; metrics: MetricsStore; pool: Pool; applications: () => Promise<Application[]> },
 ): void {
-  const { auth, dashboard, metrics, pool } = deps;
+  const { auth, dashboard, metrics, pool, applications } = deps;
 
   // Vue d'ensemble : agents, stacks, conteneurs, utilisation, alertes.
   app.get("/api/v1/dashboard", { preHandler: auth }, async (request) => {
     const q = DashboardQuery.parse(request.query);
     return dashboard.snapshot(q);
+  });
+
+  // Applications : stacks gérées et projets Compose observés, avec état, utilisation, images et mises à jour.
+  app.get("/api/v1/applications", { preHandler: auth }, async () => ({ applications: await applications() }));
+
+  // Totaux CPU / mémoire / réseau, applications les plus gourmandes et utilisation de chaque hôte.
+  app.get("/api/v1/dashboard/overview", { preHandler: auth }, async (request) => {
+    const q = MetricsQuery.pick({ range: true }).parse(request.query);
+    return metrics.overview(RANGES[q.range] as number);
   });
 
   // Métriques d'une stack : CPU, mémoire, réseau par conteneur, rétention bornée.

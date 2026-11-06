@@ -40,7 +40,7 @@ export class LogStreams {
 
   start(
     hostId: string,
-    stack: { id: string; project: string },
+    target: { stack: { id: string; project: string } } | { containerId: string },
     options: { service?: string; tail: number },
     sink: LogSink,
   ): { streamId: string; stop: () => void } {
@@ -56,7 +56,7 @@ export class LogStreams {
     const sent = this.transport.send(hostId, {
       type: "logs_start",
       streamId,
-      stack,
+      ...target,
       ...(options.service ? { service: options.service } : {}),
       tail: options.tail,
     });

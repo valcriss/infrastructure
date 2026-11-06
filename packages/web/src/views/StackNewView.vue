@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageTitle from "../components/PageTitle.vue";
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api, describeError, type Host, type ObservedProject } from "../api";
@@ -74,7 +75,7 @@ async function submit() {
 
 <template>
   <div class="space-y-6">
-    <h1 class="text-2xl font-semibold">{{ adopt ? "Importer un projet existant" : "Nouvelle stack" }}</h1>
+    <PageTitle :title="adopt ? 'Importer un projet existant' : 'Nouvelle application'" :icon="adopt ? 'download' : 'plus'" />
     <section v-if="adopt" role="note" class="max-w-3xl rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
       <p class="font-medium">Import d'un projet Compose déjà en marche</p>
       <p class="mt-1">
@@ -111,7 +112,7 @@ async function submit() {
       </label>
       <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
       <div class="flex gap-3">
-        <button :disabled="busy || !hostId" class="rounded bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50">{{ adopt ? "Importer la stack" : "Créer la stack" }}</button>
+        <button :disabled="busy || !hostId" class="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50">{{ adopt ? "Importer la stack" : "Créer la stack" }}</button>
         <RouterLink to="/stacks" class="rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100">Annuler</RouterLink>
       </div>
       <p class="text-xs text-slate-500">La création enregistre la révision 1 sans rien déployer.</p>

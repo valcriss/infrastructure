@@ -38,7 +38,7 @@ async function submit() {
         <input v-model="password" type="password" required autocomplete="current-password" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
       </label>
       <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
-      <button :disabled="busy" class="w-full rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50">
+      <button :disabled="busy" class="w-full rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50">
         Se connecter
       </button>
     </form>

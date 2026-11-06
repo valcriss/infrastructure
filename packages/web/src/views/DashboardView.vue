@@ -6,19 +6,30 @@ import {
   api,
   fmtDate,
   formatBytes,
-  type BackupState,
+  type Application,
   type Dashboard,
   type DashboardAlert,
+  type OverviewRange,
+  type OverviewResult,
   type Severity,
-  type StackStatus,
 } from "../api";
+import AreaChart from "../charts/AreaChart.vue";
+import DonutChart from "../charts/DonutChart.vue";
+import { TONE } from "../charts/palette";
+import MeterBar from "../components/MeterBar.vue";
+import PanelCard from "../components/PanelCard.vue";
+import StatCard from "../components/StatCard.vue";
 
 const data = ref<Dashboard | null>(null);
+const overview = ref<OverviewResult | null>(null);
+const applications = ref<Application[]>([]);
 const error = ref("");
 const hostId = ref("");
 const stackId = ref("");
+const range = ref<OverviewRange>("1h");
 const now = ref(Date.now());
 let timer: number | undefined;
+let overviewTimer: number | undefined;
 
 // Les listes de filtres viennent d'une vue non filtrée, pour rester complètes.
 const allHosts = ref<{ id: string; name: string }[]>([]);
@@ -32,10 +43,19 @@ async function load() {
       allHosts.value = data.value.agents.items.map((a) => ({ id: a.id, name: a.name }));
       allStacks.value = data.value.stacks.items.map((s) => ({ id: s.id, name: s.name, hostId: s.hostId }));
     }
+    applications.value = (await api<{ applications: Application[] }>("/api/v1/applications")).applications;
     now.value = Date.now();
     error.value = "";
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : "Chargement impossible.";
+  }
+}
+
+async function loadOverview() {
+  try {
+    overview.value = await api<OverviewResult>(`/api/v1/dashboard/overview?range=${range.value}`);
+  } catch {
+    /* les graphiques de ressources restent sur leur dernière valeur */
   }
 }
 
@@ -44,32 +64,93 @@ watch(hostId, () => {
   if (stackId.value && !stacksForHost.value.some((s) => s.id === stackId.value)) stackId.value = "";
 });
 watch([hostId, stackId], () => void load());
+watch(range, () => void loadOverview());
 
-const status: Record<StackStatus, { text: string; cls: string }> = {
-  running: { text: "en marche", cls: "bg-green-100 text-green-800" },
-  degraded: { text: "dégradée", cls: "bg-red-100 text-red-800" },
-  stopped: { text: "arrêtée", cls: "bg-slate-300 text-slate-800" },
-  unknown: { text: "inconnue", cls: "bg-amber-100 text-amber-800" },
-  not_deployed: { text: "jamais déployée", cls: "bg-slate-200 text-slate-700" },
-};
-const sev: Record<Severity, { text: string; cls: string }> = {
-  critical: { text: "critique", cls: "bg-red-600 text-white" },
-  warning: { text: "attention", cls: "bg-amber-500 text-white" },
-  info: { text: "info", cls: "bg-slate-400 text-white" },
-};
-const backupText: Record<BackupState, string> = {
-  not_configured: "non configurée",
-  disabled: "désactivée",
-  ok: "à jour",
-  pending: "en attente de push",
-  error: "en échec",
-  blocked: "bloquée",
+onMounted(() => {
+  void load();
+  void loadOverview();
+  timer = window.setInterval(() => void load(), 10_000);
+  overviewTimer = window.setInterval(() => void loadOverview(), 30_000);
+});
+onBeforeUnmount(() => {
+  window.clearInterval(timer);
+  window.clearInterval(overviewTimer);
+});
+
+const RANGES: { value: OverviewRange; label: string }[] = [
+  { value: "1h", label: "1 h" },
+  { value: "6h", label: "6 h" },
+  { value: "24h", label: "24 h" },
+  { value: "7d", label: "7 j" },
+];
+
+// --- Graphiques en anneau ------------------------------------------------------------------------
+
+// Applications gérées ET observées (projets Compose qui tournent sans leur fichier), selon les filtres.
+const filteredApps = computed(() =>
+  applications.value.filter((a) => (!hostId.value || a.hostId === hostId.value) && (!stackId.value || a.stackId === stackId.value)),
+);
+const appCount = (status: string): number => filteredApps.value.filter((a) => a.status === status).length;
+const stackItems = computed(() => [
+  { label: "En marche", value: appCount("running"), color: TONE.ok },
+  { label: "Dégradées", value: appCount("degraded"), color: TONE.bad },
+  { label: "Arrêtées", value: appCount("stopped"), color: TONE.muted },
+  { label: "Inconnues", value: appCount("unknown"), color: TONE.warn },
+  { label: "Jamais déployées", value: appCount("not_deployed"), color: TONE.info },
+]);
+const managedCount = computed(() => filteredApps.value.filter((a) => a.kind === "managed").length);
+
+// Un conteneur terminé avec le code 0 (migration, tâche ponctuelle) est « terminé », pas en erreur.
+const containerItems = computed(() => {
+  const c = data.value?.containers;
+  if (!c) return [];
+  const other = Math.max(0, c.stopped - c.completed - c.failed);
+  return [
+    { label: "En marche", value: Math.max(0, c.running - c.unhealthy), color: TONE.ok },
+    { label: "Healthcheck en échec", value: c.unhealthy, color: TONE.warn },
+    { label: "En échec", value: c.failed, color: TONE.bad },
+    { label: "Terminés (code 0)", value: c.completed, color: TONE.info },
+    { label: "Arrêtés / autres", value: other, color: TONE.muted },
+  ];
+});
+
+const imageItems = computed(() => {
+  const i = data.value?.security.images;
+  return [
+    { label: "CVE critiques", value: i?.withCritical ?? 0, color: TONE.bad },
+    { label: "CVE élevées", value: i?.withHigh ?? 0, color: "#f97316" },
+    { label: "Sans critique ni élevée", value: i?.noSevere ?? 0, color: TONE.ok },
+    { label: "Jamais scannées", value: i?.never ?? 0, color: TONE.muted },
+    { label: "Scan en échec", value: i?.failed ?? 0, color: TONE.warn },
+  ];
+});
+
+// --- Ressources -------------------------------------------------------------------------------------
+
+const ts = (iso: string): number => Date.parse(iso);
+const totals = computed(() => overview.value?.totals.points ?? []);
+const cpuSeries = computed(() => [{ name: "CPU des conteneurs", color: TONE.accent, points: totals.value.map((p) => ({ t: ts(p.t), v: p.cpu })) }]);
+const memSeries = computed(() => [{ name: "Mémoire des conteneurs", color: TONE.violet, points: totals.value.map((p) => ({ t: ts(p.t), v: p.mem })) }]);
+const netSeries = computed(() => [
+  { name: "Reçu", color: TONE.ok, points: totals.value.map((p) => ({ t: ts(p.t), v: p.rxBps })) },
+  { name: "Émis", color: TONE.warn, points: totals.value.map((p) => ({ t: ts(p.t), v: p.txBps })) },
+]);
+
+const pct = (used: number | null | undefined, total: number | null | undefined): number | null =>
+  used === null || used === undefined || !total ? null : (used / total) * 100;
+
+// --- Alertes -----------------------------------------------------------------------------------------
+
+const sev: Record<Severity, { text: string; cls: string; icon: string }> = {
+  critical: { text: "critique", cls: "bg-red-600 text-white", icon: "circle-xmark" },
+  warning: { text: "attention", cls: "bg-amber-500 text-white", icon: "triangle-exclamation" },
+  info: { text: "info", cls: "bg-slate-400 text-white", icon: "circle-info" },
 };
 
 function link(a: DashboardAlert): string | null {
   if (a.target.type === "stack") return `/stacks/${a.target.id}`;
   if (a.target.type === "host") return "/hosts";
-  if (a.target.type === "backup") return "/backup";
+  if (a.target.type === "backup") return "/settings?tab=git";
   if (a.target.type === "image") return "/images";
   return null;
 }
@@ -79,36 +160,24 @@ const alertCounts = computed(() => {
   for (const a of data.value?.alerts ?? []) c[a.severity]++;
   return c;
 });
-
-onMounted(() => {
-  void load();
-  timer = window.setInterval(() => void load(), 10_000);
-});
-onBeforeUnmount(() => window.clearInterval(timer));
 </script>
 
 <template>
-  <div class="space-y-8">
-    <div class="flex flex-wrap items-end justify-between gap-4">
+  <div class="space-y-6">
+    <div class="flex flex-wrap items-center justify-between gap-4">
       <h1 class="text-2xl font-semibold">Tableau de bord</h1>
       <div class="flex flex-wrap items-center gap-3 text-sm">
         <label>
-          <span class="sr-only">Environnement</span>
-          <select aria-label="Environnement" class="rounded border border-slate-300 bg-white px-3 py-1.5" disabled>
-            <option>Environnement : standalone</option>
-          </select>
-        </label>
-        <label>
           <span class="sr-only">Hôte</span>
-          <select v-model="hostId" aria-label="Hôte" class="rounded border border-slate-300 bg-white px-3 py-1.5">
+          <select v-model="hostId" aria-label="Hôte" class="rounded-md border border-slate-300 bg-white px-3 py-1.5">
             <option value="">Tous les hôtes</option>
             <option v-for="h in allHosts" :key="h.id" :value="h.id">{{ h.name }}</option>
           </select>
         </label>
         <label>
-          <span class="sr-only">Stack</span>
-          <select v-model="stackId" aria-label="Stack" class="rounded border border-slate-300 bg-white px-3 py-1.5">
-            <option value="">Toutes les stacks</option>
+          <span class="sr-only">Application</span>
+          <select v-model="stackId" aria-label="Application" class="rounded-md border border-slate-300 bg-white px-3 py-1.5">
+            <option value="">Toutes les applications</option>
             <option v-for="s in stacksForHost" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
         </label>
@@ -118,73 +187,97 @@ onBeforeUnmount(() => window.clearInterval(timer));
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
 
     <template v-if="data">
-      <section aria-label="Résumé" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-lg border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase text-slate-500">Agents</p>
-          <p class="mt-1 text-2xl font-semibold" :class="data.agents.offline ? 'text-red-700' : ''">{{ data.agents.online }}<span class="text-base font-normal text-slate-500"> / {{ data.agents.total }} en ligne</span></p>
+      <section aria-label="Indicateurs" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        <StatCard label="Agents" icon="server" :value="`${data.agents.online} / ${data.agents.total}`" :hint="data.agents.offline ? `${data.agents.offline} hors ligne` : 'tous en ligne'" :tone="data.agents.offline ? 'bad' : 'ok'" to="/statut" />
+        <StatCard label="Applications" icon="boxes-stacked" :value="filteredApps.length" :hint="`${managedCount} gérée(s) · ${filteredApps.length - managedCount} observée(s)`" to="/stacks" />
+        <StatCard label="Conteneurs" icon="cube" :value="`${data.containers.running} / ${data.containers.total}`" hint="en marche" :tone="data.containers.failed ? 'bad' : 'ok'" />
+        <StatCard
+          label="Alertes"
+          icon="triangle-exclamation"
+          :value="alertCounts.critical + alertCounts.warning + alertCounts.info"
+          :hint="`${alertCounts.critical} critique(s) · ${alertCounts.warning} attention`"
+          :tone="alertCounts.critical ? 'bad' : alertCounts.warning ? 'warn' : 'ok'"
+        />
+        <StatCard
+          label="Vulnérabilités"
+          icon="shield-halved"
+          :value="data.security.images.critical + data.security.images.high"
+          :hint="`${data.security.images.critical} critique(s) · ${data.security.images.high} élevée(s)`"
+          :tone="data.security.images.critical ? 'bad' : data.security.images.high ? 'warn' : 'ok'"
+          to="/images"
+        />
+        <StatCard label="Mises à jour" icon="arrows-rotate" :value="data.security.updates.available" hint="d'images disponibles" :tone="data.security.updates.available ? 'warn' : 'ok'" to="/images" />
+      </section>
+
+      <section aria-label="Répartition" class="grid gap-4 xl:grid-cols-3">
+        <PanelCard title="Applications" icon="boxes-stacked" subtitle="Gérées et observées"><DonutChart title="Applications" center-label="applications" :items="stackItems" /></PanelCard>
+        <PanelCard title="Conteneurs" icon="cube" subtitle="Un conteneur terminé avec le code 0 n'est pas une erreur"><DonutChart title="Conteneurs" center-label="conteneurs" :items="containerItems" /></PanelCard>
+        <PanelCard title="Images" icon="layer-group" subtitle="Seules les CVE critiques et élevées comptent"><DonutChart title="Images" center-label="images" :items="imageItems" /></PanelCard>
+      </section>
+
+      <section aria-label="Ressources" class="space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Ressources</h2>
+          <div class="inline-flex rounded-md border border-slate-300 bg-white p-0.5 text-sm" role="group" aria-label="Période">
+            <button
+              v-for="r in RANGES"
+              :key="r.value"
+              :aria-pressed="range === r.value"
+              :class="['rounded px-3 py-1', range === r.value ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100']"
+              @click="range = r.value"
+            >
+{{ r.label }}
+</button>
+          </div>
         </div>
-        <div class="rounded-lg border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase text-slate-500">Stacks</p>
-          <p class="mt-1 flex flex-wrap gap-x-3 text-sm">
-            <span class="text-green-700">{{ data.stacks.counts.running }} en marche</span>
-            <span :class="data.stacks.counts.degraded ? 'font-semibold text-red-700' : 'text-slate-500'">{{ data.stacks.counts.degraded }} dégradée(s)</span>
-            <span class="text-slate-600">{{ data.stacks.counts.stopped }} arrêtée(s)</span>
-            <span :class="data.stacks.counts.unknown ? 'font-semibold text-amber-700' : 'text-slate-500'">{{ data.stacks.counts.unknown }} inconnue(s)</span>
-          </p>
+        <div class="grid gap-4 xl:grid-cols-3">
+          <PanelCard title="CPU des conteneurs" icon="microchip" subtitle="100 % = un cœur complet"><AreaChart title="CPU des conteneurs" unit="percent" :series="cpuSeries" /></PanelCard>
+          <PanelCard title="Mémoire des conteneurs" icon="memory"><AreaChart title="Mémoire des conteneurs" unit="bytes" :series="memSeries" /></PanelCard>
+          <PanelCard title="Réseau" icon="network-wired"><AreaChart title="Réseau" unit="bps" :series="netSeries" /></PanelCard>
         </div>
-        <div class="rounded-lg border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase text-slate-500">Conteneurs</p>
-          <p class="mt-1 text-2xl font-semibold">{{ data.containers.running }}<span class="text-base font-normal text-slate-500"> / {{ data.containers.total }} en marche</span></p>
-          <p class="text-xs text-slate-500">
-            {{ data.containers.unhealthy }} en échec de healthcheck · {{ data.containers.noHealthcheck }} sans healthcheck
-            <span v-if="data.containers.unmanagedProjects">· {{ data.containers.unmanagedProjects }} projet(s) non géré(s)</span>
-          </p>
-        </div>
-        <div class="rounded-lg border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase text-slate-500">Alertes</p>
-          <p class="mt-1 flex gap-3 text-sm">
-            <span :class="alertCounts.critical ? 'font-semibold text-red-700' : 'text-slate-500'">{{ alertCounts.critical }} critique(s)</span>
-            <span :class="alertCounts.warning ? 'font-semibold text-amber-700' : 'text-slate-500'">{{ alertCounts.warning }} attention</span>
-            <span class="text-slate-500">{{ alertCounts.info }} info</span>
-          </p>
-          <p v-if="data.backup" class="mt-1 text-xs text-slate-500">
-            Sauvegarde Git : <RouterLink to="/backup" class="underline">{{ backupText[data.backup.state] }}</RouterLink>
-            <span v-if="data.backup.lastPushAt"> · dernier push {{ ago(data.backup.lastPushAt, now) }}</span>
-          </p>
+        <div class="grid gap-4 xl:grid-cols-3">
+          <PanelCard title="Machines hôtes" icon="server" subtitle="Dernier relevé">
+            <p v-if="!overview || overview.hosts.length === 0" class="text-sm text-slate-500">Aucun hôte.</p>
+            <ul v-else class="space-y-5">
+              <li v-for="h in overview.hosts" :key="h.hostId" class="space-y-2">
+                <p class="text-sm font-medium">{{ h.name }}<span v-if="h.cpus" class="ml-2 text-xs font-normal text-slate-500">{{ h.cpus }} cœur(s)</span></p>
+                <template v-if="h.latest">
+                  <MeterBar label="CPU" icon="microchip" :percent="h.latest.cpuPercent" />
+                  <MeterBar label="Mémoire" icon="memory" :percent="pct(h.latest.memUsed, h.latest.memTotal)" :detail="h.latest.memTotal ? `${formatBytes(h.latest.memUsed ?? 0)} / ${formatBytes(h.latest.memTotal)}` : undefined" />
+                  <MeterBar label="Disque" icon="hard-drive" :percent="pct(h.latest.diskUsed, h.latest.diskTotal)" :detail="h.latest.diskTotal ? `${formatBytes(h.latest.diskUsed ?? 0)} / ${formatBytes(h.latest.diskTotal)}` : undefined" />
+                </template>
+                <p v-else class="text-xs text-slate-500">Pas encore de relevé de la machine (l'agent doit être à jour et en ligne).</p>
+              </li>
+            </ul>
+          </PanelCard>
+          <PanelCard title="Top 5 CPU" icon="microchip" subtitle="Applications les plus gourmandes sur la période">
+            <p v-if="!overview || overview.top.cpu.length === 0" class="text-sm text-slate-500">Aucune mesure.</p>
+            <ol v-else class="space-y-2 text-sm">
+              <li v-for="(a, i) in overview.top.cpu" :key="a.project + a.hostName" class="flex items-center gap-3">
+                <span class="w-5 text-center text-xs text-slate-400">{{ i + 1 }}</span>
+                <span class="min-w-0 flex-1 truncate">{{ a.project }}<span class="ml-1 text-xs text-slate-400">{{ a.hostName }}</span></span>
+                <span class="tabular-nums">{{ (a.value / 100).toFixed(2) }} cœur(s)</span>
+              </li>
+            </ol>
+          </PanelCard>
+          <PanelCard title="Top 5 mémoire" icon="memory" subtitle="Applications les plus gourmandes sur la période">
+            <p v-if="!overview || overview.top.mem.length === 0" class="text-sm text-slate-500">Aucune mesure.</p>
+            <ol v-else class="space-y-2 text-sm">
+              <li v-for="(a, i) in overview.top.mem" :key="a.project + a.hostName" class="flex items-center gap-3">
+                <span class="w-5 text-center text-xs text-slate-400">{{ i + 1 }}</span>
+                <span class="min-w-0 flex-1 truncate">{{ a.project }}<span class="ml-1 text-xs text-slate-400">{{ a.hostName }}</span></span>
+                <span class="tabular-nums">{{ formatBytes(a.value) }}</span>
+              </li>
+            </ol>
+          </PanelCard>
         </div>
       </section>
 
-      <section aria-label="Sécurité des images" class="grid gap-4 sm:grid-cols-3">
-        <div class="rounded-lg border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase text-slate-500">Images des stacks</p>
-          <p class="mt-1 text-2xl font-semibold">{{ data.security.images.images }}</p>
-          <p class="text-xs text-slate-500">
-            {{ data.security.images.clean }} sans vulnérabilité connue · {{ data.security.images.vulnerable }} avec vulnérabilités
-            · <span :class="data.security.images.never ? 'font-medium text-slate-700' : ''">{{ data.security.images.never }} jamais scannée(s)</span>
-            <span v-if="data.security.images.failed" class="font-medium text-red-700"> · {{ data.security.images.failed }} scan(s) en échec</span>
-          </p>
-        </div>
-        <div class="rounded-lg border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase text-slate-500">Vulnérabilités</p>
-          <p class="mt-1 text-sm">
-            <span :class="data.security.images.critical ? 'text-lg font-semibold text-red-700' : 'text-lg'">{{ data.security.images.critical }}</span> critique(s)
-            · <span class="text-lg">{{ data.security.images.high }}</span> élevée(s)
-          </p>
-          <RouterLink to="/images" class="text-xs underline">Voir les images</RouterLink>
-        </div>
-        <div class="rounded-lg border border-slate-200 bg-white p-4">
-          <p class="text-xs uppercase text-slate-500">Mises à jour d'images</p>
-          <p class="mt-1 text-2xl font-semibold" :class="data.security.updates.available ? 'text-amber-700' : ''">{{ data.security.updates.available }}</p>
-          <p class="text-xs text-slate-500">disponible(s) · rien n'est déployé automatiquement<span v-if="data.security.updates.errors"> · {{ data.security.updates.errors }} vérification(s) impossible(s)</span></p>
-        </div>
-      </section>
-
-      <section aria-label="Alertes">
-        <h2 class="mb-2 text-lg font-semibold">Alertes</h2>
-        <p v-if="data.alerts.length === 0" class="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800">Aucune alerte active.</p>
-        <ul v-else class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
-          <li v-for="a in data.alerts" :key="a.id" class="flex flex-wrap items-start gap-3 p-4 text-sm">
-            <span class="mt-0.5 rounded px-2 py-0.5 text-xs" :class="sev[a.severity].cls">{{ sev[a.severity].text }}</span>
+      <PanelCard title="Alertes" icon="triangle-exclamation">
+        <p v-if="data.alerts.length === 0" class="flex items-center gap-2 text-sm text-green-700"><FaIcon :icon="['fas', 'circle-check']" /> Aucune alerte active.</p>
+        <ul v-else class="divide-y divide-slate-200">
+          <li v-for="a in data.alerts" :key="a.id" class="flex flex-wrap items-start gap-3 py-3 text-sm first:pt-0 last:pb-0">
+            <span class="mt-0.5 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs" :class="sev[a.severity].cls"><FaIcon :icon="['fas', sev[a.severity].icon]" />{{ sev[a.severity].text }}</span>
             <div class="min-w-0 flex-1">
               <p class="font-medium">
                 <RouterLink v-if="link(a)" :to="link(a) as string" class="underline">{{ a.title }}</RouterLink>
@@ -195,77 +288,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <span v-if="a.since" class="text-xs text-slate-500" :title="fmtDate(a.since)">depuis {{ ago(a.since, now).replace("il y a ", "") }}</span>
           </li>
         </ul>
-      </section>
-
-      <section aria-label="Stacks">
-        <h2 class="mb-2 text-lg font-semibold">Stacks</h2>
-        <p v-if="data.stacks.items.length === 0" class="text-sm text-slate-500">Aucune stack pour ce filtre.</p>
-        <div v-else class="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-          <table class="w-full text-left text-sm">
-            <thead class="text-xs text-slate-500">
-              <tr><th class="px-4 py-2">Stack</th><th class="px-4 py-2">Hôte</th><th class="px-4 py-2">État</th><th class="px-4 py-2">Conteneurs</th><th class="px-4 py-2">Dernière observation</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="s in data.stacks.items" :key="s.id" class="border-t border-slate-100 align-top">
-                <td class="px-4 py-2">
-                  <RouterLink :to="`/stacks/${s.id}`" class="font-medium underline">{{ s.name }}</RouterLink>
-                  <p class="text-xs text-slate-500">r{{ s.currentRevision }}{{ s.deployedRevision && s.deployedRevision !== s.currentRevision ? ` · déployée r${s.deployedRevision}` : "" }}</p>
-                </td>
-                <td class="px-4 py-2">{{ s.hostName }}<span v-if="s.hostPresence === 'offline'" class="ml-1 rounded bg-red-100 px-1.5 text-xs text-red-800">hors ligne</span></td>
-                <td class="px-4 py-2">
-                  <span class="rounded px-2 py-0.5 text-xs" :class="status[s.status].cls">{{ status[s.status].text }}</span>
-                  <p class="mt-1 max-w-sm text-xs text-slate-500">{{ s.reason }}</p>
-                </td>
-                <td class="px-4 py-2 text-xs">
-                  {{ s.containers.running }}/{{ s.containers.total }} en marche
-                  <p v-if="s.containers.unhealthy" class="text-red-700">{{ s.containers.unhealthy }} healthcheck en échec</p>
-                  <p v-if="s.containers.noHealthcheck" class="text-slate-500">{{ s.containers.noHealthcheck }} sans healthcheck</p>
-                </td>
-                <td class="px-4 py-2 text-xs text-slate-500" :title="s.observedAt ? fmtDate(s.observedAt) : ''">{{ ago(s.observedAt, now) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <div class="grid gap-8 lg:grid-cols-2">
-        <section aria-label="Agents">
-          <h2 class="mb-2 text-lg font-semibold">Agents</h2>
-          <ul class="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white text-sm">
-            <li v-for="a in data.agents.items" :key="a.id" class="p-4">
-              <div class="flex items-center gap-2">
-                <span class="inline-block h-2.5 w-2.5 rounded-full" :class="a.presence === 'online' ? 'bg-green-500' : 'bg-red-500'" aria-hidden="true"></span>
-                <span class="font-medium">{{ a.name }}</span>
-                <span class="text-xs text-slate-500">{{ a.presence === "online" ? "en ligne" : `hors ligne · vu ${ago(a.lastSeenAt, now)}` }}</span>
-              </div>
-              <p class="mt-1 text-xs text-slate-500">
-                Docker {{ a.dockerVersion ?? "?" }} · agent {{ a.agentVersion ?? "?" }}
-                <template v-if="a.hostInfo"> · {{ a.hostInfo.cpus }} CPU · {{ formatBytes(a.hostInfo.memTotalBytes) }} · {{ a.hostInfo.images }} image(s)</template>
-              </p>
-            </li>
-          </ul>
-        </section>
-
-        <section aria-label="Utilisation">
-          <h2 class="mb-2 text-lg font-semibold">Utilisation des conteneurs</h2>
-          <p v-if="data.usage.top.length === 0" class="text-sm text-slate-500">Aucune métrique récente (collecte toutes les 30 s ; les hôtes hors ligne sont exclus).</p>
-          <table v-else class="w-full overflow-hidden rounded-lg border border-slate-200 bg-white text-left text-sm">
-            <thead class="text-xs text-slate-500"><tr><th class="px-3 py-2">Conteneur</th><th class="px-3 py-2">CPU</th><th class="px-3 py-2">Mémoire</th></tr></thead>
-            <tbody>
-              <tr v-for="c in data.usage.top" :key="c.containerId" class="border-t border-slate-100">
-                <td class="px-3 py-1.5">{{ c.service ?? c.name }}<span v-if="c.project" class="ml-1 text-xs text-slate-400">{{ c.project }}</span></td>
-                <td class="px-3 py-1.5">{{ c.cpuPercent === null ? "…" : c.cpuPercent.toFixed(1) + " %" }}</td>
-                <td class="px-3 py-1.5">{{ formatBytes(c.memBytes) }}<span class="text-xs text-slate-400"> / {{ formatBytes(c.memLimitBytes) }}</span></td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-      </div>
-      <p class="text-xs text-slate-500">
-        Un hôte hors ligne ou une observation périmée donnent l'état « inconnue », jamais « arrêtée » : la dernière observation est conservée et datée.
-        Les contrôles HTTP externes ne sont pas inclus : seuls les healthchecks Docker sont pris en compte (« sans healthcheck » = non configuré, ce qui n'est pas une panne).
-      </p>
+      </PanelCard>
     </template>
-    <p v-else-if="!error" class="text-slate-500">Chargement…</p>
   </div>
 </template>

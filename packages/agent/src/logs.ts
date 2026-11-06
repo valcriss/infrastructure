@@ -36,29 +36,36 @@ export class LogStreamer {
     const end = (reason: string): void => emit({ type: "log_end", streamId: msg.streamId, reason });
 
     if (this.streams.size >= MAX_STREAMS) return end("Trop de flux de logs simultanés sur cet hôte.");
-    const dir = join(this.cfg.workspaceDir, msg.stack.id);
-    if (!(await exists(join(dir, "compose.yaml")))) {
-      return end("Cette stack n'a jamais été déployée sur cet hôte.");
+    let args: string[];
+    if (msg.containerId) {
+      // Projet observé : pas de Compose connu, on suit un conteneur précis (arguments structurés).
+      args = ["logs", "--follow", "--timestamps", "--tail", String(msg.tail), msg.containerId];
+    } else if (msg.stack) {
+      const dir = join(this.cfg.workspaceDir, msg.stack.id);
+      if (!(await exists(join(dir, "compose.yaml")))) {
+        return end("Cette stack n'a jamais été déployée sur cet hôte.");
+      }
+      args = [
+        "compose",
+        "--project-name",
+        msg.stack.project,
+        "--project-directory",
+        dir,
+        "--file",
+        join(dir, "compose.yaml"),
+        "--env-file",
+        join(dir, ".env"),
+        "logs",
+        "--follow",
+        "--timestamps",
+        "--no-color",
+        "--tail",
+        String(msg.tail),
+        ...(msg.service ? [msg.service] : []),
+      ];
+    } else {
+      return end("Demande de logs invalide : ni stack ni conteneur.");
     }
-
-    const args = [
-      "compose",
-      "--project-name",
-      msg.stack.project,
-      "--project-directory",
-      dir,
-      "--file",
-      join(dir, "compose.yaml"),
-      "--env-file",
-      join(dir, ".env"),
-      "logs",
-      "--follow",
-      "--timestamps",
-      "--no-color",
-      "--tail",
-      String(msg.tail),
-      ...(msg.service ? [msg.service] : []),
-    ];
     const child = spawn("docker", args, {
       env: dockerEnv(this.cfg.dockerSocket),
       shell: false,

@@ -107,7 +107,7 @@ async function remove(v: VariableView) {
       <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
       <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
       <div class="flex gap-2">
-        <button :disabled="busy" class="rounded bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50">Enregistrer</button>
+        <button :disabled="busy" class="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50">Enregistrer</button>
         <button v-if="editing" type="button" class="rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" @click="clear">Annuler</button>
       </div>
     </form>

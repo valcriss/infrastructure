@@ -2453,6 +2453,409 @@
         }
       }
     },
+    "/api/v1/hosts/{id}/projects/{name}": {
+      "get": {
+        "summary": "Fiche d'un projet Compose (lecture seule)",
+        "description": "Fonctionne pour un projet géré comme pour un projet observé (non géré). Ne renvoie jamais les variables d'environnement des conteneurs.",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Application (état, images, utilisation) et conteneurs avec ports, réseaux, montages et libellés Compose",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/projects/{name}/metrics": {
+      "get": {
+        "summary": "Métriques d'un projet Compose",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "6h",
+                "24h",
+                "7d"
+              ],
+              "default": "1h"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Limiter à un service Compose"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Séries par conteneur (≤ 240 points)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/projects/{name}/logs": {
+      "get": {
+        "summary": "Logs en direct d'un conteneur d'un projet (Server-Sent Events)",
+        "description": "Mêmes limites que les logs d'une stack (5 flux par hôte, 1 h par flux).",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "container",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Identifiant du conteneur (12 à 64 caractères hexadécimaux), obligatoire"
+          },
+          {
+            "name": "tail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flux `text/event-stream` : événements `lines` et `end`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Trop de tentatives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/applications": {
+      "get": {
+        "summary": "Applications (gérées et observées)",
+        "description": "« managed » : stack pilotée par la console. « observed » : projet Compose qui tourne sur un hôte sans que la console en ait le Compose (importable). Un conteneur terminé avec le code 0 n'est pas compté comme en échec.",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Une entrée par projet Compose : état, conteneurs, utilisation, images avec compteurs de vulnérabilités, mises à jour",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dashboard/overview": {
+      "get": {
+        "summary": "Utilisation globale (CPU, mémoire, réseau, hôtes)",
+        "description": "CPU des conteneurs : 100 = un cœur. Utilisation de l'hôte : CPU global (0–100), mémoire (hors cache récupérable) et disque de la partition de l'espace de travail ; absente tant que l'agent n'a pas envoyé de relevé.",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "6h",
+                "24h",
+                "7d"
+              ],
+              "default": "1h"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Totaux des conteneurs, 5 applications les plus gourmandes, utilisation de chaque hôte (≤ 240 points par série)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stacks/{id}/metrics": {
       "get": {
         "summary": "Métriques d'une stack (CPU, mémoire, réseau)",
@@ -3245,7 +3648,7 @@
     },
     "/api/v1/settings/security": {
       "get": {
-        "summary": "Périodes des scans et des vérifications",
+        "summary": "Réglages de sécurité des images (périodes, seuil de gravité)",
         "tags": [
           "Sécurité des images"
         ],
@@ -3260,7 +3663,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Heures entre deux passages planifiés (0 = désactivé)",
+            "description": "Heures entre deux passages planifiés (0 = désactivé), gravité minimale signalée (minSeverity) et prise en compte des vulnérabilités « inconnues » (includeUnknown)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3282,7 +3685,7 @@
         }
       },
       "put": {
-        "summary": "Modifier les périodes planifiées",
+        "summary": "Modifier les réglages de sécurité des images",
         "tags": [
           "Sécurité des images"
         ],
@@ -3309,6 +3712,20 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 720
+                  },
+                  "minSeverity": {
+                    "default": "LOW",
+                    "type": "string",
+                    "enum": [
+                      "LOW",
+                      "MEDIUM",
+                      "HIGH",
+                      "CRITICAL"
+                    ]
+                  },
+                  "includeUnknown": {
+                    "default": true,
+                    "type": "boolean"
                   }
                 },
                 "required": [

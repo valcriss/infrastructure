@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { api, describeError, type MetricsResult, type StackDetail } from "../../api";
+import { api, describeError, type Container, type MetricsResult, type ProjectRef } from "../../api";
 import MetricChart, { type ChartSeries } from "../../components/MetricChart.vue";
 
-const props = defineProps<{ stack: StackDetail }>();
+const props = defineProps<{ stack: { id: string; containers: Container[]; hostPresence: "online" | "offline" }; project?: ProjectRef }>();
 
 const ranges = [
   { key: "1h", label: "1 h" },
@@ -22,7 +22,8 @@ const services = computed(() => [...new Set(props.stack.containers.map((c) => c.
 async function load() {
   try {
     const q = new URLSearchParams({ range: range.value, ...(service.value ? { service: service.value } : {}) });
-    data.value = await api<MetricsResult>(`/api/v1/stacks/${props.stack.id}/metrics?${q}`);
+    const base = props.project ? `/api/v1/hosts/${props.project.hostId}/projects/${encodeURIComponent(props.project.name)}` : `/api/v1/stacks/${props.stack.id}`;
+    data.value = await api<MetricsResult>(`${base}/metrics?${q}`);
     error.value = "";
   } catch (err) {
     error.value = describeError(err);
@@ -56,7 +57,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
           v-for="r in ranges"
           :key="r.key"
           class="px-3 py-1.5"
-          :class="range === r.key ? 'bg-slate-900 text-white' : 'bg-white hover:bg-slate-100'"
+          :class="range === r.key ? 'bg-blue-600 text-white' : 'bg-white hover:bg-slate-100'"
           :aria-pressed="range === r.key"
           @click="range = r.key"
         >

@@ -368,10 +368,43 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect(worker.check).toMatchObject({ status: "error", error: expect.stringContaining("injoignable"), kind: null, detail: null, lastSuccessAt: null });
   });
 
+  it("ne signale que les gravités choisies (seuil minimal, « inconnues »), sans relancer de scan", async () => {
+    const r = await call("POST", `/api/v1/images/${IMG_APP}/scans`, {});
+    const before = (await call("GET", "/api/v1/images")).json.images.find((i: any) => i.imageId === IMG_APP);
+    // Aucun scan réussi n'est nécessairement présent ici : on en fabrique un avec toutes les gravités.
+    const scanId = (r.json.scanId ?? before?.scan?.lastAttempt?.id) as string;
+    result(scanId, { counts: { critical: 1, high: 2, medium: 3, low: 4, unknown: 5 }, total: 15, vulnerabilities: [
+      { id: "CVE-A", pkg: "a", installed: "1", fixed: null, severity: "CRITICAL", title: "c", url: null },
+      { id: "CVE-B", pkg: "b", installed: "1", fixed: null, severity: "LOW", title: "l", url: null },
+      { id: "CVE-C", pkg: "c", installed: "1", fixed: null, severity: "UNKNOWN", title: "u", url: null },
+    ] });
+    await waitFor(async () => (await imageView(IMG_APP))?.scan.current?.total === 15);
+    const put = (body: Record<string, unknown>) => call("PUT", "/api/v1/settings/security", { scanIntervalHours: 24, imageCheckIntervalHours: 24, ...body });
+
+    // Seuil « élevée » sans les inconnues : 1 critique + 2 élevées signalées, le reste est masqué mais reste stocké.
+    expect((await put({ minSeverity: "HIGH", includeUnknown: false })).status).toBe(200);
+    const view = await imageView(IMG_APP);
+    expect(view.scan.current).toMatchObject({ counts: { critical: 1, high: 2, medium: 0, low: 0, unknown: 0 }, total: 3, hidden: 12 });
+    const dash = (await call("GET", "/api/v1/dashboard")).json;
+    expect(dash.security.images).toMatchObject({ critical: 1, high: 2, withCritical: 1 });
+    const apps = (await call("GET", "/api/v1/applications")).json.applications as any[];
+    expect(apps.flatMap((a) => a.images).find((i) => i.imageId === IMG_APP).counts).toMatchObject({ medium: 0, low: 0, unknown: 0 });
+    const details = (await call("GET", `/api/v1/images/${IMG_APP}/scan`)).json;
+    expect(details.vulnerabilities.map((v: any) => v.id)).toEqual(["CVE-A"]);
+
+    // Seuil « critique » : plus de « élevées » ; les inconnues repassent avec l'option.
+    expect((await put({ minSeverity: "CRITICAL", includeUnknown: true })).status).toBe(200);
+    expect((await imageView(IMG_APP)).scan.current).toMatchObject({ counts: { critical: 1, high: 0, unknown: 5 }, total: 6, hidden: 9 });
+    expect((await call("GET", "/api/v1/dashboard")).json.security.images).toMatchObject({ withCritical: 1, withHigh: 0 });
+    expect((await put({})).status).toBe(200); // retour aux valeurs par défaut (LOW, inconnues incluses)
+    expect((await imageView(IMG_APP)).scan.current).toMatchObject({ total: 15, hidden: 0 });
+  });
+
   it("règle les périodes planifiées (0 = désactivé) et refuse les valeurs invalides", async () => {
-    expect((await call("GET", "/api/v1/settings/security")).json).toEqual({ scanIntervalHours: 24, imageCheckIntervalHours: 24 });
+    expect((await call("GET", "/api/v1/settings/security")).json).toEqual({ scanIntervalHours: 24, imageCheckIntervalHours: 24, minSeverity: "LOW", includeUnknown: true });
     expect((await call("PUT", "/api/v1/settings/security", { scanIntervalHours: 0, imageCheckIntervalHours: 12 })).status).toBe(200);
-    expect((await call("GET", "/api/v1/settings/security")).json).toEqual({ scanIntervalHours: 0, imageCheckIntervalHours: 12 });
+    expect((await call("GET", "/api/v1/settings/security")).json).toEqual({ scanIntervalHours: 0, imageCheckIntervalHours: 12, minSeverity: "LOW", includeUnknown: true });
+    expect((await call("PUT", "/api/v1/settings/security", { scanIntervalHours: 0, imageCheckIntervalHours: 12, minSeverity: "URGENT" })).status).toBe(400);
     expect((await call("PUT", "/api/v1/settings/security", { scanIntervalHours: -1, imageCheckIntervalHours: 12 })).status).toBe(400);
     expect((await call("PUT", "/api/v1/settings/security", { scanIntervalHours: 1.5, imageCheckIntervalHours: 12 })).status).toBe(400);
   });

@@ -13,6 +13,7 @@ import { AGENT_VERSION, TRIVY_CACHE_VOLUME, type AgentConfig } from "./config.js
 import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { ReplayGuard, SelfProtection } from "./guard.js";
+import { HostMetricsCollector } from "./host-metrics.js";
 import { LogStreamer } from "./logs.js";
 import { MetricsCollector } from "./metrics.js";
 import { TrivyScanner } from "./scanner.js";
@@ -140,6 +141,7 @@ export class AgentClient {
       let inventoryTimer: NodeJS.Timeout | undefined;
       let metricsTimer: NodeJS.Timeout | undefined;
       const collector = new MetricsCollector(this.config.dockerSocket);
+      const hostCollector = new HostMetricsCollector(this.config.workspaceDir);
 
       const send = (m: AgentMessage): void => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
@@ -147,7 +149,8 @@ export class AgentClient {
       const sendMetrics = async (): Promise<void> => {
         try {
           const samples = await collector.collect();
-          if (samples.length > 0) send({ type: "metrics", observedAt: new Date().toISOString(), samples });
+          const host = await hostCollector.collect();
+          send({ type: "metrics", observedAt: new Date().toISOString(), samples, ...(host ? { host } : {}) });
         } catch (err) {
           this.log(`métriques Docker impossibles : ${(err as Error).message}`);
         }

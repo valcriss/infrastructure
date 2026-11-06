@@ -46,9 +46,46 @@ interface RawContainer {
   Status?: unknown;
   Created?: unknown;
   Labels?: unknown;
+  Ports?: unknown;
+  Mounts?: unknown;
+  NetworkSettings?: unknown;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+function mapPorts(raw: unknown): NonNullable<Container["ports"]> {
+  if (!Array.isArray(raw)) return [];
+  const out: NonNullable<Container["ports"]> = [];
+  for (const p of raw.slice(0, 50) as { IP?: unknown; PrivatePort?: unknown; PublicPort?: unknown; Type?: unknown }[]) {
+    if (typeof p?.PrivatePort !== "number") continue;
+    out.push({
+      privatePort: Math.trunc(p.PrivatePort),
+      ...(typeof p.PublicPort === "number" ? { publicPort: Math.trunc(p.PublicPort) } : {}),
+      type: str(p.Type).slice(0, 10) || "tcp",
+      ...(str(p.IP) ? { ip: str(p.IP).slice(0, 64) } : {}),
+    });
+  }
+  return out;
+}
+
+function mapMounts(raw: unknown): NonNullable<Container["mounts"]> {
+  if (!Array.isArray(raw)) return [];
+  const out: NonNullable<Container["mounts"]> = [];
+  for (const m of raw.slice(0, 50) as { Type?: unknown; Source?: unknown; Name?: unknown; Destination?: unknown; RW?: unknown }[]) {
+    const destination = str(m?.Destination).slice(0, 500);
+    if (!destination) continue;
+    // Volume nommé : on affiche son nom ; montage « bind » : le chemin de l'hôte.
+    const source = (str(m.Type) === "volume" ? str(m.Name) : str(m.Source)).slice(0, 500);
+    out.push({ type: str(m.Type).slice(0, 20) || "bind", ...(source ? { source } : {}), destination, rw: m.RW !== false });
+  }
+  return out;
+}
+
+function mapNetworks(raw: unknown): string[] {
+  const nets = (raw as { Networks?: unknown } | null)?.Networks;
+  if (!nets || typeof nets !== "object") return [];
+  return Object.keys(nets).slice(0, 20).map((n) => n.slice(0, 128));
+}
 
 /** Transforme la réponse `GET /containers/json` en conteneurs du protocole. */
 export function mapContainers(raw: unknown): Container[] {
@@ -61,6 +98,11 @@ export function mapContainers(raw: unknown): Container[] {
       item.Labels && typeof item.Labels === "object" ? (item.Labels as Record<string, unknown>) : {};
     const project = str(labels["com.docker.compose.project"]);
     const service = str(labels["com.docker.compose.service"]);
+    const workingDir = str(labels["com.docker.compose.project.working_dir"]).slice(0, 500);
+    const configFiles = str(labels["com.docker.compose.project.config_files"]).slice(0, 1000);
+    const ports = mapPorts(item.Ports);
+    const mounts = mapMounts(item.Mounts);
+    const networks = mapNetworks(item.NetworkSettings);
     out.push({
       id,
       names: Array.isArray(item.Names)
@@ -73,6 +115,11 @@ export function mapContainers(raw: unknown): Container[] {
       created: typeof item.Created === "number" ? Math.trunc(item.Created) : 0,
       ...(project ? { composeProject: project } : {}),
       ...(service ? { composeService: service } : {}),
+      ...(ports.length ? { ports } : {}),
+      ...(mounts.length ? { mounts } : {}),
+      ...(networks.length ? { networks } : {}),
+      ...(workingDir ? { composeWorkingDir: workingDir } : {}),
+      ...(configFiles ? { composeConfigFiles: configFiles } : {}),
     });
   }
   return out;

@@ -1,15 +1,17 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useSession } from "./stores/session";
-import BackupView from "./views/BackupView.vue";
+import AccountView from "./views/AccountView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import HostsView from "./views/HostsView.vue";
 import ImagesView from "./views/ImagesView.vue";
 import LoginView from "./views/LoginView.vue";
 import SettingsView from "./views/SettingsView.vue";
 import SetupView from "./views/SetupView.vue";
+import ObservedProjectView from "./views/ObservedProjectView.vue";
 import StackNewView from "./views/StackNewView.vue";
 import StackView from "./views/StackView.vue";
 import StacksView from "./views/StacksView.vue";
+import StatusView from "./views/StatusView.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -23,8 +25,11 @@ export const router = createRouter({
     { path: "/stacks", component: StacksView },
     { path: "/stacks/new", component: StackNewView },
     { path: "/stacks/:id", component: StackView },
-    { path: "/backup", component: BackupView },
+    { path: "/backup", redirect: "/settings?tab=git" },
+    { path: "/account", component: AccountView },
+    { path: "/hosts/:hostId/projects/:name", component: ObservedProjectView },
     { path: "/settings", component: SettingsView },
+    { path: "/statut", component: StatusView },
   ],
 });
 

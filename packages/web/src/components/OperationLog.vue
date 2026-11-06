@@ -59,7 +59,7 @@ onBeforeUnmount(() => window.clearTimeout(timer));
       <p v-if="op.status === 'unknown'" class="mt-2 text-amber-700">
         Le résultat est inconnu : rien n'a été rejoué automatiquement. Vérifiez l'état réel avant de relancer.
       </p>
-      <pre class="mt-3 max-h-72 overflow-auto rounded bg-slate-900 p-3 font-mono text-xs text-slate-100">{{ op.log || "(aucune sortie)" }}</pre>
+      <pre class="mt-3 max-h-72 overflow-auto rounded bg-[#0b1220] p-3 font-mono text-xs text-[#e2e8f0]">{{ op.log || "(aucune sortie)" }}</pre>
       <div v-if="op.result?.images?.length" class="mt-3">
         <h4 class="font-medium">Images déployées</h4>
         <ul class="mt-1 space-y-1 font-mono text-xs">

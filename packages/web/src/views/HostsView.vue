@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageTitle from "../components/PageTitle.vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ApiError, api, type Host, type HostDetail, type ObservedProject } from "../api";
 
@@ -59,8 +60,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
 <template>
   <div class="space-y-8">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold">Hôtes</h1>
-      <button class="rounded bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700" @click="createToken">
+      <PageTitle title="Hôtes" icon="server" subtitle="Machines Docker gérées par un agent" />
+      <button class="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700" @click="createToken">
         Enrôler un hôte
       </button>
     </div>

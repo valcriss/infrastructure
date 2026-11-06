@@ -79,7 +79,7 @@ function reset() {
     <YamlEditor v-model="draft" label="Fichier Compose" />
     <div class="flex flex-wrap items-center gap-3 text-sm">
       <input v-model="message" maxlength="200" placeholder="Message de révision (optionnel)" aria-label="Message de révision" class="min-w-64 rounded border border-slate-300 px-3 py-2" />
-      <button :disabled="!dirty || busy" class="rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50" @click="save">Enregistrer une révision</button>
+      <button :disabled="!dirty || busy" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="save">Enregistrer une révision</button>
       <button :disabled="!dirty" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" @click="showDiff = !showDiff">
         {{ showDiff ? "Masquer les différences" : "Voir les différences" }}
       </button>

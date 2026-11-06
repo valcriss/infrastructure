@@ -105,7 +105,7 @@ watch(() => props.stack.id, () => (loaded.value = false));
       <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
       <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
       <div class="flex gap-2 text-sm">
-        <button :disabled="busy || !path" class="rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50" @click="save">Enregistrer</button>
+        <button :disabled="busy || !path" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="save">Enregistrer</button>
         <button v-if="!isNew" :disabled="busy" class="rounded border border-red-300 px-3 py-2 text-red-700 hover:bg-red-50" @click="remove">Supprimer</button>
       </div>
     </section>

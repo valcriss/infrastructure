@@ -73,7 +73,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
 <template>
   <div class="space-y-6">
     <div class="flex flex-wrap items-center gap-3 text-sm">
-      <button :disabled="stack.hostPresence === 'offline'" class="rounded bg-slate-900 px-3 py-2 text-white hover:bg-slate-700 disabled:opacity-50" @click="act('scans', 'Scans demandés.')">Scanner les images</button>
+      <button :disabled="stack.hostPresence === 'offline'" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="act('scans', 'Scans demandés.')">Scanner les images</button>
       <button class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100" @click="act('image-checks', 'Vérification lancée.')">Vérifier les mises à jour</button>
       <span v-if="busy" class="text-xs text-blue-700" aria-live="polite">Traitement en cours…</span>
     </div>

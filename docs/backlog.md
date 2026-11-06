@@ -78,6 +78,8 @@ Limites connues : la rotation de la clé de restauration n'est pas implémentée
 ## Phase 6 — Livraison
 
 État (6 novembre 2026) : **en cours**. Fait : revue de sécurité du §14 (écarts corrigés : demandes rejouées ou expirées refusées par l'agent, protection de la stack de la console et de l'agent contre leur propre interface ; section « Sécurité » du README). Reste : durcissement et tests de bout en bout, guide d'exploitation, exemples d'appels API.
+
+Refonte de l'interface (7 novembre 2026, à la demande du porteur) : cadre (en-tête, menu latéral, thème clair / sombre), tableau de bord avec graphiques animés (ECharts), page Applications en tuiles (gérées / observées), page Images, page Statut, utilisation des machines hôtes mesurée par l'agent. Vérifié sur Docker réel (clair, sombre, mobile 375 px).
 1. Durcissement erreurs et reconnexions, tests de bout en bout
 2. Documentation : installation, mise à jour, dépannage, restauration, limites du MVP
 3. Contrat OpenAPI publié et exemples d'appels

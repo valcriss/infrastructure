@@ -1,6 +1,7 @@
-import type { Container, ImageInfo } from "@infra/shared";
+import type { Container, ImageInfo, SeverityCounts } from "@infra/shared";
 import type { Pool } from "./db.js";
 import { platformOf } from "./image-ref.js";
+import { reportedCounts, type SecuritySettings } from "./settings.js";
 
 export interface ImageUser {
   hostId: string;
@@ -95,6 +96,15 @@ export interface ScanBrief {
  * Trois situations distinctes, jamais confondues : « aucune vulnérabilité
  * connue » (scan réussi, 0 résultat), « jamais scanné » et « scan en échec ».
  */
+/** Résumé d'un scan pour `scanState` : le total ne compte que les gravités signalées par les réglages. */
+export function briefOf(
+  scan: { id: string; status: ScanBrief["status"]; finishedAt: Date | null; counts: SeverityCounts | null; total: number | null },
+  settings: Pick<SecuritySettings, "minSeverity" | "includeUnknown">,
+): ScanBrief {
+  const reported = reportedCounts(scan.counts, settings);
+  return { id: scan.id, status: scan.status, finishedAt: scan.finishedAt, total: reported ? reported.total : scan.total };
+}
+
 export function scanState(scan: ScanBrief | null): ScanState {
   if (!scan) return "never";
   if (scan.status === "pending") return "pending";
