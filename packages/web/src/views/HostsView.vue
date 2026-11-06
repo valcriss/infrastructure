@@ -133,13 +133,14 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <h3 class="border-b border-slate-200 px-4 py-2 text-sm font-medium">{{ project }}</h3>
         <table class="w-full text-left text-sm">
           <thead class="text-xs text-slate-500">
-            <tr><th class="px-4 py-1">Nom</th><th class="px-4 py-1">Image</th><th class="px-4 py-1">État</th></tr>
+            <tr><th class="px-4 py-1">Nom</th><th class="px-4 py-1">Image</th><th class="px-4 py-1">État</th><th class="px-4 py-1">Healthcheck</th></tr>
           </thead>
           <tbody>
             <tr v-for="c in list" :key="c.id" class="border-t border-slate-100">
               <td class="px-4 py-2">{{ c.composeService ?? c.names[0] }}</td>
               <td class="px-4 py-2 font-mono text-xs">{{ c.image }}</td>
               <td class="px-4 py-2">{{ c.status }}</td>
+              <td class="px-4 py-2 text-xs">{{ c.health === "healthy" ? "sain" : c.health === "unhealthy" ? "en échec" : c.health === "starting" ? "démarrage" : c.health === "none" ? "non configuré" : "—" }}</td>
             </tr>
           </tbody>
         </table>

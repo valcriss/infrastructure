@@ -4,7 +4,9 @@ Outil auto-hébergé de gestion de stacks Docker. Cadrage complet : [project.md]
 
 État : **Phases 1 et 2 terminées** : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage, jetons API, logs en direct et interface complète des stacks (éditeur Compose, différences, historique, opérations). Contrat OpenAPI 3.1 dans [docs/openapi.json](docs/openapi.json) (servi par `GET /api/v1/openapi.json`) et import des projets Compose déjà présents sur l'hôte.
 
-**Phase 3 (sauvegarde Git et restauration)** : la configuration est sauvegardée dans un dépôt Git unique (HTTPS + jeton), secrets chiffrés avec age, et restaurable sur une console vierge depuis l'assistant d'initialisation. Prochaine étape : Phase 4 (dashboard, supervision).
+**Phase 3 (sauvegarde Git et restauration)** : la configuration est sauvegardée dans un dépôt Git unique (HTTPS + jeton), secrets chiffrés avec age, et restaurable sur une console vierge depuis l'assistant d'initialisation.
+
+**Phase 4 (supervision)** : tableau de bord (agents, stacks, conteneurs, healthchecks, alertes), métriques CPU / mémoire / réseau avec rétention bornée, filtres par hôte et par stack. Prochaine étape : Phase 5 (Trivy et suivi des images).
 
 ## API (extrait)
 
@@ -24,6 +26,8 @@ POST /api/v1/stacks/{id}/stop | start
 GET  /api/v1/hosts/{id}/projects             projets Compose observés (gérés ou importables)
 GET  /api/v1/operations/{id}               état, journal expurgé, images déployées (digests)
 GET  /api/v1/stacks/{id}/logs?service=web&tail=100   logs en direct (Server-Sent Events : `lines`, `end`)
+GET  /api/v1/dashboard[?hostId=…&stackId=…]   agents, stacks (état + raison), conteneurs, utilisation, alertes
+GET  /api/v1/stacks/{id}/metrics?range=1h|6h|24h|7d[&service=…]   séries CPU / mémoire / réseau
 GET  /api/v1/backup/status                 sauvegarde Git : état, dernier push confirmé, révisions en attente, erreur
 POST /api/v1/backup/sync[?wait=true]       demander une synchronisation (jamais de force push)
 ```
@@ -51,6 +55,15 @@ Hôte supplémentaire : générer un jeton dans l'interface (« Enrôler un hôt
 ```bash
 CONSOLE_URL=wss://console.exemple.org/agent/ws ENROLLMENT_TOKEN=<jeton> docker compose -f compose.agent.yaml up -d --build
 ```
+
+## Supervision
+
+Le tableau de bord (page d'accueil) se rafraîchit toutes les 10 s et se filtre par hôte et par stack (`GET /api/v1/dashboard`).
+
+- **États d'une stack** : `en marche`, `dégradée` (conteneur planté ou en échec de healthcheck, service absent, redémarrage en cours), `arrêtée`, `jamais déployée` et **`inconnue`**. Un hôte hors ligne ou une observation de plus de 3 minutes donnent « inconnue », **jamais « arrêtée »** : la dernière observation est conservée et datée, les conteneurs ont pu continuer à tourner.
+- **Healthchecks** : ceux de Docker uniquement. « Sans healthcheck » (non configuré) est distingué de « en échec ». Un conteneur terminé avec le code 0 est vu comme une tâche achevée (migration, init), pas comme une panne ; les services sous `profiles` ne sont pas attendus. Les **contrôles HTTP externes ne sont pas inclus** (décision du porteur).
+- **Alertes** (calculées à la lecture, triées par gravité) : agent hors ligne, observation périmée, stack dégradée ou arrêtée, healthcheck en échec, redémarrages répétés (≥ 3 et démarrage récent), sauvegarde Git en échec ou bloquée, opération au résultat inconnu. Les alertes de vulnérabilités et de mises à jour arriveront avec la Phase 5.
+- **Métriques** (onglet « Métriques » d'une stack, `GET /api/v1/stacks/{id}/metrics`) : CPU (100 % = un cœur), mémoire (hors cache de pages inactif, comme `docker stats`), débits réseau reçus et émis. Collecte **toutes les 30 s**, conservation **7 jours**, ajustables avec `METRICS_INTERVAL_SEC` (5–3600) et `METRICS_RETENTION_DAYS` (1–365). Les courbes sont agrégées à 240 points maximum ; un débit est inconnu après un redémarrage du conteneur (compteur remis à zéro) et les trous ne sont pas interpolés. Ordre de grandeur de stockage : environ 100 octets par conteneur et par échantillon, soit quelques Mo par conteneur et par semaine à 30 s.
 
 ## Sauvegarde Git et restauration
 
@@ -113,6 +126,7 @@ TypeScript est volontairement limité à la version 6 : `vue-tsc` ne fonctionne 
 - L'espace de travail de l'agent (`WORKSPACE_DIR`, défaut `/var/lib/console-docker/workspace`) est monté au même chemin absolu sur l'hôte et dans le conteneur ; ne pas le changer sans adapter le montage.
 - Rotation de la clé de restauration non implémentée. Les révisions précédentes d'une stack ne sont pas dans Git (seul l'état courant est sauvegardé) : une restauration crée une révision 1.
 - Sauvegarde Git : le chemin HTTPS + jeton est vérifié de bout en bout contre un serveur Gitea en HTTPS avec autorité interne ; les autres hébergeurs (GitHub, GitLab…) n'ont pas été testés. Le jeton nécessite des droits d'écriture. Les valeurs de variables sensibles sont chiffrées dans Git mais restent en clair dans PostgreSQL.
+- Supervision : pas de métriques de l'hôte lui-même (CPU/mémoire globale, disque) mais seulement des conteneurs ; pas de notifications externes (les alertes ne sont visibles que dans l'interface et l'API) ; pas d'historique des alertes ni des changements d'état ; l'environnement est unique (« standalone »). L'état « dégradée » d'une stack repose sur le dernier inventaire (jusqu'à 60 s de retard). La détection de redémarrages en boucle est une heuristique (compteur Docker et date de démarrage).
 - Une console qui perd son volume `console-data` (clé maître) doit se voir ressaisir le jeton Git. Changer le dépôt ou la branche réinitialise la synchronisation ; revenir sur un dépôt déjà sauvegardé par cette installation exige de le restaurer.
 - Aucun HTTPS intégré : placer la console derrière un reverse proxy TLS et activer `SECURE_COOKIES=true`. Hors réseau de confiance, l'agent doit utiliser `wss://`.
 - L'agent monte le socket Docker : cela équivaut à un accès root à l'hôte.

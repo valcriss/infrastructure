@@ -107,7 +107,7 @@ async function restore() {
 
 async function finish() {
   session.hasRestorationKey = true;
-  await router.push("/stacks");
+  await router.push("/dashboard");
 }
 </script>
 

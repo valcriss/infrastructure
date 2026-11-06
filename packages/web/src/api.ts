@@ -52,6 +52,10 @@ export interface Container {
   status: string;
   composeProject?: string;
   composeService?: string;
+  health?: "healthy" | "unhealthy" | "starting" | "none";
+  restartCount?: number;
+  startedAt?: string;
+  exitCode?: number;
 }
 
 export interface Host {
@@ -187,4 +191,100 @@ export interface RestorePreview {
   stacks: { id: string; name: string; hostId: string; description: string; variables: number; files: number; conflict: "none" | "same_id" | "same_name" }[];
   backupHosts: { id: string; name: string }[];
   availableHosts: { id: string; name: string }[];
+}
+
+// --- Supervision ----------------------------------------------------------------------------
+
+export type StackStatus = "running" | "degraded" | "stopped" | "unknown" | "not_deployed";
+export type Severity = "critical" | "warning" | "info";
+
+export interface DashboardStack {
+  id: string;
+  name: string;
+  hostId: string;
+  hostName: string;
+  hostPresence: "online" | "offline";
+  currentRevision: number;
+  deployedRevision: number | null;
+  status: StackStatus;
+  reason: string;
+  observedAt: string | null;
+  containers: { total: number; running: number; unhealthy: number; restarting: number; noHealthcheck: number };
+  missingServices: string[];
+}
+
+export interface DashboardAlert {
+  id: string;
+  severity: Severity;
+  kind: string;
+  title: string;
+  message: string;
+  target: { type: "host" | "stack" | "container" | "backup" | "operation"; id: string; name: string };
+  since: string | null;
+}
+
+export interface HostInfo {
+  cpus: number;
+  memTotalBytes: number;
+  os: string;
+  serverVersion: string;
+  containersRunning: number;
+  containersPaused: number;
+  containersStopped: number;
+  images: number;
+}
+
+export interface Dashboard {
+  generatedAt: string;
+  agents: {
+    total: number;
+    online: number;
+    offline: number;
+    items: { id: string; name: string; presence: "online" | "offline"; lastSeenAt: string | null; agentVersion: string | null; dockerVersion: string | null; inventoryObservedAt: string | null; hostInfo: HostInfo | null }[];
+  };
+  stacks: { counts: Record<StackStatus, number>; items: DashboardStack[] };
+  containers: { total: number; running: number; stopped: number; unhealthy: number; noHealthcheck: number; unmanagedProjects: number };
+  usage: { top: { containerId: string; name: string; project: string | null; service: string | null; cpuPercent: number | null; memBytes: number; memLimitBytes: number; hostName: string }[] };
+  backup: { state: BackupState; lastPushAt: string | null; pendingRevisions: number; configured: boolean } | null;
+  alerts: DashboardAlert[];
+}
+
+export interface MetricPoint {
+  t: string;
+  cpu: number | null;
+  mem: number;
+  memLimit: number;
+  rxBps: number | null;
+  txBps: number | null;
+}
+
+export interface MetricsResult {
+  rangeSec: number;
+  stepSec: number;
+  intervalSec: number;
+  retentionDays: number;
+  containers: { container: string; service: string | null; points: MetricPoint[] }[];
+}
+
+/** « il y a 3 min » à partir d'une date ISO. */
+export function ago(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return "jamais";
+  const s = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
+  if (s < 10) return "à l'instant";
+  if (s < 60) return `il y a ${s} s`;
+  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+  if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
+  return `il y a ${Math.round(s / 86400)} j`;
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${Math.round(n)} o`;
+  const units = ["Kio", "Mio", "Gio", "Tio"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }

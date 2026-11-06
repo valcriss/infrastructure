@@ -60,3 +60,44 @@ describe("noms et chemins", () => {
     expect(redact("token=abcd1234 et x", ["abcd1234", "x"])).toBe("token=*** et x");
   });
 });
+
+import { listComposeServices } from "./compose.js";
+import { DEFAULT_METRICS_INTERVAL_SEC, AgentMessageSchema, ContainerSchema, ConsoleMessageSchema } from "./protocol.js";
+
+describe("listComposeServices", () => {
+  it("liste les services et repère ceux qui sont sous profile", () => {
+    const text = "services:\n  web:\n    image: x\n  debug:\n    image: y\n    profiles: [debug]\n  db:\n    image: z\n";
+    expect(listComposeServices(text)).toEqual([
+      { name: "web", optional: false },
+      { name: "debug", optional: true },
+      { name: "db", optional: false },
+    ]);
+  });
+  it("retourne une liste vide pour un YAML invalide", () => {
+    expect(listComposeServices("services: [")).toEqual([]);
+    expect(listComposeServices("- a")).toEqual([]);
+  });
+});
+
+describe("protocole de supervision", () => {
+  it("accepte des conteneurs avec ou sans informations de santé (compatibilité)", () => {
+    const base = { id: "a", names: ["x"], image: "i", imageId: "sha256:1", state: "running", status: "Up", created: 1 };
+    expect(ContainerSchema.safeParse(base).success).toBe(true);
+    expect(ContainerSchema.safeParse({ ...base, health: "none", restartCount: 0, startedAt: "2026-11-06T10:00:00Z" }).success).toBe(true);
+    expect(ContainerSchema.safeParse({ ...base, health: "malade" }).success).toBe(false);
+  });
+
+  it("valide les messages de métriques", () => {
+    const sample = { containerId: "abc", name: "web-1", cpuPercent: null, memBytes: 1, memLimitBytes: 2, netRxBytes: 3, netTxBytes: 4 };
+    const msg = { type: "metrics", observedAt: "2026-11-06T10:00:00.000Z", samples: [sample] };
+    expect(AgentMessageSchema.safeParse(msg).success).toBe(true);
+    expect(AgentMessageSchema.safeParse({ ...msg, samples: [{ ...sample, memBytes: -1 }] }).success).toBe(false);
+    expect(AgentMessageSchema.safeParse({ ...msg, samples: [{ ...sample, cpuPercent: Number.NaN }] }).success).toBe(false);
+  });
+
+  it("garde l'intervalle de métriques optionnel dans le message d'accueil", () => {
+    const welcome = { type: "welcome", protocol: 1, agentId: "11111111-1111-4111-8111-111111111111", heartbeatIntervalSec: 15, inventoryIntervalSec: 60 };
+    expect(ConsoleMessageSchema.safeParse(welcome).success).toBe(true);
+    expect(ConsoleMessageSchema.safeParse({ ...welcome, metricsIntervalSec: DEFAULT_METRICS_INTERVAL_SEC }).success).toBe(true);
+  });
+});

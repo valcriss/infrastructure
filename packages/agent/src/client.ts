@@ -1,5 +1,6 @@
 import {
   ConsoleMessageSchema,
+  DEFAULT_METRICS_INTERVAL_SEC,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   type AgentAuth,
@@ -12,6 +13,7 @@ import { AGENT_VERSION, type AgentConfig } from "./config.js";
 import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { LogStreamer } from "./logs.js";
+import { MetricsCollector } from "./metrics.js";
 
 interface Credentials {
   agentId: string;
@@ -121,9 +123,19 @@ export class AgentClient {
       this.socket = ws;
       let heartbeat: NodeJS.Timeout | undefined;
       let inventoryTimer: NodeJS.Timeout | undefined;
+      let metricsTimer: NodeJS.Timeout | undefined;
+      const collector = new MetricsCollector(this.config.dockerSocket);
 
       const send = (m: AgentMessage): void => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
+      };
+      const sendMetrics = async (): Promise<void> => {
+        try {
+          const samples = await collector.collect();
+          if (samples.length > 0) send({ type: "metrics", observedAt: new Date().toISOString(), samples });
+        } catch (err) {
+          this.log(`métriques Docker impossibles : ${(err as Error).message}`);
+        }
       };
       const sendInventory = async (): Promise<void> => {
         try {
@@ -139,7 +151,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "metrics"],
           auth: auth,
         });
       });
@@ -164,8 +176,12 @@ export class AgentClient {
               }
               heartbeat = setInterval(() => send({ type: "heartbeat" }), msg.heartbeatIntervalSec * 1000);
               inventoryTimer = setInterval(() => void sendInventory(), msg.inventoryIntervalSec * 1000);
+              // Période de collecte fixée par la console (30 s par défaut).
+              metricsTimer = setInterval(() => void sendMetrics(), (msg.metricsIntervalSec ?? DEFAULT_METRICS_INTERVAL_SEC) * 1000);
               for (const pending of this.unsent.splice(0)) this.emit(pending);
               await sendInventory();
+              // Premier relevé : sert de référence pour le calcul du CPU du suivant.
+              void sendMetrics();
               break;
             case "logs_start":
               void this.logs
@@ -196,6 +212,7 @@ export class AgentClient {
         this.logs.stopAll();
         clearInterval(heartbeat);
         clearInterval(inventoryTimer);
+        clearInterval(metricsTimer);
         this.socket = null;
         resolve(Date.now() - startedAt);
       };

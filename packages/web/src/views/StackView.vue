@@ -6,6 +6,7 @@ import ComposeTab from "./stack/ComposeTab.vue";
 import FilesTab from "./stack/FilesTab.vue";
 import HistoryTab from "./stack/HistoryTab.vue";
 import LogsTab from "./stack/LogsTab.vue";
+import MetricsTab from "./stack/MetricsTab.vue";
 import OperationsTab from "./stack/OperationsTab.vue";
 import OverviewTab from "./stack/OverviewTab.vue";
 import VariablesTab from "./stack/VariablesTab.vue";
@@ -22,6 +23,7 @@ const tabs = [
   { key: "compose", label: "Compose" },
   { key: "variables", label: "Variables" },
   { key: "files", label: "Fichiers" },
+  { key: "metrics", label: "Métriques" },
   { key: "logs", label: "Logs" },
   { key: "history", label: "Historique" },
   { key: "operations", label: "Opérations" },
@@ -75,6 +77,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <ComposeTab v-else-if="tab === 'compose'" :stack="stack" @changed="load" />
       <VariablesTab v-else-if="tab === 'variables'" :stack="stack" @changed="load" />
       <FilesTab v-else-if="tab === 'files'" :stack="stack" @changed="load" />
+      <MetricsTab v-else-if="tab === 'metrics'" :stack="stack" />
       <LogsTab v-else-if="tab === 'logs'" :stack="stack" />
       <HistoryTab v-else-if="tab === 'history'" :stack="stack" @changed="load" />
       <OperationsTab v-else-if="tab === 'operations'" :stack="stack" />

@@ -58,6 +58,8 @@ Limites connues : la rotation de la clé de restauration n'est pas implémentée
 6. Tests : panne Git, divergence, restauration complète, absence de secrets en clair
 
 ## Phase 4 — Dashboard
+
+État (6 novembre 2026) : **terminée**. Décisions du porteur : pas de contrôles HTTP externes pour le moment ; collecte des métriques toutes les 30 s, rétention 7 jours (paramétrables). Fait : états des stacks avec la sémantique « inconnu / dernière observation » (hôte hors ligne ou observation périmée ≠ arrêté), healthchecks Docker (non configuré ≠ en échec), redémarrages, métriques CPU / mémoire / réseau avec purge, tableau de bord filtrable par hôte et par stack, alertes (agent hors ligne, stack dégradée, healthcheck, redémarrages, sauvegarde Git, opération inconnue), onglet Métriques. Vérifié sur Docker réel : une boucle active mesurée à ~100 % de CPU, un conteneur en échec (code 3) → stack dégradée avec la raison, agent arrêté → stack « inconnue » alors que les conteneurs tournent encore, retour à la normale à la reconnexion. Reste hors périmètre : métriques de l'hôte, notifications, historique des alertes, alertes de vulnérabilités et de mises à jour (Phase 5).
 1. États stacks/conteneurs, healthchecks, « inconnu / dernière observation »
 2. Métriques élémentaires avec rétention bornée
 3. Découverte et import des stacks existantes

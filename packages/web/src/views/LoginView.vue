@@ -16,7 +16,7 @@ async function submit() {
   busy.value = true;
   try {
     await session.login(username.value, password.value);
-    await router.push("/stacks");
+    await router.push("/dashboard");
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : "Erreur inattendue.";
   } finally {

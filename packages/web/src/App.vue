@@ -16,6 +16,9 @@ async function logout() {
     <nav class="mx-auto flex max-w-5xl items-center justify-between px-4 py-3" aria-label="Navigation principale">
       <div class="flex items-center gap-6">
         <span class="font-semibold">Console Docker</span>
+        <RouterLink to="/dashboard" class="text-sm text-slate-600 hover:text-slate-900" active-class="font-medium text-slate-900">
+          Tableau de bord
+        </RouterLink>
         <RouterLink to="/stacks" class="text-sm text-slate-600 hover:text-slate-900" active-class="font-medium text-slate-900">
           Stacks
         </RouterLink>

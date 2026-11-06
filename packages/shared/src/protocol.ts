@@ -11,6 +11,8 @@ export const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 
 export const HEARTBEAT_INTERVAL_SEC = 15;
 export const INVENTORY_INTERVAL_SEC = 60;
+/** Période de collecte des métriques (paramétrable côté console). */
+export const DEFAULT_METRICS_INTERVAL_SEC = 30;
 /** Un hôte sans signe de vie depuis ce délai est considéré hors ligne. */
 export const OFFLINE_AFTER_SEC = HEARTBEAT_INTERVAL_SEC * 3;
 
@@ -24,13 +26,35 @@ export const ContainerSchema = z.object({
   created: z.number().int(),
   composeProject: z.string().optional(),
   composeService: z.string().optional(),
+  /**
+   * Healthcheck Docker : « none » = aucun healthcheck configuré (distinct de
+   * « unhealthy ») ; absent = non renseigné par l'agent.
+   */
+  health: z.enum(["healthy", "unhealthy", "starting", "none"]).optional(),
+  restartCount: z.number().int().min(0).optional(),
+  /** Dernier démarrage du conteneur (ISO 8601), vide s'il n'a jamais démarré. */
+  startedAt: z.string().max(40).optional(),
+  exitCode: z.number().int().optional(),
 });
 export type Container = z.infer<typeof ContainerSchema>;
+
+export const HostInfoSchema = z.object({
+  cpus: z.number().int().min(0),
+  memTotalBytes: z.number().min(0),
+  os: z.string().max(200),
+  serverVersion: z.string().max(64),
+  containersRunning: z.number().int().min(0),
+  containersPaused: z.number().int().min(0),
+  containersStopped: z.number().int().min(0),
+  images: z.number().int().min(0),
+});
+export type HostInfo = z.infer<typeof HostInfoSchema>;
 
 export const InventorySchema = z.object({
   observedAt: z.iso.datetime(),
   dockerVersion: z.string(),
   containers: z.array(ContainerSchema).max(5000),
+  hostInfo: HostInfoSchema.optional(),
 });
 export type Inventory = z.infer<typeof InventorySchema>;
 
@@ -107,10 +131,33 @@ export const LogEndSchema = z.object({
   reason: z.string().max(200),
 });
 
+/** Échantillon de métriques d'un conteneur en cours d'exécution. */
+export const MetricSampleSchema = z.object({
+  containerId: z.string().min(1).max(80),
+  name: z.string().max(200),
+  project: z.string().max(100).optional(),
+  service: z.string().max(200).optional(),
+  /** Pourcentage de CPU (100 = un cœur) sur la période écoulée ; null au premier échantillon. */
+  cpuPercent: z.number().min(0).nullable(),
+  memBytes: z.number().min(0),
+  memLimitBytes: z.number().min(0),
+  /** Compteurs réseau cumulés depuis le démarrage du conteneur (octets). */
+  netRxBytes: z.number().min(0),
+  netTxBytes: z.number().min(0),
+});
+export type MetricSample = z.infer<typeof MetricSampleSchema>;
+
+export const MetricsMessageSchema = z.object({
+  type: z.literal("metrics"),
+  observedAt: z.iso.datetime(),
+  samples: z.array(MetricSampleSchema).max(1000),
+});
+
 export const AgentMessageSchema = z.discriminatedUnion("type", [
   HelloSchema,
   HeartbeatSchema,
   InventoryMessageSchema,
+  MetricsMessageSchema,
   OperationLogSchema,
   OperationResultSchema,
   LogChunkSchema,
@@ -128,6 +175,7 @@ export const WelcomeSchema = z.object({
   credentials: z.object({ agentId: z.uuid(), secret: z.string() }).optional(),
   heartbeatIntervalSec: z.number().int().positive(),
   inventoryIntervalSec: z.number().int().positive(),
+  metricsIntervalSec: z.number().int().positive().optional(),
 });
 
 export const ErrorMessageSchema = z.object({

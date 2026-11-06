@@ -12,6 +12,9 @@ export interface Config {
   dataDir: string;
   /** Autorité de certification supplémentaire pour un serveur Git interne (optionnel). */
   gitCaFile: string | null;
+  /** Période de collecte des métriques (secondes) et rétention des échantillons (jours). */
+  metricsIntervalSec: number;
+  metricsRetentionDays: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -30,5 +33,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     secureCookies: env.SECURE_COOKIES === "true",
     dataDir: env.DATA_DIR ?? "/data",
     gitCaFile: env.GIT_CA_FILE || null,
+    metricsIntervalSec: boundedInt(env.METRICS_INTERVAL_SEC, 30, 5, 3600, "METRICS_INTERVAL_SEC"),
+    metricsRetentionDays: boundedInt(env.METRICS_RETENTION_DAYS, 7, 1, 365, "METRICS_RETENTION_DAYS"),
   };
+}
+
+function boundedInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${name} doit être un entier entre ${min} et ${max}`);
+  return n;
 }

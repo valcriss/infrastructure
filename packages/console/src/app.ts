@@ -13,6 +13,9 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { existsSync } from "node:fs";
 import { z, ZodError } from "zod";
 import { BackupService } from "./backup.js";
+import { Dashboard } from "./dashboard.js";
+import { registerDashboardRoutes } from "./dashboard-routes.js";
+import { MetricsStore } from "./metrics-store.js";
 import { registerBackupRoutes } from "./backup-routes.js";
 import { GitRunner, validateRepoUrl } from "./git.js";
 import { createRestorationKey } from "./restoration.js";
@@ -59,6 +62,7 @@ export interface BuiltApp {
   gateway: AgentGateway;
   ops: OperationsService;
   backup: BackupService;
+  metrics: MetricsStore;
   /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
   routes: string[];
 }
@@ -80,7 +84,8 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     ((await pool.query("SELECT 1 FROM admin")).rowCount ?? 0) > 0;
 
   const setup: SetupState = { token: (await adminExists()) ? null : randomToken(24) };
-  const gateway = new AgentGateway(pool, config.sharedDir, app.log);
+  const gateway = new AgentGateway(pool, config.sharedDir, app.log, config.metricsIntervalSec);
+  const metrics = new MetricsStore(pool, config.metricsIntervalSec, config.metricsRetentionDays);
 
   const routes: string[] = [];
   app.addHook("onRoute", (route) => {
@@ -357,6 +362,9 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     },
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
+    onMetrics: async (hostId, samples) => {
+      await metrics.ingest(hostId, samples);
+    },
   });
   app.addHook("onClose", async () => ops.close());
   const backup = new BackupService({
@@ -371,7 +379,12 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     },
     validateUrl: (url) => validateRepoUrl(url, allowInsecureGit),
   });
-  app.addHook("onClose", async () => backup.close());
+  app.addHook("onClose", async () => {
+    backup.close();
+    metrics.close();
+  });
+  const dashboard = new Dashboard({ pool, metrics, backup, isOnline: (id) => gateway.isOnline(id) });
+  registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
   registerBackupRoutes(app, { backup, session: auth, apiAuth });
@@ -390,5 +403,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, routes };
+  return { app, setup, gateway, ops, backup, metrics, routes };
 }

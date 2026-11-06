@@ -5,8 +5,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { LogStreamer } from "./logs.js";
+import { MetricsCollector } from "./metrics.js";
 
 /**
  * Test d'intégration avec un vrai démon Docker (Linux uniquement). Le dossier
@@ -128,6 +130,53 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
       if (m.type === "log_end") reason = m.reason;
     });
     expect(reason).toContain("jamais été déployée");
+  }, 240_000);
+
+  it("remonte la santé des conteneurs et des métriques réelles", async () => {
+    const project = "it-" + randomBytes(4).toString("hex");
+    projects.push(project);
+    const compose = [
+      "services:",
+      "  sain:",
+      "    image: alpine:3.20",
+      "    command: ['sleep', '120']",
+      "    healthcheck:",
+      "      test: ['CMD', 'true']",
+      "      interval: 1s",
+      "  sans-check:",
+      "    image: alpine:3.20",
+      "    command: ['sh', '-c', 'while :; do :; done']", // boucle active : consomme du CPU
+      "",
+    ].join("\n");
+    const { result, log } = await runAction(deployMsg(project, randomUUID(), compose, {}, {}));
+    expect(result.status, result.error ?? log).toBe("succeeded");
+
+    // Inventaire : healthcheck « healthy » vs « none » (non configuré), infos de l'hôte.
+    const deadline = Date.now() + 30_000;
+    let inv = await collectInventory(socket);
+    const mine = () => inv.containers.filter((c) => c.composeProject === project);
+    while (mine().find((c) => c.composeService === "sain")?.health !== "healthy" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1000));
+      inv = await collectInventory(socket);
+    }
+    expect(mine().find((c) => c.composeService === "sain")).toMatchObject({ health: "healthy", state: "running", restartCount: 0 });
+    expect(mine().find((c) => c.composeService === "sans-check")).toMatchObject({ health: "none", state: "running" });
+    expect(mine()[0]?.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(inv.hostInfo?.cpus).toBeGreaterThan(0);
+    expect(inv.hostInfo?.memTotalBytes).toBeGreaterThan(0);
+
+    // Métriques : le premier échantillon n'a pas de CPU, le second oui (boucle active > 5 %).
+    const collector = new MetricsCollector(socket);
+    const first = (await collector.collect()).filter((s) => s.project === project);
+    expect(first.every((s) => s.cpuPercent === null)).toBe(true);
+    await new Promise((r) => setTimeout(r, 2000));
+    const second = (await collector.collect()).filter((s) => s.project === project);
+    const busy = second.find((s) => s.service === "sans-check");
+    expect(busy?.cpuPercent ?? 0).toBeGreaterThan(5);
+    expect(busy?.memBytes).toBeGreaterThan(0);
+    expect(busy?.memLimitBytes).toBeGreaterThan(busy?.memBytes ?? 0);
+    expect(second.find((s) => s.service === "sain")?.cpuPercent ?? 100).toBeLessThan(50);
+    expect(second.find((s) => s.service === "sain")?.netRxBytes).toBeGreaterThanOrEqual(0);
   }, 240_000);
 
   it("rejette une configuration invalide avant de toucher aux conteneurs", async () => {

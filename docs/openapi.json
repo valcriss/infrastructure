@@ -30,6 +30,9 @@
       "name": "Opérations"
     },
     {
+      "name": "Supervision"
+    },
+    {
       "name": "Sauvegarde Git"
     }
   ],
@@ -2362,6 +2365,171 @@
           },
           "422": {
             "description": "Requête comprise mais refusée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dashboard": {
+      "get": {
+        "summary": "Tableau de bord de supervision",
+        "description": "Un hôte hors ligne ou une observation périmée donnent l'état « unknown » — jamais « stopped » — et la dernière observation est conservée. Alertes calculées à la lecture : agent hors ligne, observation périmée, stack dégradée ou arrêtée, healthcheck en échec, redémarrages répétés, sauvegarde Git en échec, opération au résultat inconnu.",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "hostId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Limiter à un hôte"
+          },
+          {
+            "name": "stackId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Limiter à une stack"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agents, stacks (état, raison, dernière observation), conteneurs, utilisation et alertes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stacks/{id}/metrics": {
+      "get": {
+        "summary": "Métriques d'une stack (CPU, mémoire, réseau)",
+        "description": "Collecte toutes les 30 s (METRICS_INTERVAL_SEC), conservée 7 jours (METRICS_RETENTION_DAYS) par défaut. CPU : 100 = un cœur.",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "6h",
+                "24h",
+                "7d"
+              ],
+              "default": "1h"
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Limiter à un service Compose"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Séries par conteneur (≤ 240 points), débits réseau déduits des compteurs cumulés",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
             "content": {
               "application/json": {
                 "schema": {

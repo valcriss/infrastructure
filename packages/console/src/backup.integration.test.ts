@@ -54,7 +54,7 @@ describe.skipIf(!url)("sauvegarde Git et restauration (intégration)", () => {
     const built = await buildApp({
       masterKey: randomBytes(32),
       allowInsecureGit: true,
-      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir, gitCaFile: null },
+      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir, gitCaFile: null, metricsIntervalSec: 30, metricsRetentionDays: 7 },
       pool,
     });
     await built.backup.start();

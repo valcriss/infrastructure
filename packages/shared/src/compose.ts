@@ -1,4 +1,4 @@
-import { LineCounter, isMap, isScalar, parseDocument } from "yaml";
+import { LineCounter, isMap, isScalar, parse, parseDocument } from "yaml";
 import type { Node, Pair } from "yaml";
 import { MAX_COMPOSE_BYTES } from "./stack.js";
 
@@ -82,4 +82,24 @@ export function validateCompose(text: string): ComposeValidation {
   }
 
   return issues.length > 0 ? { ok: false, issues } : { ok: true, services };
+}
+
+export interface ComposeService {
+  name: string;
+  /** Service sous un « profile » : non démarré par défaut, son absence n'est pas une anomalie. */
+  optional: boolean;
+}
+
+/** Services déclarés par un Compose (liste vide si le YAML est invalide). */
+export function listComposeServices(text: string): ComposeService[] {
+  try {
+    const doc = parse(text, { maxAliasCount: 100 }) as { services?: Record<string, { profiles?: unknown } | null> } | null;
+    if (!doc || typeof doc !== "object" || !doc.services || typeof doc.services !== "object") return [];
+    return Object.entries(doc.services).map(([name, svc]) => ({
+      name,
+      optional: Array.isArray(svc?.profiles) && svc.profiles.length > 0,
+    }));
+  } catch {
+    return [];
+  }
 }

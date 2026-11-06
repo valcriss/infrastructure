@@ -1,4 +1,4 @@
-import type { Container, Inventory } from "@infra/shared";
+import type { Container, HostInfo, Inventory } from "@infra/shared";
 import { request } from "node:http";
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -78,16 +78,90 @@ export function mapContainers(raw: unknown): Container[] {
   return out;
 }
 
+type Health = NonNullable<Container["health"]>;
+
+export interface InspectExtras {
+  health: Health;
+  restartCount: number;
+  startedAt: string;
+  exitCode: number;
+}
+
+/**
+ * Extrait de `GET /containers/{id}/json` les informations de supervision.
+ * « none » signifie qu'aucun healthcheck n'est configuré (≠ « unhealthy »).
+ */
+export function parseInspect(raw: unknown): InspectExtras | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as { RestartCount?: unknown; State?: { Health?: { Status?: unknown }; StartedAt?: unknown; ExitCode?: unknown } };
+  const status = o.State?.Health?.Status;
+  const health: Health = status === "healthy" || status === "unhealthy" || status === "starting" ? status : "none";
+  const started = typeof o.State?.StartedAt === "string" ? o.State.StartedAt : "";
+  return {
+    health,
+    restartCount: typeof o.RestartCount === "number" && o.RestartCount >= 0 ? Math.trunc(o.RestartCount) : 0,
+    // Docker renvoie « 0001-01-01T00:00:00Z » pour un conteneur jamais démarré.
+    startedAt: started.startsWith("0001-") ? "" : started.slice(0, 40),
+    exitCode: typeof o.State?.ExitCode === "number" ? Math.trunc(o.State.ExitCode) : 0,
+  };
+}
+
+/** Résumé de `GET /info`. */
+export function parseInfo(raw: unknown): HostInfo | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
+  return {
+    cpus: Math.trunc(num(o.NCPU)),
+    memTotalBytes: num(o.MemTotal),
+    os: str(o.OperatingSystem).slice(0, 200),
+    serverVersion: str(o.ServerVersion).slice(0, 64),
+    containersRunning: Math.trunc(num(o.ContainersRunning)),
+    containersPaused: Math.trunc(num(o.ContainersPaused)),
+    containersStopped: Math.trunc(num(o.ContainersStopped)),
+    images: Math.trunc(num(o.Images)),
+  };
+}
+
+/** Exécute `fn` sur chaque élément avec au plus `limit` appels simultanés. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i] as T);
+      }
+    }),
+  );
+  return out;
+}
+
 export async function collectInventory(socketPath: string): Promise<Inventory> {
-  const [version, containers] = await Promise.all([
+  const [version, containers, info] = await Promise.all([
     dockerGet(socketPath, "/version"),
     dockerGet(socketPath, "/containers/json?all=1"),
+    dockerGet(socketPath, "/info").catch(() => null),
   ]);
   const dockerVersion =
     version && typeof version === "object" ? str((version as { Version?: unknown }).Version) : "";
+  const mapped = mapContainers(containers);
+  // Santé, redémarrages, dernier démarrage : un appel par conteneur (limité).
+  // Un échec d'inspection n'empêche pas l'inventaire : les champs restent absents.
+  const enriched = await mapLimit(mapped, 8, async (c) => {
+    try {
+      const extras = parseInspect(await dockerGet(socketPath, `/containers/${encodeURIComponent(c.id)}/json`));
+      return extras ? { ...c, ...extras } : c;
+    } catch {
+      return c;
+    }
+  });
+  const hostInfo = parseInfo(info);
   return {
     observedAt: new Date().toISOString(),
     dockerVersion: dockerVersion || "inconnue",
-    containers: mapContainers(containers),
+    containers: enriched,
+    ...(hostInfo ? { hostInfo } : {}),
   };
 }

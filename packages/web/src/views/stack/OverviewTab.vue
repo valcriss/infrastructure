@@ -62,13 +62,21 @@ async function run(action: "deploy" | "stop" | "start") {
       <p v-if="stack.containers.length === 0" class="px-4 py-3 text-sm text-slate-500">Aucun conteneur observé pour ce projet.</p>
       <table v-else class="w-full text-left text-sm">
         <thead class="text-xs text-slate-500">
-          <tr><th class="px-4 py-1">Service</th><th class="px-4 py-1">Image</th><th class="px-4 py-1">État</th></tr>
+          <tr><th class="px-4 py-1">Service</th><th class="px-4 py-1">Image</th><th class="px-4 py-1">État</th><th class="px-4 py-1">Healthcheck</th><th class="px-4 py-1">Redémarrages</th></tr>
         </thead>
         <tbody>
           <tr v-for="c in stack.containers" :key="c.id" class="border-t border-slate-100">
             <td class="px-4 py-2">{{ c.composeService ?? c.names[0] }}</td>
             <td class="px-4 py-2 font-mono text-xs">{{ c.image }}</td>
             <td class="px-4 py-2">{{ c.status }}</td>
+            <td class="px-4 py-2">
+              <span v-if="c.health === 'healthy'" class="rounded bg-green-100 px-1.5 text-xs text-green-800">sain</span>
+              <span v-else-if="c.health === 'unhealthy'" class="rounded bg-red-100 px-1.5 text-xs text-red-800">en échec</span>
+              <span v-else-if="c.health === 'starting'" class="rounded bg-blue-100 px-1.5 text-xs text-blue-800">démarrage</span>
+              <span v-else-if="c.health === 'none'" class="text-xs text-slate-400">non configuré</span>
+              <span v-else class="text-xs text-slate-400">—</span>
+            </td>
+            <td class="px-4 py-2" :class="(c.restartCount ?? 0) >= 3 ? 'font-semibold text-amber-700' : ''">{{ c.restartCount ?? "—" }}</td>
           </tr>
         </tbody>
       </table>

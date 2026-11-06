@@ -37,6 +37,9 @@ services:
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
       # Autorité de certification d'un serveur Git interne (optionnel) : fichier monté dans le conteneur.
       GIT_CA_FILE: ${GIT_CA_FILE:-}
+      # Supervision : période de collecte des métriques (s) et rétention (jours).
+      METRICS_INTERVAL_SEC: ${METRICS_INTERVAL_SEC:-30}
+      METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-7}
     ports:
       - "${CONSOLE_PORT:-8080}:8080"
     volumes:

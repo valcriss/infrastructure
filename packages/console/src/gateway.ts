@@ -1,11 +1,13 @@
 import {
   AgentMessageSchema,
+  DEFAULT_METRICS_INTERVAL_SEC,
   HEARTBEAT_INTERVAL_SEC,
   INVENTORY_INTERVAL_SEC,
   OFFLINE_AFTER_SEC,
   PROTOCOL_VERSION,
   type ConsoleMessage,
   type Inventory,
+  type MetricSample,
   type OperationResultSchema,
 } from "@infra/shared";
 import type { z } from "zod";
@@ -24,6 +26,7 @@ export interface GatewayHandlers {
   onDisconnect(hostId: string): Promise<void>;
   onLogChunk(hostId: string, streamId: string, lines: string[]): void;
   onLogEnd(hostId: string, streamId: string, reason: string): void;
+  onMetrics(hostId: string, samples: MetricSample[]): Promise<void>;
 }
 
 interface Connection {
@@ -44,6 +47,7 @@ export class AgentGateway {
     private readonly pool: Pool,
     private readonly sharedDir: string,
     private readonly log: FastifyBaseLogger,
+    private readonly metricsIntervalSec: number = DEFAULT_METRICS_INTERVAL_SEC,
   ) {
     this.reaper = setInterval(() => this.reapIdle(), 5_000);
     this.reaper.unref();
@@ -142,6 +146,7 @@ export class AgentGateway {
             ...(result.credentials ? { credentials: result.credentials } : {}),
             heartbeatIntervalSec: HEARTBEAT_INTERVAL_SEC,
             inventoryIntervalSec: INVENTORY_INTERVAL_SEC,
+            metricsIntervalSec: this.metricsIntervalSec,
           });
           return;
         }
@@ -156,6 +161,9 @@ export class AgentGateway {
             break;
           case "inventory":
             await this.storeInventory(hostId, msg.inventory);
+            break;
+          case "metrics":
+            await this.handlers?.onMetrics(hostId, msg.samples);
             break;
           case "operation_log":
             await this.handlers?.onLog(hostId, msg.operationId, msg.text);
@@ -196,10 +204,11 @@ export class AgentGateway {
 
   private async storeInventory(hostId: string, inventory: Inventory): Promise<void> {
     await this.pool.query(
-      `UPDATE hosts SET inventory = $2, inventory_observed_at = $3,
-              docker_version = $4, last_seen_at = now()
+      // L'horodatage d'observation est celui de la console : il ne dépend pas de l'horloge de l'hôte.
+      `UPDATE hosts SET inventory = $2, inventory_observed_at = now(),
+              docker_version = $3, host_info = $4, last_seen_at = now()
        WHERE id = $1`,
-      [hostId, JSON.stringify(inventory.containers), inventory.observedAt, inventory.dockerVersion],
+      [hostId, JSON.stringify(inventory.containers), inventory.dockerVersion, inventory.hostInfo ? JSON.stringify(inventory.hostInfo) : null],
     );
   }
 
