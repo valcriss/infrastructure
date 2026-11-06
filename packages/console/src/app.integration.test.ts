@@ -26,7 +26,7 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
     sharedDir = await mkdtemp(join(tmpdir(), "infra-shared-"));
     built = await buildApp({
       masterKey: randomBytes(32),
-      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir: join(tmpdir(), "infra-data-test"), gitCaFile: null, metricsIntervalSec: 30, metricsRetentionDays: 7 },
+      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir: join(tmpdir(), "infra-data-test"), gitCaFile: null, metricsIntervalSec: 30, metricsRetentionDays: 7, registryCaFile: null },
       pool,
     });
     baseUrl = await built.app.listen({ host: "127.0.0.1", port: 0 });

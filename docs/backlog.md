@@ -67,6 +67,8 @@ Limites connues : la rotation de la clé de restauration n'est pas implémentée
 5. Alertes : agent hors ligne, sauvegarde en échec
 
 ## Phase 5 — Images et sécurité (AC 13, 14)
+
+État (6 novembre 2026) : **terminée**. Décisions du porteur : registres privés pris en charge en plus de Docker Hub et GHCR. Vérifié sur Docker réel : Trivy 0.76.1 en conteneur éphémère (alpine:3.12 → 1 critique ; image d'un registre privé authentifié → 10 vulnérabilités), contrôle réel de Docker Hub, registre privé en Basic (identifiants refusés, registre injoignable → dernière observation conservée), tag republié détecté, faux changement dû au réempaquetage containerd écarté par comparaison des couches. Hors périmètre : mise à jour automatique, blocage de déploiement, notifications, registres inaccessibles depuis la console.
 1. Trivy en conteneur éphémère, cache persistant, concurrence limitée
 2. Résultats, déduplication par contenu, lien image ↔ stacks
 3. Scans planifiés, fraîcheur de la base, états jamais scanné / échec / sain

@@ -1,14 +1,16 @@
 import type { AgentMessage, RunMessage } from "@infra/shared";
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { LogStreamer } from "./logs.js";
+import { DEFAULT_TRIVY_IMAGE } from "./config.js";
 import { MetricsCollector } from "./metrics.js";
+import { TrivyScanner } from "./scanner.js";
 
 /**
  * Test d'intégration avec un vrai démon Docker (Linux uniquement). Le dossier
@@ -178,6 +180,44 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
     expect(second.find((s) => s.service === "sain")?.cpuPercent ?? 100).toBeLessThan(50);
     expect(second.find((s) => s.service === "sain")?.netRxBytes).toBeGreaterThanOrEqual(0);
   }, 240_000);
+
+  it("scanne une image avec Trivy (conteneur éphémère restreint) et nettoie derrière lui", async () => {
+    dockerOut("pull", "-q", "alpine:3.12");
+    const imageId = dockerOut("image", "inspect", "alpine:3.12", "--format", "{{.Id}}").trim();
+    const cacheVolume = "it-trivy-cache-" + randomBytes(3).toString("hex");
+    const cfg = { workspaceDir: root, dockerSocket: socket, trivyImage: DEFAULT_TRIVY_IMAGE, cacheVolume, memory: "2g", maxImageBytes: 5 * 1024 ** 3, timeoutMs: 15 * 60_000 };
+    const scanner = new TrivyScanner(cfg);
+    try {
+      const ok = await scanner.scan({ type: "scan", scanId: randomUUID(), imageId, imageRef: "alpine:3.12" });
+      expect(ok.status, ok.error).toBe("succeeded");
+      expect(ok.trivy?.version).toBeTruthy();
+      expect(ok.trivy?.dbUpdatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/); // fraîcheur de la base
+      expect(ok.os).toMatchObject({ family: "alpine" });
+      expect(ok.total).toBeGreaterThan(0); // alpine 3.12 est en fin de vie et vulnérable
+      const first = ok.vulnerabilities?.[0];
+      expect(first).toMatchObject({ id: expect.stringMatching(/^CVE-/), pkg: expect.any(String), installed: expect.any(String) });
+      expect(Object.values(ok.counts ?? {}).reduce((a, b) => a + b, 0)).toBe(ok.total);
+
+      // Image inconnue, puis image trop volumineuse : échecs explicites, jamais un « aucune vulnérabilité ».
+      const missing = await scanner.scan({ type: "scan", scanId: randomUUID(), imageId: "sha256:" + "0".repeat(64), imageRef: "absente" });
+      expect(missing).toMatchObject({ status: "failed" });
+      expect(missing.error).toContain("introuvable");
+      const big = await new TrivyScanner({ ...cfg, maxImageBytes: 1000 }).scan({ type: "scan", scanId: randomUUID(), imageId, imageRef: "alpine:3.12" });
+      expect(big.status).toBe("failed");
+      expect(big.error).toContain("trop volumineuse");
+      expect(big.vulnerabilities).toBeUndefined();
+
+      // Aucune archive ni conteneur de scan ne subsiste.
+      expect(readdirSync(root).filter((n) => n.startsWith(".scan-"))).toEqual([]);
+      expect(dockerOut("ps", "-a", "--filter", "name=console-docker-scan-", "-q").trim()).toBe("");
+    } finally {
+      try {
+        dockerOut("volume", "rm", "-f", cacheVolume);
+      } catch {
+        /* déjà supprimé */
+      }
+    }
+  }, 900_000);
 
   it("rejette une configuration invalide avant de toucher aux conteneurs", async () => {
     const project = "it-" + randomBytes(4).toString("hex");

@@ -9,11 +9,12 @@ import {
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { AGENT_VERSION, type AgentConfig } from "./config.js";
+import { AGENT_VERSION, TRIVY_CACHE_VOLUME, type AgentConfig } from "./config.js";
 import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { LogStreamer } from "./logs.js";
 import { MetricsCollector } from "./metrics.js";
+import { TrivyScanner } from "./scanner.js";
 
 interface Credentials {
   agentId: string;
@@ -61,6 +62,7 @@ export class AgentClient {
   private socket: WebSocket | null = null;
   private readonly executor: Executor;
   private readonly logs: LogStreamer;
+  private readonly scanner: TrivyScanner;
   /** Résultats terminés pendant une coupure : renvoyés à la reconnexion. */
   private unsent: AgentMessage[] = [];
 
@@ -73,6 +75,15 @@ export class AgentClient {
       dockerSocket: config.dockerSocket,
     });
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
+    this.scanner = new TrivyScanner({
+      workspaceDir: config.workspaceDir,
+      dockerSocket: config.dockerSocket,
+      trivyImage: config.trivyImage,
+      cacheVolume: TRIVY_CACHE_VOLUME,
+      memory: config.trivyMemory,
+      maxImageBytes: config.trivyMaxImageBytes,
+      timeoutMs: 20 * 60 * 1000,
+    });
   }
 
   /** Envoie un message sur la connexion courante ; conserve les résultats si elle est coupée. */
@@ -80,7 +91,7 @@ export class AgentClient {
     const ws = this.socket;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
-    } else if (message.type === "operation_result") {
+    } else if (message.type === "operation_result" || message.type === "scan_result") {
       this.unsent.push(message);
     }
   }
@@ -151,7 +162,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "metrics"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "metrics", "scan.trivy"],
           auth: auth,
         });
       });
@@ -182,6 +193,13 @@ export class AgentClient {
               await sendInventory();
               // Premier relevé : sert de référence pour le calcul du CPU du suivant.
               void sendMetrics();
+              break;
+            case "scan":
+              // Un scan à la fois ; le résultat repasse par emit() (conservé si la connexion est coupée).
+              void this.scanner
+                .scan(msg)
+                .then((result) => this.emit(result))
+                .catch((err: unknown) => this.log(`erreur de scan : ${(err as Error).message}`));
               break;
             case "logs_start":
               void this.logs

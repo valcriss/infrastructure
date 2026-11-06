@@ -54,7 +54,7 @@ describe.skipIf(!url)("sauvegarde Git et restauration (intégration)", () => {
     const built = await buildApp({
       masterKey: randomBytes(32),
       allowInsecureGit: true,
-      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir, gitCaFile: null, metricsIntervalSec: 30, metricsRetentionDays: 7 },
+      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir, gitCaFile: null, metricsIntervalSec: 30, metricsRetentionDays: 7, registryCaFile: null },
       pool,
     });
     await built.backup.start();
@@ -154,6 +154,8 @@ describe.skipIf(!url)("sauvegarde Git et restauration (intégration)", () => {
     const id1 = s1.json.id as string;
     await call(A, "PUT", `/api/v1/stacks/${id1}/files/conf/app.conf`, { expectedRevision: 1, content: "x=1" });
     await call(A, "PUT", `/api/v1/stacks/${id1}/files/tls/key.pem`, { expectedRevision: 2, content: "-----BEGIN PRIVATE KEY-----", sensitive: true });
+    // Règle de suivi des versions : sauvegardée avec la stack (stack.yaml), pas dans les secrets.
+    expect((await call(A, "PUT", `/api/v1/stacks/${id1}/services/web/update-policy`, { policy: "minor" })).status).toBe(200);
     const s2 = await call(A, "POST", "/api/v1/stacks", { name: "chiffre", hostId: host, compose: COMPOSE_SECRET, composeSensitive: true });
     expect(s2.status).toBe(201);
 
@@ -171,6 +173,8 @@ describe.skipIf(!url)("sauvegarde Git et restauration (intégration)", () => {
     const app1 = parsed.stacks.find((s) => s.name === "app1");
     expect(app1?.content.variables.DB_PASSWORD).toEqual({ value: "sup3r-secret-value", sensitive: true });
     expect(app1?.content.sensitiveFiles).toEqual(["tls/key.pem"]);
+    expect(app1?.updatePolicies).toEqual({ web: { policy: "minor", pattern: null } });
+    expect(git(remote, "show", `main:stacks/${id1}/stack.yaml`)).toContain("updatePolicies");
     expect(parsed.stacks.find((s) => s.name === "chiffre")?.content.composeSensitive).toBe(true);
 
     // … et aucun secret n'est en clair dans le dépôt, ni dans l'historique Git.
@@ -299,6 +303,8 @@ describe.skipIf(!url)("sauvegarde Git et restauration (intégration)", () => {
     for (const s of stacks) expect(s).toMatchObject({ deployedRevision: null, hostId: hostB, currentRevision: 1 });
     expect((await pool.query("SELECT count(*)::int AS n FROM operations")).rows[0].n).toBe(0);
     expect((await pool.query("SELECT bool_and(adopt_pending) AS a FROM stacks")).rows[0].a).toBe(true);
+    // La règle de suivi des versions est restaurée avec la stack.
+    expect((await pool.query("SELECT service, policy, pattern FROM image_policies")).rows).toEqual([{ service: "web", policy: "minor", pattern: null }]);
 
     const app1 = (await call(B, "GET", `/api/v1/stacks/${stacks.find((s) => s.name === "app1").id}`)).json;
     expect(app1.variables).toContainEqual({ name: "DB_PASSWORD", value: null, sensitive: true });

@@ -18,6 +18,8 @@ services:
       CONSOLE_URL: ${CONSOLE_URL:?définir CONSOLE_URL}
       ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
       WORKSPACE_DIR: ${WORKSPACE_DIR:-/var/lib/console-docker/workspace}
+      TRIVY_IMAGE: ${TRIVY_IMAGE:-ghcr.io/aquasecurity/trivy:0.76.1}
+      TRIVY_MEMORY: ${TRIVY_MEMORY:-2g}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-data:/data

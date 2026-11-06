@@ -70,6 +70,7 @@ function link(a: DashboardAlert): string | null {
   if (a.target.type === "stack") return `/stacks/${a.target.id}`;
   if (a.target.type === "host") return "/hosts";
   if (a.target.type === "backup") return "/backup";
+  if (a.target.type === "image") return "/images";
   return null;
 }
 
@@ -150,6 +151,31 @@ onBeforeUnmount(() => window.clearInterval(timer));
             Sauvegarde Git : <RouterLink to="/backup" class="underline">{{ backupText[data.backup.state] }}</RouterLink>
             <span v-if="data.backup.lastPushAt"> · dernier push {{ ago(data.backup.lastPushAt, now) }}</span>
           </p>
+        </div>
+      </section>
+
+      <section aria-label="Sécurité des images" class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-lg border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase text-slate-500">Images des stacks</p>
+          <p class="mt-1 text-2xl font-semibold">{{ data.security.images.images }}</p>
+          <p class="text-xs text-slate-500">
+            {{ data.security.images.clean }} sans vulnérabilité connue · {{ data.security.images.vulnerable }} avec vulnérabilités
+            · <span :class="data.security.images.never ? 'font-medium text-slate-700' : ''">{{ data.security.images.never }} jamais scannée(s)</span>
+            <span v-if="data.security.images.failed" class="font-medium text-red-700"> · {{ data.security.images.failed }} scan(s) en échec</span>
+          </p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase text-slate-500">Vulnérabilités</p>
+          <p class="mt-1 text-sm">
+            <span :class="data.security.images.critical ? 'text-lg font-semibold text-red-700' : 'text-lg'">{{ data.security.images.critical }}</span> critique(s)
+            · <span class="text-lg">{{ data.security.images.high }}</span> élevée(s)
+          </p>
+          <RouterLink to="/images" class="text-xs underline">Voir les images</RouterLink>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase text-slate-500">Mises à jour d'images</p>
+          <p class="mt-1 text-2xl font-semibold" :class="data.security.updates.available ? 'text-amber-700' : ''">{{ data.security.updates.available }}</p>
+          <p class="text-xs text-slate-500">disponible(s) · rien n'est déployé automatiquement<span v-if="data.security.updates.errors"> · {{ data.security.updates.errors }} vérification(s) impossible(s)</span></p>
         </div>
       </section>
 

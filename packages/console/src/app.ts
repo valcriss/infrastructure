@@ -14,6 +14,11 @@ import { existsSync } from "node:fs";
 import { z, ZodError } from "zod";
 import { BackupService } from "./backup.js";
 import { Dashboard } from "./dashboard.js";
+import { ImageWatcher } from "./image-watch.js";
+import { registerImageRoutes } from "./image-routes.js";
+import { RegistryStore } from "./registries.js";
+import { RegistryClient, createFetch } from "./registry.js";
+import { ScanService } from "./scans.js";
 import { registerDashboardRoutes } from "./dashboard-routes.js";
 import { MetricsStore } from "./metrics-store.js";
 import { registerBackupRoutes } from "./backup-routes.js";
@@ -63,6 +68,8 @@ export interface BuiltApp {
   ops: OperationsService;
   backup: BackupService;
   metrics: MetricsStore;
+  scans: ScanService;
+  watcher: ImageWatcher;
   /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
   routes: string[];
 }
@@ -352,6 +359,11 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   });
 
   const ops = new OperationsService(pool, gateway);
+  const box = new SecretBox(masterKey);
+  const registries = new RegistryStore(pool, box);
+  const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile) });
+  const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
+  const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const logStreams = new LogStreams(gateway);
   gateway.setHandlers({
     onLog: (hostId, operationId, text) => ops.onLog(hostId, operationId, text),
@@ -359,17 +371,19 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     onDisconnect: async (hostId) => {
       logStreams.onHostDisconnect(hostId);
       await ops.onDisconnect(hostId);
+      await scans.onDisconnect(hostId);
     },
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
     onMetrics: async (hostId, samples) => {
       await metrics.ingest(hostId, samples);
     },
+    onScanResult: (hostId, result) => scans.onResult(hostId, result),
   });
   app.addHook("onClose", async () => ops.close());
   const backup = new BackupService({
     pool,
-    box: new SecretBox(masterKey),
+    box,
     git: new GitRunner({ dataDir: config.dataDir, caFile: config.gitCaFile, allowInsecureProtocols: allowInsecureGit }),
     dataDir: config.dataDir,
     log: {
@@ -382,8 +396,11 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   app.addHook("onClose", async () => {
     backup.close();
     metrics.close();
+    scans.close();
+    watcher.close();
   });
-  const dashboard = new Dashboard({ pool, metrics, backup, isOnline: (id) => gateway.isOnline(id) });
+  const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, isOnline: (id) => gateway.isOnline(id) });
+  registerImageRoutes(app, { pool, session: auth, apiAuth, scans, watcher, registries, registryClient, isOnline: (id) => gateway.isOnline(id) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
@@ -403,5 +420,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, watcher, routes };
 }

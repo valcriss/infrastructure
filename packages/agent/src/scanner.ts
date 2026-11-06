@@ -1,0 +1,218 @@
+import {
+  MAX_SCAN_VULNERABILITIES,
+  SEVERITIES,
+  type ScanMessage,
+  type ScanResult,
+  type Severity,
+  type SeverityCounts,
+  type Vulnerability,
+} from "@infra/shared";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { dockerGet } from "./docker.js";
+import { dockerEnv, runCommand } from "./exec.js";
+
+export interface ScannerConfig {
+  /** Espace de travail de l'agent, monté au même chemin sur l'hôte : le conteneur Trivy y lit l'archive de l'image. */
+  workspaceDir: string;
+  dockerSocket: string;
+  /** Image de Trivy (version épinglée). */
+  trivyImage: string;
+  /** Volume nommé qui conserve la base de vulnérabilités entre les scans. */
+  cacheVolume: string;
+  /** Limite mémoire du conteneur Trivy (syntaxe Docker : 2g). */
+  memory: string;
+  /** Taille maximale d'image acceptée (octets). */
+  maxImageBytes: number;
+  /** Délai maximal d'un scan complet (téléchargements inclus). */
+  timeoutMs: number;
+}
+
+const RANK: Record<Severity, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
+const MAX_REPORT_BYTES = 200 * 1024 * 1024;
+
+interface RawVuln {
+  VulnerabilityID?: unknown;
+  PkgName?: unknown;
+  InstalledVersion?: unknown;
+  FixedVersion?: unknown;
+  Severity?: unknown;
+  Title?: unknown;
+  PrimaryURL?: unknown;
+  Status?: unknown;
+}
+
+const text = (v: unknown, max: number): string => (typeof v === "string" ? v.slice(0, max) : "");
+
+/**
+ * Normalise la sortie JSON de Trivy : compteurs exacts, liste détaillée bornée
+ * et triée par gravité. La sortie brute n'est jamais transmise.
+ */
+export function normalizeReport(report: unknown): {
+  os?: { family: string; name: string; eosl?: boolean };
+  counts: SeverityCounts;
+  total: number;
+  vulnerabilities: Vulnerability[];
+  truncated: boolean;
+} {
+  const r = (report ?? {}) as { Metadata?: { OS?: { Family?: unknown; Name?: unknown; EOSL?: unknown } }; Results?: { Vulnerabilities?: RawVuln[] | null }[] };
+  const seen = new Set<string>();
+  const all: Vulnerability[] = [];
+  for (const res of r.Results ?? []) {
+    for (const v of res.Vulnerabilities ?? []) {
+      const id = text(v.VulnerabilityID, 80);
+      if (!id) continue;
+      const sev = (SEVERITIES as readonly string[]).includes(text(v.Severity, 20)) ? (text(v.Severity, 20) as Severity) : "UNKNOWN";
+      const key = `${id}|${text(v.PkgName, 200)}|${text(v.InstalledVersion, 120)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push({
+        id,
+        pkg: text(v.PkgName, 200),
+        installed: text(v.InstalledVersion, 120),
+        fixed: text(v.FixedVersion, 300) || null,
+        severity: sev,
+        title: text(v.Title, 300),
+        url: text(v.PrimaryURL, 300) || null,
+        ...(text(v.Status, 40) ? { status: text(v.Status, 40) } : {}),
+      });
+    }
+  }
+  all.sort((a, b) => RANK[a.severity] - RANK[b.severity] || a.id.localeCompare(b.id) || a.pkg.localeCompare(b.pkg));
+  const counts: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+  for (const v of all) counts[v.severity.toLowerCase() as keyof SeverityCounts]++;
+  const os = r.Metadata?.OS;
+  return {
+    ...(os?.Family ? { os: { family: text(os.Family, 40), name: text(os.Name, 80), ...(typeof os.EOSL === "boolean" ? { eosl: os.EOSL } : {}) } } : {}),
+    counts,
+    total: all.length,
+    vulnerabilities: all.slice(0, MAX_SCAN_VULNERABILITIES),
+    truncated: all.length > MAX_SCAN_VULNERABILITIES,
+  };
+}
+
+/** Informations de version et de base de Trivy (`trivy version --format json`). */
+export function parseTrivyVersion(raw: unknown): NonNullable<ScanResult["trivy"]> {
+  const o = (raw ?? {}) as { Version?: unknown; VulnerabilityDB?: { Version?: unknown; UpdatedAt?: unknown; DownloadedAt?: unknown } };
+  const db = o.VulnerabilityDB;
+  return {
+    version: text(o.Version, 40) || "inconnue",
+    ...(typeof db?.Version === "number" ? { dbVersion: Math.trunc(db.Version) } : {}),
+    ...(text(db?.UpdatedAt, 40) ? { dbUpdatedAt: text(db?.UpdatedAt, 40) } : {}),
+    ...(text(db?.DownloadedAt, 40) ? { dbDownloadedAt: text(db?.DownloadedAt, 40) } : {}),
+  };
+}
+
+/** Efface les chemins et jetons éventuels d'un message d'erreur avant de le remonter. */
+const brief = (msg: string): string => msg.replace(/\s+/g, " ").slice(0, 600);
+
+/**
+ * Scans Trivy d'images locales. Un scan à la fois par agent. L'image est
+ * exportée avec `docker save` dans l'espace de travail puis lue par un
+ * conteneur Trivy éphémère SANS accès au socket Docker, sans capacités,
+ * avec système de fichiers en lecture seule et mémoire bornée ; seul le
+ * volume de cache de la base de vulnérabilités persiste.
+ */
+export class TrivyScanner {
+  private queue: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly cfg: ScannerConfig) {}
+
+  scan(msg: ScanMessage): Promise<ScanResult> {
+    const run = this.queue.then(() => this.scanNow(msg));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async docker(args: string[], timeoutMs: number): Promise<{ stdout: string; code: number | null; timedOut: boolean; tail: string }> {
+    let tail = "";
+    const res = await runCommand("docker", args, {
+      env: dockerEnv(this.cfg.dockerSocket),
+      timeoutMs,
+      onOutput: (chunk) => {
+        tail = (tail + chunk).slice(-1500);
+      },
+    });
+    return { ...res, tail };
+  }
+
+  private async scanNow(msg: ScanMessage): Promise<ScanResult> {
+    const fail = (error: string): ScanResult => ({ type: "scan_result", scanId: msg.scanId, status: "failed", error: brief(error) });
+    const dir = join(this.cfg.workspaceDir, `.scan-${msg.scanId}`);
+    const container = `console-docker-scan-${msg.scanId.slice(0, 8)}`;
+    const deadline = Date.now() + this.cfg.timeoutMs;
+    const left = (): number => Math.max(10_000, deadline - Date.now());
+    try {
+      // 1. L'image existe-t-elle ici, et est-elle d'une taille raisonnable ?
+      let size = 0;
+      try {
+        size = Number(((await dockerGet(this.cfg.dockerSocket, `/images/${encodeURIComponent(msg.imageId)}/json`)) as { Size?: number }).Size ?? 0);
+      } catch {
+        return fail("Image introuvable sur cet hôte (supprimée depuis l'inventaire ?).");
+      }
+      if (size > this.cfg.maxImageBytes) {
+        return fail(`Image trop volumineuse pour être scannée (${Math.round(size / 1e6)} Mo > ${Math.round(this.cfg.maxImageBytes / 1e6)} Mo).`);
+      }
+
+      // 2. Export de l'image dans un dossier temporaire privé.
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const saved = await this.docker(["save", "--output", join(dir, "image.tar"), msg.imageId], left());
+      if (saved.timedOut) return fail("Délai dépassé lors de l'export de l'image.");
+      if (saved.code !== 0) return fail(`Export de l'image impossible : ${saved.tail}`);
+
+      // 3. Scan par un conteneur Trivy éphémère et restreint.
+      const trivyArgs = [
+        "run", "--rm", "--name", container,
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--read-only", "--tmpfs", "/tmp:rw,size=512m",
+        "--memory", this.cfg.memory, "--pids-limit", "512",
+        "-v", `${dir}:/scan`,
+        "-v", `${this.cfg.cacheVolume}:/cache`,
+        this.cfg.trivyImage,
+      ];
+      const scanned = await this.docker(
+        [
+          ...trivyArgs, "image",
+          "--input", "/scan/image.tar", "--format", "json", "--output", "/scan/result.json",
+          "--scanners", "vuln", "--quiet", "--no-progress", "--cache-dir", "/cache",
+          "--timeout", `${Math.max(1, Math.floor(left() / 60_000))}m`,
+        ],
+        left(),
+      );
+      if (scanned.timedOut) return fail("Délai dépassé pendant l'analyse Trivy.");
+      if (scanned.code !== 0) return fail(`Trivy a échoué (code ${scanned.code}) : ${scanned.tail}`);
+
+      // 4. Lecture du rapport (borné) et normalisation.
+      const report = join(dir, "result.json");
+      if ((await stat(report)).size > MAX_REPORT_BYTES) return fail("Rapport Trivy trop volumineux.");
+      const normalized = normalizeReport(JSON.parse(await readFile(report, "utf8")));
+
+      // 5. Version de Trivy et fraîcheur de la base (le cache vient d'être mis à jour par le scan).
+      let trivy: ScanResult["trivy"];
+      try {
+        const v = await this.docker(["run", "--rm", "--cap-drop", "ALL", "--read-only", "-v", `${this.cfg.cacheVolume}:/cache`, this.cfg.trivyImage, "version", "--format", "json", "--cache-dir", "/cache"], 60_000);
+        if (v.code === 0) trivy = parseTrivyVersion(JSON.parse(v.stdout));
+      } catch {
+        /* informations de base indisponibles : le scan reste valable */
+      }
+
+      return {
+        type: "scan_result",
+        scanId: msg.scanId,
+        status: "succeeded",
+        ...(trivy ? { trivy } : {}),
+        ...(normalized.os ? { os: normalized.os } : {}),
+        counts: normalized.counts,
+        total: normalized.total,
+        vulnerabilities: normalized.vulnerabilities,
+        truncated: normalized.truncated,
+      };
+    } catch (err) {
+      return fail((err as Error).message);
+    } finally {
+      // Arrêt du conteneur s'il tourne encore (délai dépassé) puis nettoyage de l'archive.
+      await this.docker(["rm", "-f", container], 20_000).catch(() => {});
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+}

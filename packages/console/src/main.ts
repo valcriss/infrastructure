@@ -9,7 +9,7 @@ const pool = createPool(config.databaseUrl);
 
 await migrate(pool, (m) => console.log(m));
 const masterKey = await loadOrCreateMasterKey(config.dataDir);
-const { app, setup, ops, backup, metrics } = await buildApp({ config, pool, logger: true, masterKey });
+const { app, setup, ops, backup, metrics, scans, watcher } = await buildApp({ config, pool, logger: true, masterKey });
 // Une opération active avant le redémarrage a un résultat inconnu : jamais rejouée.
 await ops.markInterruptedUnknown();
 await ensureBootstrapToken(pool, config.sharedDir);
@@ -19,6 +19,10 @@ await app.listen({ host: config.host, port: config.port });
 await backup.start();
 // Purge régulière des métriques au-delà de la rétention configurée.
 metrics.start();
+// Scans de vulnérabilités et vérification des versions d'images (planifiés).
+await scans.markInterrupted();
+scans.start();
+watcher.start();
 
 if (setup.token) {
   // Le secret n'est jamais exposé par l'API : il faut avoir accès aux logs locaux.

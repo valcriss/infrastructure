@@ -8,6 +8,7 @@ import {
   type ConsoleMessage,
   type Inventory,
   type MetricSample,
+  type ScanResult,
   type OperationResultSchema,
 } from "@infra/shared";
 import type { z } from "zod";
@@ -27,6 +28,7 @@ export interface GatewayHandlers {
   onLogChunk(hostId: string, streamId: string, lines: string[]): void;
   onLogEnd(hostId: string, streamId: string, reason: string): void;
   onMetrics(hostId: string, samples: MetricSample[]): Promise<void>;
+  onScanResult(hostId: string, result: ScanResult): Promise<void>;
 }
 
 interface Connection {
@@ -165,6 +167,9 @@ export class AgentGateway {
           case "metrics":
             await this.handlers?.onMetrics(hostId, msg.samples);
             break;
+          case "scan_result":
+            await this.handlers?.onScanResult(hostId, msg);
+            break;
           case "operation_log":
             await this.handlers?.onLog(hostId, msg.operationId, msg.text);
             break;
@@ -206,9 +211,15 @@ export class AgentGateway {
     await this.pool.query(
       // L'horodatage d'observation est celui de la console : il ne dépend pas de l'horloge de l'hôte.
       `UPDATE hosts SET inventory = $2, inventory_observed_at = now(),
-              docker_version = $3, host_info = $4, last_seen_at = now()
+              docker_version = $3, host_info = $4, images = $5, last_seen_at = now()
        WHERE id = $1`,
-      [hostId, JSON.stringify(inventory.containers), inventory.dockerVersion, inventory.hostInfo ? JSON.stringify(inventory.hostInfo) : null],
+      [
+        hostId,
+        JSON.stringify(inventory.containers),
+        inventory.dockerVersion,
+        inventory.hostInfo ? JSON.stringify(inventory.hostInfo) : null,
+        inventory.images ? JSON.stringify(inventory.images) : null,
+      ],
     );
   }
 

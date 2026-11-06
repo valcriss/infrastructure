@@ -13,7 +13,14 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
+import { POLICIES, validatePattern, type UpdatePolicy } from "./image-tags.js";
 import type { RevisionContent, VariableMap } from "./stacks.js";
+
+/** Règle de suivi des versions d'un composant, sauvegardée avec la stack. */
+export interface PolicySpec {
+  policy: UpdatePolicy;
+  pattern: string | null;
+}
 
 /**
  * Format de sauvegarde Git, version 1 (cf. project.md §12).
@@ -72,6 +79,8 @@ export interface SnapshotStack {
   /** Révision courante de la stack au moment de l'export. */
   revision: number;
   content: RevisionContent;
+  /** Règles de suivi des versions d'images, par service (cf. project.md §12 : « règles de suivi »). */
+  updatePolicies?: Record<string, PolicySpec>;
 }
 
 export interface SnapshotInput {
@@ -141,6 +150,9 @@ export async function buildSnapshot(input: SnapshotInput, enc: SecretEncryptor):
         ...(c.composeSensitive ? { composeEncrypted: true } : {}),
         ...(c.sensitiveFiles.length > 0 ? { sensitiveFiles: [...c.sensitiveFiles].sort() } : {}),
         ...(sensitiveVars.length > 0 ? { sensitiveVariables: sensitiveVars.map(([n]) => n).sort() } : {}),
+        ...(s.updatePolicies && Object.keys(s.updatePolicies).length > 0
+          ? { updatePolicies: Object.fromEntries(Object.entries(s.updatePolicies).sort(([a], [b]) => a.localeCompare(b))) }
+          : {}),
       }),
     );
     if (c.composeSensitive) {
@@ -223,6 +235,12 @@ const StackMeta = z
     composeEncrypted: z.boolean().optional(),
     sensitiveFiles: z.array(z.string()).max(MAX_FILE_COUNT).optional(),
     sensitiveVariables: z.array(z.string()).max(MAX_VARIABLES).optional(),
+    updatePolicies: z
+      .record(
+        z.string().min(1).max(128),
+        z.object({ policy: z.enum(POLICIES as [UpdatePolicy, ...UpdatePolicy[]]), pattern: z.string().max(100).nullable().optional() }).strict(),
+      )
+      .optional(),
   })
   .strict();
 const StringMap = z.record(z.string(), z.string());
@@ -234,6 +252,7 @@ export interface ParsedStack {
   description: string;
   sourceRevision: number;
   content: RevisionContent;
+  updatePolicies: Record<string, PolicySpec>;
 }
 
 export interface ParsedBackup {
@@ -380,8 +399,18 @@ export async function parseSnapshot(files: Map<string, string>, identity: string
       throw new BackupFormatError(`« ${meta.name} » : fichiers trop volumineux`);
     }
 
+    const updatePolicies: Record<string, PolicySpec> = {};
+    for (const [service, p] of Object.entries(meta.updatePolicies ?? {})) {
+      if (p.policy === "pattern") {
+        const err = validatePattern(p.pattern ?? "");
+        if (err) throw new BackupFormatError(`${metaPath} : règle de suivi de « ${service} » invalide (${err})`);
+      }
+      updatePolicies[service] = { policy: p.policy, pattern: p.policy === "pattern" ? (p.pattern ?? null) : null };
+    }
+
     stacks.push({
       id,
+      updatePolicies,
       name: meta.name,
       hostId: meta.hostId,
       description: meta.description,

@@ -3,6 +3,7 @@ import { useSession } from "./stores/session";
 import BackupView from "./views/BackupView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import HostsView from "./views/HostsView.vue";
+import ImagesView from "./views/ImagesView.vue";
 import LoginView from "./views/LoginView.vue";
 import SettingsView from "./views/SettingsView.vue";
 import SetupView from "./views/SetupView.vue";
@@ -18,6 +19,7 @@ export const router = createRouter({
     { path: "/setup", component: SetupView, meta: { public: true } },
     { path: "/login", component: LoginView, meta: { public: true } },
     { path: "/hosts", component: HostsView },
+    { path: "/images", component: ImagesView },
     { path: "/stacks", component: StacksView },
     { path: "/stacks/new", component: StackNewView },
     { path: "/stacks/:id", component: StackView },

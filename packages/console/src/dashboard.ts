@@ -1,5 +1,10 @@
 import { INVENTORY_INTERVAL_SEC, listComposeServices, type ComposeService, type Container, type HostInfo } from "@infra/shared";
+import type { SeverityCounts } from "@infra/shared";
 import type { BackupService, BackupStatus } from "./backup.js";
+import type { CheckDetail, ImageWatcher } from "./image-watch.js";
+import { isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
+import type { ScanService } from "./scans.js";
+import { getSecuritySettings } from "./settings.js";
 import type { Pool } from "./db.js";
 import type { LatestSample, MetricsStore } from "./metrics-store.js";
 
@@ -97,7 +102,7 @@ export interface Alert {
   kind: string;
   title: string;
   message: string;
-  target: { type: "host" | "stack" | "container" | "backup" | "operation"; id: string; name: string };
+  target: { type: "host" | "stack" | "container" | "backup" | "operation" | "image"; id: string; name: string };
   since: string | null;
 }
 
@@ -122,8 +127,25 @@ export interface AlertContainer {
   container: Container;
 }
 
+/** Sécurité des images et mises à jour disponibles, pour les alertes. */
+export interface SecurityAlertInput {
+  images: {
+    imageId: string;
+    label: string;
+    stacks: string[];
+    state: ScanState;
+    stale: boolean;
+    counts: SeverityCounts | null;
+    error: string | null;
+    since: Date | null;
+  }[];
+  updates: { stackId: string; stackName: string; service: string; detail: CheckDetail; since: Date }[];
+  checkErrors: { stackId: string; stackName: string; service: string; error: string; since: Date }[];
+}
+
 export interface AlertContext {
   now: number;
+  security?: SecurityAlertInput;
   hosts: AlertHost[];
   stacks: AlertStack[];
   containers: AlertContainer[];
@@ -240,6 +262,67 @@ export function deriveAlerts(ctx: AlertContext): Alert[] {
     });
   }
 
+  for (const img of ctx.security?.images ?? []) {
+    const target = { type: "image" as const, id: img.imageId, name: img.label };
+    if (img.counts && img.counts.critical > 0) {
+      alerts.push({
+        id: `vulnerabilities_critical:${img.imageId}`,
+        severity: "warning",
+        kind: "vulnerabilities_critical",
+        title: `${img.counts.critical} vulnérabilité(s) critique(s) : ${img.label}`,
+        message: `Image utilisée par ${img.stacks.join(", ")} (${img.counts.high} élevée(s) en plus). Aucun déploiement n'est bloqué.`,
+        target,
+        since: img.since?.toISOString() ?? null,
+      });
+    }
+    if (img.state === "failed") {
+      alerts.push({
+        id: `scan_failed:${img.imageId}`,
+        severity: "warning",
+        kind: "scan_failed",
+        title: `Scan en échec : ${img.label}`,
+        message: `${img.error ?? "Erreur inconnue"} — l'image n'est PAS considérée comme saine.`,
+        target,
+        since: img.since?.toISOString() ?? null,
+      });
+    } else if (img.stale) {
+      alerts.push({
+        id: `scan_stale:${img.imageId}`,
+        severity: "info",
+        kind: "scan_stale",
+        title: `Scan périmé : ${img.label}`,
+        message: "Le dernier scan est ancien : la base de vulnérabilités a évolué depuis.",
+        target,
+        since: img.since?.toISOString() ?? null,
+      });
+    }
+  }
+  for (const u of ctx.security?.updates ?? []) {
+    const parts: string[] = [];
+    if (u.detail.contentChanged) parts.push(`le tag « ${u.detail.tag} » a un nouveau contenu`);
+    if (u.detail.candidates.length > 0) parts.push(`versions plus récentes : ${u.detail.candidates.join(", ")}${u.detail.uncertain ? " (incertain)" : ""}`);
+    alerts.push({
+      id: `image_update:${u.stackId}:${u.service}`,
+      severity: "info",
+      kind: "image_update",
+      title: `Mise à jour d'image disponible : ${u.stackName}/${u.service}`,
+      message: `${parts.join(" ; ")}. Rien n'est déployé automatiquement.`,
+      target: { type: "stack", id: u.stackId, name: u.stackName },
+      since: u.since.toISOString(),
+    });
+  }
+  for (const e of ctx.security?.checkErrors ?? []) {
+    alerts.push({
+      id: `image_check_failed:${e.stackId}:${e.service}`,
+      severity: "info",
+      kind: "image_check_failed",
+      title: `Vérification de version impossible : ${e.stackName}/${e.service}`,
+      message: `${e.error} (la dernière observation réussie est conservée).`,
+      target: { type: "stack", id: e.stackId, name: e.stackName },
+      since: e.since.toISOString(),
+    });
+  }
+
   for (const o of ctx.unknownOperations) {
     alerts.push({
       id: `operation_unknown:${o.id}`,
@@ -294,6 +377,8 @@ export class Dashboard {
       metrics: MetricsStore;
       backup: BackupService;
       isOnline: (hostId: string) => boolean;
+      scans: ScanService;
+      watcher: ImageWatcher;
     },
   ) {}
 
@@ -356,8 +441,46 @@ export class Dashboard {
       unmanagedProjects += projects.size;
     }
 
+    // Sécurité : seules les images de stacks gérées alimentent les alertes (les autres restent consultables).
+    const settings = await getSecuritySettings(pool);
+    const [usedImages, scanMap, allChecks] = await Promise.all([loadUsedImages(pool, filter), this.deps.scans.latestAll(), this.deps.watcher.allChecks()]);
+    const securityImages: SecurityAlertInput["images"] = [];
+    const sec = { images: 0, never: 0, failed: 0, clean: 0, vulnerable: 0, critical: 0, high: 0 };
+    for (const img of usedImages) {
+      const stackNames = [...new Set(img.usedBy.map((u) => u.stackName).filter((n): n is string => n !== null))];
+      if (stackNames.length === 0) continue;
+      const entry = scanMap.get(`${img.imageId}|${img.platform}`);
+      const state = scanState(entry ? { id: entry.attempt.id, status: entry.attempt.status, finishedAt: entry.attempt.finishedAt, total: entry.attempt.total } : null);
+      sec.images++;
+      if (state === "never") sec.never++;
+      if (state === "failed") sec.failed++;
+      if (state === "clean") sec.clean++;
+      if (state === "vulnerable") sec.vulnerable++;
+      sec.critical += entry?.ok?.counts?.critical ?? 0;
+      sec.high += entry?.ok?.counts?.high ?? 0;
+      securityImages.push({
+        imageId: img.imageId,
+        label: img.refs[0] ?? img.imageId.slice(0, 19),
+        stacks: stackNames,
+        state,
+        stale: isScanStale(entry?.ok ?? null, settings.scanIntervalHours, now),
+        counts: entry?.ok?.counts ?? null,
+        error: entry?.attempt.error ?? null,
+        since: entry?.attempt.finishedAt ?? null,
+      });
+    }
+    const visibleStacks = new Set(stackViews.map((v) => v.s.id));
+    const checks = allChecks.filter((c) => visibleStacks.has(c.stackId));
+    const updates = checks
+      .filter((c) => c.kind === "update_available" && c.detail)
+      .map((c) => ({ stackId: c.stackId, stackName: c.stackName, service: c.service, detail: c.detail as CheckDetail, since: c.checkedAt }));
+    const checkErrors = checks
+      .filter((c) => c.status === "error" && (!c.lastSuccessAt || now - c.lastSuccessAt.getTime() > 3 * 24 * 3600_000))
+      .map((c) => ({ stackId: c.stackId, stackName: c.stackName, service: c.service, error: c.error ?? "Erreur inconnue", since: c.checkedAt }));
+
     const alerts = deriveAlerts({
       now,
+      security: { images: securityImages, updates, checkErrors },
       hosts: hosts.map((h) => ({
         id: h.id,
         name: h.name,
@@ -429,6 +552,7 @@ export class Dashboard {
       },
       usage: { top: top.slice(0, 10) },
       backup: filter.stackId || filter.hostId ? null : { state: backup.state, lastPushAt: backup.lastPushAt, pendingRevisions: backup.pendingRevisions, configured: backup.configured },
+      security: { images: sec, updates: { available: updates.length, errors: checkErrors.length } },
       alerts,
     };
   }

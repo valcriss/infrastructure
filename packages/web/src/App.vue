@@ -22,6 +22,9 @@ async function logout() {
         <RouterLink to="/stacks" class="text-sm text-slate-600 hover:text-slate-900" active-class="font-medium text-slate-900">
           Stacks
         </RouterLink>
+        <RouterLink to="/images" class="text-sm text-slate-600 hover:text-slate-900" active-class="font-medium text-slate-900">
+          Images
+        </RouterLink>
         <RouterLink to="/hosts" class="text-sm text-slate-600 hover:text-slate-900" active-class="font-medium text-slate-900">
           Hôtes
         </RouterLink>

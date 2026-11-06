@@ -13,6 +13,7 @@ import {
   parseSnapshot,
   readWorkTree,
   type CacheEntry,
+  type PolicySpec,
   type ParsedBackup,
   type SnapshotInput,
 } from "./backup-format.js";
@@ -386,6 +387,9 @@ export class BackupService implements BackupStatusProvider {
         hosts: hosts.rows,
         stacks: [],
       };
+      const policyRows = await client.query<{ stack_id: string; service: string; policy: string; pattern: string | null }>(
+        "SELECT stack_id, service, policy, pattern FROM image_policies",
+      );
       for (const s of stacks.rows) {
         const rev = await getRevision(client, s.id, s.current_revision);
         if (!rev) throw new Error(`révision courante introuvable pour ${s.id}`);
@@ -402,6 +406,9 @@ export class BackupService implements BackupStatusProvider {
             sensitiveFiles: rev.sensitiveFiles,
             composeSensitive: rev.composeSensitive,
           },
+          updatePolicies: Object.fromEntries(
+            policyRows.rows.filter((p) => p.stack_id === s.id).map((p) => [p.service, { policy: p.policy as PolicySpec["policy"], pattern: p.pattern }]),
+          ),
         });
       }
       await client.query("COMMIT");
@@ -670,6 +677,14 @@ export class BackupService implements BackupStatusProvider {
             [st.id, c.compose, ...args, actor, message],
           );
           created++;
+        }
+        // Règles de suivi des versions : restaurées avec la stack (remplacent celles du même service).
+        for (const [service, p] of Object.entries(st.updatePolicies)) {
+          await client.query(
+            `INSERT INTO image_policies (stack_id, service, policy, pattern) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (stack_id, service) DO UPDATE SET policy = $3, pattern = $4, updated_at = now()`,
+            [st.id, service, p.policy, p.pattern],
+          );
         }
       }
 

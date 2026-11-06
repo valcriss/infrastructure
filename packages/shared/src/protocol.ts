@@ -50,11 +50,29 @@ export const HostInfoSchema = z.object({
 });
 export type HostInfo = z.infer<typeof HostInfoSchema>;
 
+/** Image locale utilisée par au moins un conteneur (pour les scans et le suivi des versions). */
+export const ImageInfoSchema = z.object({
+  /** Identifiant local (sha256:…). */
+  id: z.string().min(1).max(100),
+  /** Références `nom:tag` connues localement. */
+  repoTags: z.array(z.string().max(300)).max(50),
+  /** Digests de registre `nom@sha256:…` : vide pour une image construite ou chargée localement. */
+  repoDigests: z.array(z.string().max(400)).max(50),
+  size: z.number().min(0),
+  /** Couches (diff_ids) : identité du contenu, indépendante de l'emballage index / manifeste du registre. */
+  layers: z.array(z.string().max(100)).max(300).optional(),
+  os: z.string().max(40).optional(),
+  arch: z.string().max(40).optional(),
+  variant: z.string().max(40).optional(),
+});
+export type ImageInfo = z.infer<typeof ImageInfoSchema>;
+
 export const InventorySchema = z.object({
   observedAt: z.iso.datetime(),
   dockerVersion: z.string(),
   containers: z.array(ContainerSchema).max(5000),
   hostInfo: HostInfoSchema.optional(),
+  images: z.array(ImageInfoSchema).max(2000).optional(),
 });
 export type Inventory = z.infer<typeof InventorySchema>;
 
@@ -153,11 +171,65 @@ export const MetricsMessageSchema = z.object({
   samples: z.array(MetricSampleSchema).max(1000),
 });
 
+export const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"] as const;
+export type Severity = (typeof SEVERITIES)[number];
+/** Nombre maximal de vulnérabilités détaillées renvoyées pour un scan (les compteurs restent exacts). */
+export const MAX_SCAN_VULNERABILITIES = 2000;
+
+export const VulnerabilitySchema = z.object({
+  id: z.string().max(80),
+  pkg: z.string().max(200),
+  installed: z.string().max(120),
+  fixed: z.string().max(300).nullable(),
+  severity: z.enum(SEVERITIES),
+  title: z.string().max(300),
+  url: z.string().max(300).nullable(),
+  /** Statut Trivy (fixed, affected, will_not_fix…). */
+  status: z.string().max(40).optional(),
+});
+export type Vulnerability = z.infer<typeof VulnerabilitySchema>;
+
+export const SeverityCountsSchema = z.object({
+  critical: z.number().int().min(0),
+  high: z.number().int().min(0),
+  medium: z.number().int().min(0),
+  low: z.number().int().min(0),
+  unknown: z.number().int().min(0),
+});
+export type SeverityCounts = z.infer<typeof SeverityCountsSchema>;
+
+/**
+ * Résultat d'un scan Trivy. Seules des données normalisées et bornées sont
+ * transmises : jamais la sortie brute (qui contient la configuration de l'image,
+ * donc potentiellement des variables d'environnement sensibles).
+ */
+export const ScanResultSchema = z.object({
+  type: z.literal("scan_result"),
+  scanId: z.uuid(),
+  status: z.enum(["succeeded", "failed"]),
+  error: z.string().max(2000).optional(),
+  trivy: z
+    .object({
+      version: z.string().max(40),
+      dbVersion: z.number().int().optional(),
+      dbUpdatedAt: z.string().max(40).optional(),
+      dbDownloadedAt: z.string().max(40).optional(),
+    })
+    .optional(),
+  os: z.object({ family: z.string().max(40), name: z.string().max(80), eosl: z.boolean().optional() }).optional(),
+  counts: SeverityCountsSchema.optional(),
+  total: z.number().int().min(0).optional(),
+  vulnerabilities: z.array(VulnerabilitySchema).max(MAX_SCAN_VULNERABILITIES).optional(),
+  truncated: z.boolean().optional(),
+});
+export type ScanResult = z.infer<typeof ScanResultSchema>;
+
 export const AgentMessageSchema = z.discriminatedUnion("type", [
   HelloSchema,
   HeartbeatSchema,
   InventoryMessageSchema,
   MetricsMessageSchema,
+  ScanResultSchema,
   OperationLogSchema,
   OperationResultSchema,
   LogChunkSchema,
@@ -234,11 +306,22 @@ export const LogsStopSchema = z.object({
   streamId: z.uuid(),
 });
 
+/** Demande de scan d'une image locale (par identifiant) avec Trivy. */
+export const ScanSchema = z.object({
+  type: z.literal("scan"),
+  scanId: z.uuid(),
+  imageId: z.string().min(8).max(100).regex(/^(sha256:)?[0-9a-f]{12,64}$/),
+  /** Référence lisible, pour les journaux uniquement. */
+  imageRef: z.string().max(300),
+});
+export type ScanMessage = z.infer<typeof ScanSchema>;
+
 export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   WelcomeSchema,
   ErrorMessageSchema,
   RequestInventorySchema,
   RunSchema,
+  ScanSchema,
   LogsStartSchema,
   LogsStopSchema,
 ]);

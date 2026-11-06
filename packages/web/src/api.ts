@@ -219,7 +219,7 @@ export interface DashboardAlert {
   kind: string;
   title: string;
   message: string;
-  target: { type: "host" | "stack" | "container" | "backup" | "operation"; id: string; name: string };
+  target: { type: "host" | "stack" | "container" | "backup" | "operation" | "image"; id: string; name: string };
   since: string | null;
 }
 
@@ -246,6 +246,7 @@ export interface Dashboard {
   containers: { total: number; running: number; stopped: number; unhealthy: number; noHealthcheck: number; unmanagedProjects: number };
   usage: { top: { containerId: string; name: string; project: string | null; service: string | null; cpuPercent: number | null; memBytes: number; memLimitBytes: number; hostName: string }[] };
   backup: { state: BackupState; lastPushAt: string | null; pendingRevisions: number; configured: boolean } | null;
+  security: { images: { images: number; never: number; failed: number; clean: number; vulnerable: number; critical: number; high: number }; updates: { available: number; errors: number } };
   alerts: DashboardAlert[];
 }
 
@@ -288,3 +289,112 @@ export function formatBytes(n: number): string {
   }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
+
+// --- Sécurité des images ----------------------------------------------------------------------
+
+export type ScanStateName = "never" | "pending" | "running" | "failed" | "clean" | "vulnerable";
+export type VulnSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+
+export interface ScanSummary {
+  id: string;
+  status: "pending" | "running" | "succeeded" | "failed";
+  trigger: "manual" | "scheduled";
+  createdAt: string;
+  finishedAt: string | null;
+  error: string | null;
+  trivyVersion: string | null;
+  dbUpdatedAt: string | null;
+  dbDownloadedAt: string | null;
+  os: { family: string; name: string; eosl: boolean | null } | null;
+  counts: { critical: number; high: number; medium: number; low: number; unknown: number } | null;
+  total: number | null;
+  truncated: boolean;
+}
+
+export interface ImageScanView {
+  state: ScanStateName;
+  stale: boolean;
+  lastAttempt: ScanSummary | null;
+  /** Dernier résultat réussi : conservé et daté même si la dernière tentative a échoué. */
+  current: ScanSummary | null;
+}
+
+export interface ImageUserView {
+  hostId: string;
+  hostName: string;
+  stackId: string | null;
+  stackName: string | null;
+  service: string | null;
+  container: string;
+  containerId: string;
+  state: string;
+  ref: string;
+}
+
+export interface ImageView {
+  imageId: string;
+  platform: string;
+  refs: string[];
+  repoDigests: string[];
+  size: number | null;
+  managed: boolean;
+  usedBy: ImageUserView[];
+  scan: ImageScanView;
+}
+
+export interface Vulnerability {
+  id: string;
+  pkg: string;
+  installed: string;
+  fixed: string | null;
+  severity: VulnSeverity;
+  title: string;
+  url: string | null;
+  status?: string;
+}
+
+export interface CheckDetailView {
+  ref: string;
+  registry: string | null;
+  repository: string | null;
+  tag: string | null;
+  deployedDigest: string | null;
+  remoteDigest: string | null;
+  platform: string;
+  contentChanged: boolean | null;
+  candidates: string[];
+  uncertain: boolean;
+  tagsTruncated: boolean;
+  notes: string[];
+}
+
+export type UpdatePolicyName = "same_tag" | "patch" | "minor" | "major" | "pattern";
+
+export interface StackImageComponent {
+  service: string;
+  ref: string;
+  image: ImageView;
+  policy: { policy: UpdatePolicyName; pattern: string | null };
+  check: {
+    checkedAt: string;
+    status: "ok" | "error";
+    kind: "up_to_date" | "update_available" | "pinned" | "local" | "unsupported" | null;
+    detail: CheckDetailView | null;
+    error: string | null;
+    lastSuccessAt: string | null;
+  } | null;
+}
+
+export interface RegistryEntry {
+  registry: string;
+  username: string | null;
+  hasPassword: boolean;
+  insecure: boolean;
+}
+
+export interface SecuritySettings {
+  scanIntervalHours: number;
+  imageCheckIntervalHours: number;
+}
+
+export const shortId = (id: string): string => id.replace(/^sha256:/, "").slice(0, 12);

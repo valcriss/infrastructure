@@ -1,4 +1,4 @@
-import type { Container, HostInfo, Inventory } from "@infra/shared";
+import type { Container, HostInfo, ImageInfo, Inventory } from "@infra/shared";
 import { request } from "node:http";
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -138,6 +138,29 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
   return out;
 }
 
+/** Résumé d'une image à partir de `GET /images/{id}/json`. */
+export function parseImage(raw: unknown): ImageInfo | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as { Id?: unknown; RepoTags?: unknown; RepoDigests?: unknown; Size?: unknown; Os?: unknown; Architecture?: unknown; Variant?: unknown; RootFS?: { Layers?: unknown } };
+  const id = str(o.Id);
+  if (!id) return null;
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 50) : []);
+  const opt = (v: unknown): { v: string } | Record<string, never> => (typeof v === "string" && v ? { v: v.slice(0, 40) } : {});
+  const os = opt(o.Os);
+  const arch = opt(o.Architecture);
+  const variant = opt(o.Variant);
+  return {
+    id,
+    repoTags: strings(o.RepoTags),
+    repoDigests: strings(o.RepoDigests),
+    size: typeof o.Size === "number" && o.Size >= 0 ? o.Size : 0,
+    ...(Array.isArray(o.RootFS?.Layers) && o.RootFS.Layers.length > 0 ? { layers: o.RootFS.Layers.filter((l): l is string => typeof l === "string").slice(0, 300) } : {}),
+    ...("v" in os ? { os: os.v } : {}),
+    ...("v" in arch ? { arch: arch.v } : {}),
+    ...("v" in variant ? { variant: variant.v } : {}),
+  };
+}
+
 export async function collectInventory(socketPath: string): Promise<Inventory> {
   const [version, containers, info] = await Promise.all([
     dockerGet(socketPath, "/version"),
@@ -157,11 +180,23 @@ export async function collectInventory(socketPath: string): Promise<Inventory> {
       return c;
     }
   });
+  // Images utilisées par au moins un conteneur : digests de registre, plateforme et taille.
+  const imageIds = [...new Set(enriched.map((c) => c.imageId).filter(Boolean))];
+  const images = (
+    await mapLimit(imageIds, 8, async (id) => {
+      try {
+        return parseImage(await dockerGet(socketPath, `/images/${encodeURIComponent(id)}/json`));
+      } catch {
+        return null;
+      }
+    })
+  ).filter((i): i is ImageInfo => i !== null);
   const hostInfo = parseInfo(info);
   return {
     observedAt: new Date().toISOString(),
     dockerVersion: dockerVersion || "inconnue",
     containers: enriched,
     ...(hostInfo ? { hostInfo } : {}),
+    images,
   };
 }
