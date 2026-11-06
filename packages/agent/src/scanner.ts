@@ -104,7 +104,11 @@ export function parseTrivyVersion(raw: unknown): NonNullable<ScanResult["trivy"]
 }
 
 /** Efface les chemins et jetons éventuels d'un message d'erreur avant de le remonter. */
-const brief = (msg: string): string => msg.replace(/\s+/g, " ").slice(0, 600);
+const brief = (msg: string): string => {
+  const flat = msg.replace(/\s+/g, " ").trim();
+  // La cause se trouve à la fin de la sortie de Docker : on garde le début (contexte) et la fin.
+  return flat.length <= 600 ? flat : `${flat.slice(0, 120)} … ${flat.slice(-470)}`;
+};
 
 /**
  * Scans Trivy d'images locales. Un scan à la fois par agent. L'image est
@@ -160,7 +164,15 @@ export class TrivyScanner {
       if (saved.timedOut) return fail("Délai dépassé lors de l'export de l'image.");
       if (saved.code !== 0) return fail(`Export de l'image impossible : ${saved.tail}`);
 
-      // 3. Scan par un conteneur Trivy éphémère et restreint.
+      // 3a. Image de Trivy présente localement (téléchargement séparé : sa sortie ne pollue pas l'erreur du scan).
+      const have = await this.docker(["image", "inspect", "--format", "{{.Id}}", this.cfg.trivyImage], 30_000);
+      if (have.code !== 0) {
+        const pulled = await this.docker(["pull", "--quiet", this.cfg.trivyImage], left());
+        if (pulled.timedOut) return fail("Délai dépassé lors du téléchargement de l'image Trivy.");
+        if (pulled.code !== 0) return fail(`Téléchargement de l'image Trivy impossible : ${pulled.tail}`);
+      }
+
+      // 3b. Scan par un conteneur Trivy éphémère et restreint.
       const trivyArgs = [
         "run", "--rm", "--name", container,
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
