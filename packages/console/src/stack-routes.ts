@@ -1,4 +1,11 @@
-import { validateFilePath, type Container } from "@infra/shared";
+import {
+  ComposeEditError,
+  editServiceEnvironment,
+  validateEnvironmentName,
+  validateFilePath,
+  validateVariableValue,
+  type Container,
+} from "@infra/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Pool } from "./db.js";
@@ -33,7 +40,13 @@ const VariablesBody = z.object({
   unset: z.array(z.string()).max(200).optional(),
   message: Message,
 });
-const FileBody = z.object({ expectedRevision: Expected, content: z.string(), message: Message });
+const ServiceEnvBody = z.object({
+  expectedRevision: Expected,
+  set: z.record(z.string(), z.string()).optional(),
+  unset: z.array(z.string()).max(200).optional(),
+  message: Message,
+});
+const FileBody =z.object({ expectedRevision: Expected, content: z.string(), message: Message });
 const DeployBody = z
   .object({
     revision: z.number().int().positive().optional(),
@@ -70,9 +83,6 @@ export function registerStackRoutes(
   },
 ): void {
   const { pool, auth, ops } = deps;
-
-  const actor = async (): Promise<string> =>
-    (await pool.query<{ username: string }>("SELECT username FROM admin")).rows[0]?.username ?? "admin";
 
   const summarize = (r: StackListRow) => {
     const mine = (r.inventory ?? []).filter((c) => c.composeProject === r.name);
@@ -118,7 +128,7 @@ export function registerStackRoutes(
 
   app.post("/api/v1/stacks", { preHandler: auth }, async (request, reply) => {
     const body = CreateBody.parse(request.body);
-    const { id } = await createStack(pool, { ...body, author: await actor() });
+    const { id } = await createStack(pool, { ...body, author: request.actor });
     return reply.code(201).send({ id, revision: 1, backup: BACKUP });
   });
 
@@ -140,7 +150,7 @@ export function registerStackRoutes(
   app.put("/api/v1/stacks/:id/compose", { preHandler: auth }, async (request) => {
     const { id } = IdParams.parse(request.params);
     const body = ComposeBody.parse(request.body);
-    const result = await changeStack(pool, id, body.expectedRevision, await actor(), body.message ?? "Compose modifié", (c) => ({
+    const result = await changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? "Compose modifié", (c) => ({
       ...c,
       compose: body.compose,
     }));
@@ -150,10 +160,44 @@ export function registerStackRoutes(
   app.patch("/api/v1/stacks/:id/variables", { preHandler: auth }, async (request) => {
     const { id } = IdParams.parse(request.params);
     const body = VariablesBody.parse(request.body);
-    const result = await changeStack(pool, id, body.expectedRevision, await actor(), body.message ?? "Variables modifiées", (c) => ({
+    const result = await changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? "Variables modifiées", (c) => ({
       ...c,
       variables: applyVariableChanges(c.variables, body.set, body.unset),
     }));
+    return { ...result, backup: BACKUP };
+  });
+
+  // Variables d'environnement d'un service : édition du YAML en préservant sa forme.
+  // Les valeurs écrites ici restent dans le texte du Compose (non masquées) :
+  // les secrets doivent passer par les variables de stack sensibles (`${NOM}`).
+  app.patch("/api/v1/stacks/:id/services/:service/environment", { preHandler: auth }, async (request) => {
+    const params = IdParams.extend({ service: z.string().min(1).max(128) }).parse(request.params);
+    const body = ServiceEnvBody.parse(request.body);
+    for (const [name, value] of [...Object.entries(body.set ?? {}), ...(body.unset ?? []).map((n) => [n, ""] as const)]) {
+      const err = validateEnvironmentName(name) ?? validateVariableValue(value);
+      if (err) throw new HttpError(400, "invalid_variable", `${name} : ${err}`);
+    }
+    const result = await changeStack(
+      pool,
+      params.id,
+      body.expectedRevision,
+      request.actor,
+      body.message ?? `Environnement du service ${params.service} modifié`,
+      (c) => {
+        try {
+          return { ...c, compose: editServiceEnvironment(c.compose, params.service, body.set ?? {}, body.unset ?? []) };
+        } catch (err) {
+          if (err instanceof ComposeEditError) {
+            throw new HttpError(
+              err.code === "service_not_found" ? 404 : 422,
+              err.code === "service_not_found" ? "service_not_found" : "unsupported_compose_structure",
+              err.message,
+            );
+          }
+          throw err;
+        }
+      },
+    );
     return { ...result, backup: BACKUP };
   });
 
@@ -168,7 +212,7 @@ export function registerStackRoutes(
     const { id } = IdParams.parse(request.params);
     const path = filePath(request);
     const body = FileBody.parse(request.body);
-    const result = await changeStack(pool, id, body.expectedRevision, await actor(), body.message ?? `Fichier ${path} enregistré`, (c) => ({
+    const result = await changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? `Fichier ${path} enregistré`, (c) => ({
       ...c,
       files: { ...c.files, [path]: body.content },
     }));
@@ -179,7 +223,7 @@ export function registerStackRoutes(
     const { id } = IdParams.parse(request.params);
     const path = filePath(request);
     const { expectedRevision } = z.object({ expectedRevision: z.coerce.number().int().positive() }).parse(request.query);
-    const result = await changeStack(pool, id, expectedRevision, await actor(), `Fichier ${path} supprimé`, (c) => {
+    const result = await changeStack(pool, id, expectedRevision, request.actor, `Fichier ${path} supprimé`, (c) => {
       const files = { ...c.files };
       delete files[path];
       return { ...c, files };
@@ -249,7 +293,7 @@ export function registerStackRoutes(
     const { operation, created } = await ops.create({
       type: "deploy",
       stackId: id,
-      requestedBy: await actor(),
+      requestedBy: request.actor,
       ...(body.revision !== undefined ? { revision: body.revision } : {}),
       ...(body.pullImages !== undefined ? { pullImages: body.pullImages } : {}),
       ...(body.forceRecreate !== undefined ? { forceRecreate: body.forceRecreate } : {}),
@@ -265,7 +309,7 @@ export function registerStackRoutes(
       const { operation, created } = await ops.create({
         type,
         stackId: id,
-        requestedBy: await actor(),
+        requestedBy: request.actor,
         ...(key ? { idempotencyKey: key } : {}),
       });
       return accepted(reply, operation, created);

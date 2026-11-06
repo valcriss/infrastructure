@@ -45,11 +45,70 @@ export async function isAuthenticated(pool: Pool, request: FastifyRequest): Prom
   return (rowCount ?? 0) > 0;
 }
 
+declare module "fastify" {
+  interface FastifyRequest {
+    /** Identité de l'appelant pour l'audit : « admin » ou « token:<nom> ». */
+    actor: string;
+  }
+}
+
+const unauthorized = (reply: FastifyReply) =>
+  reply.code(401).send({ error: { code: "unauthorized", message: "Authentification requise" } });
+
+/** Routes réservées à la session de l'administrateur (jamais accessibles par jeton API). */
 export function requireAuth(pool: Pool) {
   return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (!(await isAuthenticated(pool, request))) {
-      await reply.code(401).send({ error: { code: "unauthorized", message: "Authentification requise" } });
+      await unauthorized(reply);
+      return;
     }
+    const { rows } = await pool.query<{ username: string }>("SELECT username FROM admin");
+    request.actor = rows[0]?.username ?? "admin";
+  };
+}
+
+export const API_TOKEN_PREFIX = "cdt_";
+const LAST_USED_THROTTLE_SEC = 60;
+
+/**
+ * Routes d'automatisation : jeton API (`Authorization: Bearer cdt_…`) ou
+ * session. Un jeton `read` ne peut effectuer que des requêtes GET/HEAD. Les
+ * échecs répétés par adresse sont limités.
+ */
+export function requireSessionOrToken(pool: Pool, limiter: LoginLimiter) {
+  const session = requireAuth(pool);
+  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const header = request.headers.authorization;
+    if (header === undefined) return session(request, reply);
+
+    const key = `token|${request.ip}`;
+    if (limiter.isBlocked(key)) {
+      await reply.code(429).send({ error: { code: "too_many_attempts", message: "Trop de tentatives, réessayez plus tard" } });
+      return;
+    }
+    const match = /^Bearer (\S+)$/i.exec(header);
+    const row = match
+      ? (
+          await pool.query<{ id: string; name: string; scope: "read" | "write"; last_used_at: Date | null }>(
+            `SELECT id, name, scope, last_used_at FROM api_tokens
+             WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`,
+            [sha256(match[1] ?? "")],
+          )
+        ).rows[0]
+      : undefined;
+    if (!row) {
+      limiter.recordFailure(key);
+      await unauthorized(reply);
+      return;
+    }
+    if (row.scope === "read" && !["GET", "HEAD"].includes(request.method)) {
+      await reply.code(403).send({ error: { code: "insufficient_scope", message: "Ce jeton est en lecture seule" } });
+      return;
+    }
+    if (!row.last_used_at || Date.now() - row.last_used_at.getTime() > LAST_USED_THROTTLE_SEC * 1000) {
+      await pool.query("UPDATE api_tokens SET last_used_at = now() WHERE id = $1", [row.id]);
+    }
+    request.actor = `token:${row.name}`;
   };
 }
 

@@ -20,6 +20,7 @@ import {
   destroySession,
   isAuthenticated,
   requireAuth,
+  requireSessionOrToken,
 } from "./auth.js";
 import { ensureBootstrapToken } from "./bootstrap.js";
 import type { Config } from "./config.js";
@@ -29,6 +30,7 @@ import { AgentGateway } from "./gateway.js";
 import { HttpError } from "./http-error.js";
 import { OperationsService } from "./operations.js";
 import { registerStackRoutes } from "./stack-routes.js";
+import { registerTokenRoutes } from "./token-routes.js";
 
 export interface AppDeps {
   config: Config;
@@ -57,7 +59,9 @@ const DUMMY_HASH =
 export async function buildApp({ config, pool, logger = false }: AppDeps): Promise<BuiltApp> {
   const app = Fastify({ logger, bodyLimit: 1024 * 1024 });
   const limiter = new LoginLimiter();
+  // `auth` : session de l'administrateur uniquement. `apiAuth` : session ou jeton API.
   const auth = requireAuth(pool);
+  const apiAuth = requireSessionOrToken(pool, new LoginLimiter());
 
   const adminExists = async (): Promise<boolean> =>
     ((await pool.query("SELECT 1 FROM admin")).rowCount ?? 0) > 0;
@@ -65,6 +69,7 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
   const setup: SetupState = { token: (await adminExists()) ? null : randomToken(24) };
   const gateway = new AgentGateway(pool, config.sharedDir, app.log);
 
+  app.decorateRequest("actor", "");
   await app.register(cookie);
   await app.register(websocket, { options: { maxPayload: MAX_MESSAGE_BYTES } });
 
@@ -265,7 +270,7 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
   const HOST_COLUMNS = `id, name, agent_version, capabilities, last_seen_at, docker_version,
                         inventory_observed_at, inventory`;
 
-  app.get("/api/v1/hosts", { preHandler: auth }, async () => {
+  app.get("/api/v1/hosts", { preHandler: apiAuth }, async () => {
     const { rows } = await pool.query<HostRow>(
       `SELECT ${HOST_COLUMNS} FROM hosts WHERE revoked_at IS NULL ORDER BY created_at`,
     );
@@ -274,7 +279,7 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
 
   const IdParams = z.object({ id: z.uuid() });
 
-  app.get("/api/v1/hosts/:id", { preHandler: auth }, async (request, reply) => {
+  app.get("/api/v1/hosts/:id", { preHandler: apiAuth }, async (request, reply) => {
     const { id } = IdParams.parse(request.params);
     const { rows } = await pool.query<HostRow>(
       `SELECT ${HOST_COLUMNS} FROM hosts WHERE id = $1 AND revoked_at IS NULL`,
@@ -285,7 +290,7 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     return { ...toSummary(row), containers: row.inventory ?? [] };
   });
 
-  app.delete("/api/v1/hosts/:id", { preHandler: auth }, async (request, reply) => {
+  app.delete("/api/v1/hosts/:id", { preHandler: apiAuth }, async (request, reply) => {
     const { id } = IdParams.parse(request.params);
     const res = await pool.query(
       "UPDATE hosts SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
@@ -295,13 +300,13 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
       return reply.code(404).send(apiError("not_found", "Hôte introuvable"));
     }
     gateway.disconnect(id);
-    await audit(pool, "admin", "host.revoke", id, "success");
+    await audit(pool, request.actor, "host.revoke", id, "success");
     return reply.code(204).send();
   });
 
   const EnrollBody = z.object({ hostName: z.string().min(1).max(128).optional() }).default({});
 
-  app.post("/api/v1/agents/enrollment-tokens", { preHandler: auth }, async (request, reply) => {
+  app.post("/api/v1/agents/enrollment-tokens", { preHandler: apiAuth }, async (request, reply) => {
     const body = EnrollBody.parse(request.body ?? {});
     const token = randomToken(32);
     const { rows } = await pool.query<{ expires_at: Date }>(
@@ -309,7 +314,7 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
        VALUES ($1, 'manual', $2, now() + interval '1 hour') RETURNING expires_at`,
       [sha256(token), body.hostName ?? null],
     );
-    await audit(pool, "admin", "enrollment-token.create", null, "success");
+    await audit(pool, request.actor, "enrollment-token.create", null, "success");
     // Le jeton n'est affiché qu'une seule fois ; seule son empreinte est stockée.
     return reply.code(201).send({ token, expiresAt: rows[0]?.expires_at.toISOString() });
   });
@@ -317,7 +322,8 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
   const ops = new OperationsService(pool, gateway);
   gateway.setHandlers(ops);
   app.addHook("onClose", async () => ops.close());
-  registerStackRoutes(app, { pool, auth, ops, isOnline: (id) => gateway.isOnline(id) });
+  registerStackRoutes(app, { pool, auth: apiAuth, ops, isOnline: (id) => gateway.isOnline(id) });
+  registerTokenRoutes(app, { pool, auth });
 
   app.get("/agent/ws", { websocket: true }, (socket) => gateway.handle(socket));
 

@@ -32,7 +32,7 @@ Limites connues : la rotation de la clé de restauration n'est pas implémentée
 
 ## Phase 2 — Stacks et API (AC 3 à 7, 15)
 
-État (6 novembre 2026) : faits et vérifiés sur Docker réel : 1 (hors édition préservant les commentaires), 2 (syntaxe côté console, `docker compose config` côté agent), 3 (variables de stack), 4, 5, 6, 7 (test réel du bind mount relatif, y compris dans l'agent conteneurisé), 8 (sauf jetons API), 11 (console et son projet : noms réservés + refus des projets existants non gérés). Restent : variables d'environnement par service, jetons API, interface (liste, fiche, éditeur, diff, opérations), logs en direct, OpenAPI, démarrage d'une stack « observée » à importer.
+État (6 novembre 2026) : faits et vérifiés sur Docker réel : 1 (hors édition préservant les commentaires), 2 (syntaxe côté console, `docker compose config` côté agent), 3 (variables de stack), 4, 5, 6, 7 (test réel du bind mount relatif, y compris dans l'agent conteneurisé), 8 (sauf jetons API), 11 (console et son projet : noms réservés + refus des projets existants non gérés). Ajoutés ensuite : variables d'environnement par service (YAML préservé) et jetons API (AC 4 et 15, vérifiés sur Docker réel). Restent : interface (liste, fiche, éditeur, diff, opérations), logs en direct, OpenAPI, import d'une stack « observée ».
 
 1. Modèle stack/révision ; édition YAML préservant commentaires
 2. Validation Compose avant déploiement, erreurs localisées
