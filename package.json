@@ -1,0 +1,25 @@
+{
+  "name": "infrastructure",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "packages/console",
+    "packages/agent",
+    "packages/web"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build -w @infra/shared && npm run build -w @infra/console && npm run build -w @infra/agent && npm run build -w @infra/web",
+    "typecheck": "npm run build -w @infra/shared && npm run typecheck -w @infra/console -w @infra/agent -w @infra/web",
+    "test": "npm run build -w @infra/shared && npm run test -w @infra/shared -w @infra/console -w @infra/agent"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^5.1.0"
+  }
+}

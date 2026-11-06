@@ -1,0 +1,25 @@
+# Agent seul, pour enrôler un hôte Docker supplémentaire.
+#   CONSOLE_URL=wss://console.exemple.org/agent/ws \
+#   ENROLLMENT_TOKEN=<jeton généré dans la console> \
+#   docker compose -f compose.agent.yaml up -d --build
+#
+# Le jeton est à usage unique ; une fois enrôlé, l'agent conserve ses propres
+# identifiants dans le volume agent-data. Hors réseau de confiance, utiliser wss://.
+
+name: console-docker-agent
+
+services:
+  agent:
+    build:
+      context: .
+      target: agent
+    restart: unless-stopped
+    environment:
+      CONSOLE_URL: ${CONSOLE_URL:?définir CONSOLE_URL}
+      ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-data:/data
+
+volumes:
+  agent-data:
