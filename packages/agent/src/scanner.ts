@@ -175,7 +175,8 @@ export class TrivyScanner {
       // 3b. Scan par un conteneur Trivy éphémère et restreint.
       const trivyArgs = [
         "run", "--rm", "--name", container,
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        // Seule capacité conservée : lire/écrire le dossier privé (0700) d'un agent qui n'est pas root.
+        "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE", "--security-opt", "no-new-privileges",
         "--read-only", "--tmpfs", "/tmp:rw,size=512m",
         "--memory", this.cfg.memory, "--pids-limit", "512",
         "-v", `${dir}:/scan`,
