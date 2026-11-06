@@ -38,7 +38,7 @@ Les valeurs sensibles ne sont jamais renvoyées par l'API ni écrites dans les j
 
 ```bash
 cp .env.example .env        # puis définir POSTGRES_PASSWORD (alphanumérique)
-docker compose up -d --build
+docker compose up -d          # images publiées sur ghcr.io (IMAGE_TAG, « latest » par défaut)
 docker compose logs console # relever « Secret d'initialisation »
 ```
 
@@ -53,7 +53,7 @@ L'agent local s'enrôle seul : la console dépose un jeton à usage unique dans 
 Hôte supplémentaire : générer un jeton dans l'interface (« Enrôler un hôte »), puis sur l'hôte cible :
 
 ```bash
-CONSOLE_URL=wss://console.exemple.org/agent/ws ENROLLMENT_TOKEN=<jeton> docker compose -f compose.agent.yaml up -d --build
+CONSOLE_URL=wss://console.exemple.org/agent/ws ENROLLMENT_TOKEN=<jeton> docker compose -f docker-compose.agent.yml up -d
 ```
 
 ## Supervision
@@ -105,6 +105,18 @@ Revue du §14 de [project.md](project.md) (6 novembre 2026) :
 - **Fichiers** : chemins, liens symboliques et archives contrôlés à l'import et à la restauration ; le `.env` d'une stack contient ses secrets en clair dans l'espace de travail de l'hôte (permissions 0600, nécessaire à Compose) : quiconque est root sur l'hôte les lit ; secrets masqués dans les journaux.
 - **Exposition** : seul le port de la console est publié ; PostgreSQL et le socket Docker ne le sont pas. La console tourne sans privilèges (utilisateur `node`).
 - **À savoir** : le contrôle du démon Docker donne des capacités très élevées sur l'hôte, **même avec un socket monté en lecture seule** (créer un conteneur privilégié équivaut à root). L'agent s'exécute donc en root et doit être traité comme tel. Les scans Trivy, eux, n'ont pas accès au socket.
+
+## Publication des images
+
+Pousser un tag de version déclenche le workflow [release.yml](.github/workflows/release.yml), qui construit la console et l'agent (linux/amd64 et linux/arm64) et les publie sur le registre GitHub :
+
+```bash
+git tag 1.1.1 && git push origin 1.1.1
+# → ghcr.io/valcriss/infrastructure-console:1.1.1 (+ 1.1, 1, latest)
+# → ghcr.io/valcriss/infrastructure-agent:1.1.1   (+ 1.1, 1, latest)
+```
+
+Une préversion (`1.2.0-rc.1`) ne reçoit que son propre tag, jamais `latest`. En production, épingler `IMAGE_TAG=1.1.1` dans `.env`. Au premier envoi, GitHub crée les paquets en privé : les rendre publics (Paramètres du paquet → visibilité) ou faire `docker login ghcr.io` sur chaque hôte. Pour construire localement : `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
 
 ## Développement
 

@@ -1,0 +1,11 @@
+# Construit les images localement au lieu de les télécharger depuis ghcr.io (développement, test d'une branche) :
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  console:
+    build:
+      context: .
+      target: console
+  agent:
+    build:
+      context: .
+      target: agent

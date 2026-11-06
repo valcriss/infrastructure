@@ -24,9 +24,7 @@ services:
       retries: 10
 
   console:
-    build:
-      context: .
-      target: console
+    image: ghcr.io/valcriss/infrastructure-console:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -51,9 +49,7 @@ services:
     networks: [internal]
 
   agent:
-    build:
-      context: .
-      target: agent
+    image: ghcr.io/valcriss/infrastructure-agent:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       console:

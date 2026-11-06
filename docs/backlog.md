@@ -20,7 +20,7 @@ Dérivé de `project.md` §17–18 et de `docs/adr/0001-architecture.md`. Chaque
 5. Agent : connexion sortante, heartbeat, reconnexion
 6. Enrôlement du premier agent par confiance locale ; enrôlement d'un second hôte par jeton unique ; révocation
 7. Inventaire Docker réel (conteneurs, groupes Compose observés)
-8. `compose.yaml` de livraison (console + agent + PostgreSQL, volumes, healthchecks) et Compose agent seul
+8. `docker-compose.yml` de livraison (console + agent + PostgreSQL, volumes, healthchecks) et Compose agent seul
 9. Frontend Vue 3 + Tailwind : squelette, routeur, écrans d'initialisation et de connexion
 10. Mesure de l'empreinte mémoire de l'agent au repos
 

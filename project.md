@@ -131,7 +131,7 @@ Séparer configuration souhaitée et état observé. Un hôte hors ligne doit pr
 
 ### Livrable Compose
 
-**Validé.** Fournir un fichier `compose.yaml` contenant au minimum les services console et agent.
+**Validé.** Fournir un fichier `docker-compose.yml` contenant au minimum les services console et agent.
 
 **Proposé :**
 
@@ -485,7 +485,7 @@ La compatibilité Swarm n’a pas à être testée comme fonction disponible au 
 ## 19. Livrables attendus du développement
 
 - Code source console, frontend et agent.
-- `compose.yaml` de livraison et exemple de configuration.
+- `docker-compose.yml` de livraison et exemple de configuration.
 - Compose agent seul pour les hôtes supplémentaires.
 - Instructions de développement, installation, mise à jour et dépannage.
 - Contrat OpenAPI et exemples d’appels automatisés.

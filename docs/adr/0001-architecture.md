@@ -18,7 +18,7 @@ Les versions exactes ne sont volontairement pas fixées ici : elles seront chois
 | Sujet | Choix | Statut | Raisons / notes |
 | --- | --- | --- | --- |
 | Runtime console et agent | **Node.js (LTS) + TypeScript** | Validé | Un seul langage du frontend à l'agent, types et schémas partagés |
-| Base de données | **PostgreSQL** | Validé | Service ajouté au `compose.yaml` de livraison (volume persistant, healthcheck) |
+| Base de données | **PostgreSQL** | Validé | Service ajouté au `docker-compose.yml` de livraison (volume persistant, healthcheck) |
 | Frontend | **Vue 3 + Vite + Tailwind CSS** | Validé | Vue Router et Pinia ; servi en statique par la console |
 | Éditeur YAML | **CodeMirror 6** (YAML, vue des différences) | Proposé | Léger, intégration Vue simple ; Monaco écarté (poids) |
 | Framework HTTP | **Fastify** | Proposé | Validation par schéma, génération OpenAPI, bonnes performances |
