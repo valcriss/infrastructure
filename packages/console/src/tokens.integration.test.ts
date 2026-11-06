@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,7 +55,8 @@ describe.skipIf(!url)("jetons API et variables par service (intégration)", () =
     await migrate(pool);
     sharedDir = await mkdtemp(join(tmpdir(), "infra-shared-"));
     built = await buildApp({
-      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false },
+      masterKey: randomBytes(32),
+      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir: join(tmpdir(), "infra-data-test"), gitCaFile: null },
       pool,
     });
     baseUrl = await built.app.listen({ host: "127.0.0.1", port: 0 });

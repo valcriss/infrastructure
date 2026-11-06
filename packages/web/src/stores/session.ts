@@ -5,6 +5,8 @@ export const useSession = defineStore("session", {
   state: () => ({
     initialized: null as boolean | null,
     username: null as string | null,
+    /** Faux tant que la clé de restauration n'a pas été générée (ou reprise du dépôt Git). */
+    hasRestorationKey: true,
   }),
   actions: {
     async refresh(): Promise<void> {
@@ -16,6 +18,7 @@ export const useSession = defineStore("session", {
       }
       try {
         this.username = (await api<{ username: string }>("/api/v1/session")).username;
+        this.hasRestorationKey = (await api<{ recipient: string | null }>("/api/v1/admin/restoration-key")).recipient !== null;
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) this.username = null;
         else throw err;
@@ -28,18 +31,14 @@ export const useSession = defineStore("session", {
       });
       this.username = r.username;
     },
-    async setup(
-      setupToken: string,
-      username: string,
-      password: string,
-    ): Promise<{ restorationKey: string; restorationRecipient: string }> {
-      const r = await api<{ username: string; restorationKey: string; restorationRecipient: string }>(
-        "/api/v1/setup",
-        { method: "POST", body: JSON.stringify({ setupToken, username, password }) },
-      );
+    /** Étape 1 de l'assistant : crée le compte administrateur (sans clé de restauration). */
+    async setup(setupToken: string, username: string, password: string): Promise<void> {
+      const r = await api<{ username: string }>("/api/v1/setup", {
+        method: "POST",
+        body: JSON.stringify({ setupToken, username, password }),
+      });
       this.initialized = true;
       this.username = r.username;
-      return { restorationKey: r.restorationKey, restorationRecipient: r.restorationRecipient };
     },
     async changeCredentials(body: {
       currentPassword: string;

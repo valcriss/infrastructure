@@ -81,7 +81,13 @@ Voir `project.md` §12 pour l'arborescence. `manifest.yaml` contient `formatVers
 3. Un seul agent par hôte ; plusieurs hôtes via plusieurs agents.
 4. `build`, `include` et Compose multiples rejetés explicitement au MVP.
 
-## 8. Questions ouvertes (décision du porteur requise)
+## 8. Décisions prises depuis (6 novembre 2026)
+
+- **Authentification Git** : HTTPS avec jeton uniquement (pas de SSH). Le jeton est chiffré par une clé maître locale et transmis à `git` par `GIT_ASKPASS`.
+- **Compte administrateur et restauration** : le compte est créé par l'assistant d'initialisation (secret affiché dans les logs) ; ni le compte ni son hash ne sont sauvegardés. Le dépôt Git se configure dans ce même assistant, qui propose la restauration si le dépôt contient une sauvegarde.
+- **Clé de restauration** : générée après la configuration du dépôt (ou reprise de celle du dépôt lors d'une restauration), clé privée montrée une seule fois.
+
+## 9. Questions ouvertes (décision du porteur requise)
 
 1. Nom du produit et licence.
 2. Politique de récupération du compte admin lors d'une restauration (et sauvegarde ou non du hash).

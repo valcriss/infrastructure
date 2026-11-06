@@ -17,7 +17,9 @@ const error = ref("");
 const info = ref("");
 const busy = ref(false);
 
-const dirty = computed(() => draft.value !== saved.value);
+const sensitive = ref(props.stack.composeSensitive);
+const savedSensitive = ref(props.stack.composeSensitive);
+const dirty = computed(() => draft.value !== saved.value || sensitive.value !== savedSensitive.value);
 
 // Un rechargement distant ne remplace jamais un brouillon en cours de modification.
 watch(
@@ -39,10 +41,16 @@ async function save() {
   try {
     const r = await api<ChangeResult>(`/api/v1/stacks/${props.stack.id}/compose`, {
       method: "PUT",
-      body: JSON.stringify({ expectedRevision: baseRevision.value, compose: draft.value, ...(message.value ? { message: message.value } : {}) }),
+      body: JSON.stringify({
+        expectedRevision: baseRevision.value,
+        compose: draft.value,
+        sensitive: sensitive.value,
+        ...(message.value ? { message: message.value } : {}),
+      }),
     });
     baseRevision.value = r.revision;
     saved.value = draft.value;
+    savedSensitive.value = sensitive.value;
     message.value = "";
     showDiff.value = false;
     info.value = r.changed
@@ -58,6 +66,7 @@ async function save() {
 
 function reset() {
   draft.value = saved.value;
+  sensitive.value = savedSensitive.value;
   error.value = "";
 }
 </script>
@@ -80,6 +89,10 @@ function reset() {
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
     <DiffView v-if="showDiff" :before="saved" :after="draft" />
+    <label class="flex items-center gap-2 text-sm">
+      <input v-model="sensitive" type="checkbox" />
+      Chiffrer le Compose dans la sauvegarde Git (il contient des secrets)
+    </label>
     <p class="text-xs text-slate-500">
       Les valeurs écrites directement dans le Compose restent visibles dans la révision : placez les secrets dans des variables de stack sensibles (<code>${NOM}</code>).
     </p>

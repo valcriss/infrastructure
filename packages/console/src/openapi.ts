@@ -1,6 +1,7 @@
 import { ChangeCredentialsSchema, LoginRequestSchema, SetupRequestSchema } from "@infra/shared";
 import { z } from "zod";
 import { ComposeBody, CreateBody, DeployBody, FileBody, ServiceEnvBody, VariablesBody } from "./stack-routes.js";
+import { BackupConfigBody, BackupTestBody, RestoreApplyBody, RestorePreviewBody } from "./backup-routes.js";
 import { CreateTokenBody } from "./token-routes.js";
 
 /** Qui peut appeler la route. */
@@ -39,11 +40,12 @@ export const ROUTE_DOCS: RouteDoc[] = [
   { method: "get", path: "/status", summary: "État public minimal", tag: "Système", access: "public", success: { status: 200, description: "Processus en vie et console initialisée ou non" } },
   { method: "get", path: "/api/v1/openapi.json", summary: "Contrat OpenAPI", tag: "Système", access: "public", success: { status: 200, description: "Ce document" } },
 
-  { method: "post", path: "/api/v1/setup", summary: "Initialiser la console (création de l'administrateur)", tag: "Compte", access: "public", body: SetupRequestSchema, success: { status: 201, description: "Compte créé ; la clé de restauration est affichée une seule fois" }, errors: [400, 403, 404, 409], description: "Disponible une seule fois, avec le secret d'initialisation affiché dans les logs de la console." },
+  { method: "post", path: "/api/v1/setup", summary: "Initialiser la console (création de l'administrateur)", tag: "Compte", access: "public", body: SetupRequestSchema, success: { status: 201, description: "Compte créé et session ouverte" }, errors: [400, 403, 404, 409], description: "Disponible une seule fois, avec le secret d'initialisation affiché dans les logs de la console. Étape 1 de l'assistant : ensuite, configurer le dépôt Git (ou restaurer) puis générer la clé de restauration." },
   { method: "post", path: "/api/v1/session", summary: "Ouvrir une session", tag: "Compte", access: "public", body: LoginRequestSchema, success: { status: 200, description: "Session ouverte (cookie HttpOnly)" }, errors: [400, 401, 429] },
   { method: "get", path: "/api/v1/session", summary: "Session courante", tag: "Compte", access: "session", success: { status: 200, description: "Identifiant de l'administrateur" }, errors: [401] },
   { method: "delete", path: "/api/v1/session", summary: "Fermer la session", tag: "Compte", access: "public", success: { status: 204, description: "Session fermée" } },
   { method: "get", path: "/api/v1/admin/restoration-key", summary: "Clé publique de restauration", tag: "Compte", access: "session", success: { status: 200, description: "Destinataire age (clé publique)" }, errors: [401] },
+  { method: "post", path: "/api/v1/admin/restoration-key", summary: "Générer la clé de restauration", tag: "Compte", access: "session", success: { status: 201, description: "Clé privée (affichée une seule fois) et clé publique" }, errors: [401, 409], description: "Une seule fois : la clé privée n'est jamais stockée. Elle chiffre les secrets de la sauvegarde Git ; sans elle ils sont irrécupérables. Pas de rotation dans cette version." },
   { method: "put", path: "/api/v1/admin/credentials", summary: "Modifier les identifiants administrateur", tag: "Compte", access: "session", body: ChangeCredentialsSchema, success: { status: 200, description: "Identifiants mis à jour ; les autres sessions sont révoquées" }, errors: [400, 401, 403, 429] },
 
   { method: "post", path: "/api/v1/api-tokens", summary: "Créer un jeton API", tag: "Jetons API", access: "session", body: CreateTokenBody, success: { status: 201, description: "Jeton créé ; sa valeur n'est affichée qu'une fois" }, errors: [400, 401, 409], description: "Réservé à la session : un jeton API ne peut pas en créer d'autres." },
@@ -71,6 +73,14 @@ export const ROUTE_DOCS: RouteDoc[] = [
   { method: "post", path: "/api/v1/stacks/{id}/deploy", summary: "Déployer ou redéployer une révision", tag: "Opérations", access: "any", body: DeployBody, success: { status: 202, description: "Opération acceptée", ref: "OperationAccepted" }, errors: [401, 403, 404, 409, 422], description: "Applique exactement la révision demandée (courante par défaut). En-tête `Idempotency-Key` accepté : un rejeu renvoie 200 avec la même opération." },
   { method: "post", path: "/api/v1/stacks/{id}/stop", summary: "Arrêter la stack", tag: "Opérations", access: "any", success: { status: 202, description: "Opération acceptée", ref: "OperationAccepted" }, errors: [401, 403, 404, 409, 422], description: "Stoppe les conteneurs ; configuration, fichiers et volumes sont conservés." },
   { method: "post", path: "/api/v1/stacks/{id}/start", summary: "Démarrer la stack", tag: "Opérations", access: "any", success: { status: 202, description: "Opération acceptée", ref: "OperationAccepted" }, errors: [401, 403, 404, 409, 422], description: "Relance la dernière configuration déployée, jamais un brouillon." },
+  { method: "get", path: "/api/v1/backup/status", summary: "Statut de la sauvegarde Git", tag: "Sauvegarde Git", access: "any", success: { status: 200, description: "État, dernier push réussi, révisions en attente, dernière erreur" }, errors: [401], description: "Un push réussi n'est jamais présumé : `pushedRevision` n'avance qu'après un push distant confirmé." },
+  { method: "post", path: "/api/v1/backup/sync", summary: "Demander une synchronisation", tag: "Sauvegarde Git", access: "any", query: [{ name: "wait", schema: { type: "boolean", default: false }, description: "Attendre la fin de la synchronisation" }], success: { status: 202, description: "Synchronisation demandée ; statut courant" }, errors: [401, 403], description: "Lève un blocage ou un délai d'attente. Jamais de force push." },
+  { method: "put", path: "/api/v1/backup/config", summary: "Configurer le dépôt de sauvegarde", tag: "Sauvegarde Git", access: "session", body: BackupConfigBody, success: { status: 200, description: "Dépôt enregistré (le jeton n'est jamais renvoyé)" }, errors: [400, 401], description: "HTTPS + identifiant + jeton uniquement. Le jeton est chiffré avec la clé maître de la console et ne figure ni dans Git ni dans les journaux." },
+  { method: "delete", path: "/api/v1/backup/config", summary: "Désactiver la sauvegarde Git", tag: "Sauvegarde Git", access: "session", success: { status: 204, description: "Configuration et jeton supprimés" }, errors: [401] },
+  { method: "post", path: "/api/v1/backup/test", summary: "Tester la connexion au dépôt", tag: "Sauvegarde Git", access: "session", body: BackupTestBody, success: { status: 200, description: "Dépôt vide, branche à créer, sauvegarde existante ou contenu étranger" }, errors: [400, 401, 422, 502] },
+  { method: "post", path: "/api/v1/backup/restore/preview", summary: "Analyser une restauration (aucune modification)", tag: "Sauvegarde Git", access: "session", body: RestorePreviewBody, success: { status: 200, description: "Contenu de la sauvegarde, conflits et hôtes à associer" }, errors: [400, 401, 409, 422, 502], description: "Récupère le dépôt dans un espace temporaire, vérifie format, chemins et intégrité, et déchiffre les secrets avec la clé fournie. L'aperçu expire après 10 minutes." },
+  { method: "post", path: "/api/v1/backup/restore", summary: "Appliquer une restauration", tag: "Sauvegarde Git", access: "session", body: RestoreApplyBody, success: { status: 200, description: "Stacks créées et remplacées" }, errors: [400, 401, 409, 410], description: "Importe la configuration sans lancer ni arrêter de conteneur. Une stack existante n'est remplacée que sur demande explicite (nouvelle révision). Les agents ne sont pas restaurés : associez chaque hôte de la sauvegarde à un hôte enrôlé." },
+
   { method: "get", path: "/api/v1/operations", summary: "Lister les opérations", tag: "Opérations", access: "any", query: [{ name: "stackId", schema: uuid }, { name: "limit", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }], success: { status: 200, description: "Opérations récentes" }, errors: [401] },
   { method: "get", path: "/api/v1/operations/{id}", summary: "Suivre une opération", tag: "Opérations", access: "any", success: { status: 200, description: "État, journal expurgé, images déployées (digests) et état observé" }, errors: [401, 404] },
 ];
@@ -149,6 +159,7 @@ export function buildOpenApi(): Record<string, unknown> {
       version: "1.0.0",
       description:
         "API d'automatisation de la console : stacks, révisions, variables, fichiers, déploiement, jetons.\n\n" +
+        "Sauvegarde : configuration dans un dépôt Git unique (HTTPS + jeton), secrets chiffrés avec age.\n\n" +
         "Authentification : jeton API (`Authorization: Bearer cdt_…`) ou cookie de session. Un jeton `read` ne peut faire que des requêtes GET/HEAD. " +
         "Les routes de compte et de gestion des jetons sont réservées à la session. Toute modification d'une stack exige `expectedRevision` (409 en cas de conflit). " +
         "Les valeurs sensibles ne sont jamais renvoyées.",
@@ -181,8 +192,8 @@ export function buildOpenApi(): Record<string, unknown> {
             changed: { type: "boolean", description: "Faux si le contenu était identique : aucune révision créée" },
             backup: {
               type: "object",
-              properties: { status: { type: "string", enum: ["not_configured"] } },
-              description: "Statut de la sauvegarde Git (non configurée avant la Phase 3).",
+              properties: { status: { type: "string", enum: ["not_configured", "pending"] } },
+              description: "Statut de la sauvegarde Git : « pending » si un dépôt est configuré (le push est asynchrone, jamais présumé réussi).",
             },
           },
         },

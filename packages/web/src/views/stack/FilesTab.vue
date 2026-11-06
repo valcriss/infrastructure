@@ -8,6 +8,7 @@ const emit = defineEmits<{ changed: [] }>();
 const path = ref("");
 const content = ref("");
 const isNew = ref(false);
+const sensitive = ref(false);
 const loaded = ref(false);
 const error = ref("");
 const info = ref("");
@@ -21,6 +22,7 @@ async function open(p: string) {
   const rev = await api<RevisionDetail>(`/api/v1/stacks/${props.stack.id}/revisions/${props.stack.currentRevision}`);
   path.value = p;
   content.value = rev.files[p] ?? "";
+  sensitive.value = rev.sensitiveFiles.includes(p);
   isNew.value = false;
   loaded.value = true;
 }
@@ -28,6 +30,7 @@ async function open(p: string) {
 function create() {
   path.value = "";
   content.value = "";
+  sensitive.value = false;
   isNew.value = true;
   loaded.value = true;
   error.value = info.value = "";
@@ -39,7 +42,7 @@ async function save() {
   try {
     const r = await api<ChangeResult>(url(path.value), {
       method: "PUT",
-      body: JSON.stringify({ expectedRevision: props.stack.currentRevision, content: content.value }),
+      body: JSON.stringify({ expectedRevision: props.stack.currentRevision, content: content.value, sensitive: sensitive.value }),
     });
     info.value = r.changed ? `Fichier enregistré (révision ${r.revision}, non déployée).` : "Aucun changement.";
     isNew.value = false;
@@ -79,7 +82,9 @@ watch(() => props.stack.id, () => (loaded.value = false));
       <p v-if="stack.files.length === 0" class="px-3 py-3 text-sm text-slate-500">Aucun fichier.</p>
       <ul v-else class="text-sm">
         <li v-for="f in stack.files" :key="f">
-          <button class="w-full px-3 py-2 text-left font-mono text-xs hover:bg-slate-100" :class="{ 'bg-slate-100 font-semibold': f === path && !isNew }" @click="open(f)">{{ f }}</button>
+          <button class="w-full px-3 py-2 text-left font-mono text-xs hover:bg-slate-100" :class="{ 'bg-slate-100 font-semibold': f === path && !isNew }" @click="open(f)">
+            {{ f }}<span v-if="stack.sensitiveFiles.includes(f)" class="ml-1 text-amber-700" title="Chiffré dans la sauvegarde Git">🔒</span>
+          </button>
         </li>
       </ul>
       <p class="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
@@ -96,6 +101,7 @@ watch(() => props.stack.id, () => (loaded.value = false));
         <span class="font-medium">Contenu</span>
         <textarea v-model="content" rows="16" spellcheck="false" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"></textarea>
       </label>
+      <label class="flex items-center gap-2 text-sm"><input v-model="sensitive" type="checkbox" /> Fichier sensible (chiffré dans la sauvegarde Git)</label>
       <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
       <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
       <div class="flex gap-2 text-sm">

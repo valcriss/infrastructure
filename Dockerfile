@@ -17,7 +17,10 @@ FROM node:24-alpine AS console
 WORKDIR /app
 ENV NODE_ENV=production \
     WEB_DIR=/app/packages/web/dist \
-    SHARED_DIR=/shared
+    SHARED_DIR=/shared \
+    DATA_DIR=/data
+# git : sauvegarde de la configuration dans un dépôt Git (HTTPS + jeton).
+RUN apk add --no-cache git ca-certificates
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/console/package.json packages/console/
@@ -29,7 +32,7 @@ COPY --from=build /app/packages/console/dist packages/console/dist
 COPY packages/console/migrations packages/console/migrations
 COPY --from=build /app/packages/web/dist packages/web/dist
 # Le volume nommé hérite de ce propriétaire à sa première création.
-RUN mkdir -p /shared && chown node:node /shared
+RUN mkdir -p /shared /data && chown node:node /shared /data
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \

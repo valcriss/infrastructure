@@ -3,7 +3,7 @@
   "info": {
     "title": "Console Docker — API",
     "version": "1.0.0",
-    "description": "API d'automatisation de la console : stacks, révisions, variables, fichiers, déploiement, jetons.\n\nAuthentification : jeton API (`Authorization: Bearer cdt_…`) ou cookie de session. Un jeton `read` ne peut faire que des requêtes GET/HEAD. Les routes de compte et de gestion des jetons sont réservées à la session. Toute modification d'une stack exige `expectedRevision` (409 en cas de conflit). Les valeurs sensibles ne sont jamais renvoyées."
+    "description": "API d'automatisation de la console : stacks, révisions, variables, fichiers, déploiement, jetons.\n\nSauvegarde : configuration dans un dépôt Git unique (HTTPS + jeton), secrets chiffrés avec age.\n\nAuthentification : jeton API (`Authorization: Bearer cdt_…`) ou cookie de session. Un jeton `read` ne peut faire que des requêtes GET/HEAD. Les routes de compte et de gestion des jetons sont réservées à la session. Toute modification d'une stack exige `expectedRevision` (409 en cas de conflit). Les valeurs sensibles ne sont jamais renvoyées."
   },
   "servers": [
     {
@@ -28,6 +28,9 @@
     },
     {
       "name": "Opérations"
+    },
+    {
+      "name": "Sauvegarde Git"
     }
   ],
   "paths": {
@@ -78,7 +81,7 @@
     "/api/v1/setup": {
       "post": {
         "summary": "Initialiser la console (création de l'administrateur)",
-        "description": "Disponible une seule fois, avec le secret d'initialisation affiché dans les logs de la console.",
+        "description": "Disponible une seule fois, avec le secret d'initialisation affiché dans les logs de la console. Étape 1 de l'assistant : ensuite, configurer le dépôt Git (ou restaurer) puis générer la clé de restauration.",
         "tags": [
           "Compte"
         ],
@@ -120,7 +123,7 @@
         },
         "responses": {
           "201": {
-            "description": "Compte créé ; la clé de restauration est affichée une seule fois",
+            "description": "Compte créé et session ouverte",
             "content": {
               "application/json": {
                 "schema": {
@@ -323,6 +326,51 @@
           },
           "401": {
             "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Générer la clé de restauration",
+        "description": "Une seule fois : la clé privée n'est jamais stockée. Elle chiffre les secrets de la sauvegarde Git ; sans elle ils sont irrécupérables. Pas de rotation dans cette version.",
+        "tags": [
+          "Compte"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "Clé privée (affichée une seule fois) et clé publique",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1007,6 +1055,10 @@
                   "adopt": {
                     "default": false,
                     "type": "boolean"
+                  },
+                  "composeSensitive": {
+                    "default": false,
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -1181,6 +1233,9 @@
                   },
                   "compose": {
                     "type": "string"
+                  },
+                  "sensitive": {
+                    "type": "boolean"
                   },
                   "message": {
                     "type": "string",
@@ -1602,6 +1657,9 @@
                   },
                   "content": {
                     "type": "string"
+                  },
+                  "sensitive": {
+                    "type": "boolean"
                   },
                   "message": {
                     "type": "string",
@@ -2315,6 +2373,529 @@
         }
       }
     },
+    "/api/v1/backup/status": {
+      "get": {
+        "summary": "Statut de la sauvegarde Git",
+        "description": "Un push réussi n'est jamais présumé : `pushedRevision` n'avance qu'après un push distant confirmé.",
+        "tags": [
+          "Sauvegarde Git"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "État, dernier push réussi, révisions en attente, dernière erreur",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backup/sync": {
+      "post": {
+        "summary": "Demander une synchronisation",
+        "description": "Lève un blocage ou un délai d'attente. Jamais de force push.",
+        "tags": [
+          "Sauvegarde Git"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Attendre la fin de la synchronisation"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Synchronisation demandée ; statut courant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backup/config": {
+      "put": {
+        "summary": "Configurer le dépôt de sauvegarde",
+        "description": "HTTPS + identifiant + jeton uniquement. Le jeton est chiffré avec la clé maître de la console et ne figure ni dans Git ni dans les journaux.",
+        "tags": [
+          "Sauvegarde Git"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "username": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "branch": {
+                    "default": "main",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "url",
+                  "username"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dépôt enregistré (le jeton n'est jamais renvoyé)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Désactiver la sauvegarde Git",
+        "tags": [
+          "Sauvegarde Git"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": "Configuration et jeton supprimés"
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backup/test": {
+      "post": {
+        "summary": "Tester la connexion au dépôt",
+        "tags": [
+          "Sauvegarde Git"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "username": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "branch": {
+                    "default": "main",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "url",
+                  "username"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dépôt vide, branche à créer, sauvegarde existante ou contenu étranger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Requête comprise mais refusée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Erreur",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backup/restore/preview": {
+      "post": {
+        "summary": "Analyser une restauration (aucune modification)",
+        "description": "Récupère le dépôt dans un espace temporaire, vérifie format, chemins et intégrité, et déchiffre les secrets avec la clé fournie. L'aperçu expire après 10 minutes.",
+        "tags": [
+          "Sauvegarde Git"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "restorationKey": {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Contenu de la sauvegarde, conflits et hôtes à associer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Requête comprise mais refusée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Erreur",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backup/restore": {
+      "post": {
+        "summary": "Appliquer une restauration",
+        "description": "Importe la configuration sans lancer ni arrêter de conteneur. Une stack existante n'est remplacée que sur demande explicite (nouvelle révision). Les agents ne sont pas restaurés : associez chaque hôte de la sauvegarde à un hôte enrôlé.",
+        "tags": [
+          "Sauvegarde Git"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "previewId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "hostMapping": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "additionalProperties": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    }
+                  },
+                  "replaceStackIds": {
+                    "default": [],
+                    "maxItems": 1000,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    }
+                  }
+                },
+                "required": [
+                  "previewId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stacks créées et remplacées",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Erreur",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations": {
       "get": {
         "summary": "Lister les opérations",
@@ -2496,11 +3077,12 @@
               "status": {
                 "type": "string",
                 "enum": [
-                  "not_configured"
+                  "not_configured",
+                  "pending"
                 ]
               }
             },
-            "description": "Statut de la sauvegarde Git (non configurée avant la Phase 3)."
+            "description": "Statut de la sauvegarde Git : « pending » si un dépôt est configuré (le push est asynchrone, jamais présumé réussi)."
           }
         }
       },

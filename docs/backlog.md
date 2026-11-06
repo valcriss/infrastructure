@@ -47,6 +47,9 @@ Limites connues : la rotation de la clé de restauration n'est pas implémentée
 11. Auto-protection console/agent
 
 ## Phase 3 — Sauvegarde et restauration (AC 9 à 12)
+
+État (6 novembre 2026) : **terminée**, vérifiée de bout en bout sur un serveur Gitea en HTTPS (jeton, autorité de certification interne) : configuration par l'assistant, push automatique regroupé, absence de secret en clair dans le dépôt et son historique, destruction complète de la console puis restauration depuis le même dépôt avec la clé de restauration (même installation, même clé, aucun conteneur lancé, historique poursuivi en avance rapide). Décisions du porteur appliquées : authentification Git HTTPS + jeton ; compte administrateur créé par l'assistant (secret d'initialisation) et jamais sauvegardé ; dépôt configuré dans l'assistant (URL, identifiant, jeton). Reste hors périmètre : rotation de la clé de restauration, historique des révisions dans Git, test avec d'autres hébergeurs que Gitea.
+
 1. Export d'un instantané cohérent selon le schéma v1
 2. Chiffrement des secrets et classification des fichiers
 3. Commit et push, file durable avec backoff, statut local vs distant

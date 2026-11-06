@@ -24,6 +24,10 @@ export interface RevisionContent {
   compose: string;
   variables: VariableMap;
   files: Record<string, string>;
+  /** Fichiers à chiffrer dans la sauvegarde Git (sous-ensemble de `files`). */
+  sensitiveFiles: string[];
+  /** Chiffre le Compose complet dans la sauvegarde Git. */
+  composeSensitive: boolean;
 }
 
 export interface RevisionRow extends RevisionContent {
@@ -50,7 +54,21 @@ function stable(value: unknown): unknown {
 }
 
 export function digestOf(content: RevisionContent): string {
-  return createHash("sha256").update(JSON.stringify(stable(content))).digest("hex");
+  // Les champs de classification ne sont inclus que s'ils ont une valeur non
+  // par défaut : les empreintes des révisions existantes restent inchangées.
+  const base = {
+    compose: content.compose,
+    variables: content.variables,
+    files: content.files,
+    ...(content.sensitiveFiles.length > 0 ? { sensitiveFiles: [...content.sensitiveFiles].sort() } : {}),
+    ...(content.composeSensitive ? { composeSensitive: true } : {}),
+  };
+  return createHash("sha256").update(JSON.stringify(stable(base))).digest("hex");
+}
+
+/** Incrémente le compteur de configuration : déclenche une nouvelle sauvegarde Git. */
+export async function bumpConfigRevision(db: Pick<pg.Pool, "query">): Promise<void> {
+  await db.query("UPDATE config_state SET config_revision = config_revision + 1, updated_at = now()");
 }
 
 /** Valide un contenu de révision complet ; lève une HttpError 400 sinon. */
@@ -79,6 +97,10 @@ export function assertValidContent(content: RevisionContent): void {
   }
   if (total > MAX_FILES_TOTAL_BYTES) {
     throw new HttpError(400, "files_too_large", "Les fichiers associés sont trop volumineux");
+  }
+  const unknown = content.sensitiveFiles.find((p) => !(p in content.files));
+  if (unknown !== undefined) {
+    throw new HttpError(400, "invalid_file_path", `${unknown} : fichier sensible inexistant`);
   }
 }
 
@@ -126,6 +148,8 @@ interface RevisionDbRow {
   compose: string;
   variables: VariableMap;
   files: Record<string, string>;
+  sensitive_files: string[];
+  compose_sensitive: boolean;
   digest: string;
   author: string;
   message: string | null;
@@ -137,6 +161,8 @@ const toRevision = (r: RevisionDbRow): RevisionRow => ({
   compose: r.compose,
   variables: r.variables,
   files: r.files,
+  sensitiveFiles: r.sensitive_files,
+  composeSensitive: r.compose_sensitive,
   digest: r.digest,
   author: r.author,
   message: r.message,
@@ -149,7 +175,7 @@ export async function getRevision(
   revision: number,
 ): Promise<RevisionRow | null> {
   const { rows } = await db.query<RevisionDbRow>(
-    `SELECT revision, compose, variables, files, digest, author, message, created_at
+    `SELECT revision, compose, variables, files, sensitive_files, compose_sensitive, digest, author, message, created_at
      FROM stack_revisions WHERE stack_id = $1 AND revision = $2`,
     [stackId, revision],
   );
@@ -164,6 +190,8 @@ export interface CreateStackInput {
   variables: Record<string, VariableInput>;
   /** Reprend un projet Compose existant non géré (import d'une stack observée). */
   adopt?: boolean;
+  /** Chiffre le Compose dans la sauvegarde Git. */
+  composeSensitive?: boolean;
   author: string;
 }
 
@@ -175,6 +203,8 @@ export async function createStack(pool: Pool, input: CreateStackInput): Promise<
     compose: input.compose,
     variables: applyVariableChanges({}, input.variables, undefined),
     files: {},
+    sensitiveFiles: [],
+    composeSensitive: input.composeSensitive === true,
   };
   assertValidContent(content);
 
@@ -214,10 +244,20 @@ export async function createStack(pool: Pool, input: CreateStackInput): Promise<
       throw err;
     }
     await c.query(
-      `INSERT INTO stack_revisions (stack_id, revision, compose, variables, files, digest, author, message)
-       VALUES ($1, 1, $2, $3, $4, $5, $6, 'Création')`,
-      [id, content.compose, JSON.stringify(content.variables), JSON.stringify(content.files), digestOf(content), input.author],
+      `INSERT INTO stack_revisions (stack_id, revision, compose, variables, files, sensitive_files, compose_sensitive, digest, author, message)
+       VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, 'Création')`,
+      [
+        id,
+        content.compose,
+        JSON.stringify(content.variables),
+        JSON.stringify(content.files),
+        JSON.stringify(content.sensitiveFiles),
+        content.composeSensitive,
+        digestOf(content),
+        input.author,
+      ],
     );
+    await bumpConfigRevision(c);
     await audit(c, input.author, "stack.create", id, "success");
     return { id };
   });
@@ -256,18 +296,36 @@ export async function changeStack(
     const current = await getRevision(c, stackId, row.current_revision);
     if (!current) throw new Error("révision courante introuvable");
 
-    const next = mutate({ compose: current.compose, variables: current.variables, files: current.files });
+    const next = mutate({
+      compose: current.compose,
+      variables: current.variables,
+      files: current.files,
+      sensitiveFiles: current.sensitiveFiles,
+      composeSensitive: current.composeSensitive,
+    });
     assertValidContent(next);
     const digest = digestOf(next);
     if (digest === current.digest) return { revision: current.revision, changed: false };
 
     const revision = current.revision + 1;
     await c.query(
-      `INSERT INTO stack_revisions (stack_id, revision, compose, variables, files, digest, author, message)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [stackId, revision, next.compose, JSON.stringify(next.variables), JSON.stringify(next.files), digest, author, message],
+      `INSERT INTO stack_revisions (stack_id, revision, compose, variables, files, sensitive_files, compose_sensitive, digest, author, message)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        stackId,
+        revision,
+        next.compose,
+        JSON.stringify(next.variables),
+        JSON.stringify(next.files),
+        JSON.stringify(next.sensitiveFiles),
+        next.composeSensitive,
+        digest,
+        author,
+        message,
+      ],
     );
     await c.query("UPDATE stacks SET current_revision = $2, updated_at = now() WHERE id = $1", [stackId, revision]);
+    await bumpConfigRevision(c);
     await audit(c, author, "stack.revision", `${stackId}@${revision}`, "success");
     return { revision, changed: true };
   });

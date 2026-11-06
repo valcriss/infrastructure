@@ -8,6 +8,10 @@ export interface Config {
   webDir: string | null;
   /** Cookie `Secure` : à activer dès que la console est servie en HTTPS. */
   secureCookies: boolean;
+  /** Dossier persistant de la console : clé maître, dépôt de travail de la sauvegarde Git. */
+  dataDir: string;
+  /** Autorité de certification supplémentaire pour un serveur Git interne (optionnel). */
+  gitCaFile: string | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -24,5 +28,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sharedDir: env.SHARED_DIR ?? "/shared",
     webDir: env.WEB_DIR === "" ? null : (env.WEB_DIR ?? null),
     secureCookies: env.SECURE_COOKIES === "true",
+    dataDir: env.DATA_DIR ?? "/data",
+    gitCaFile: env.GIT_CA_FILE || null,
   };
 }

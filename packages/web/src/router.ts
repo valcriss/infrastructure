@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useSession } from "./stores/session";
+import BackupView from "./views/BackupView.vue";
 import HostsView from "./views/HostsView.vue";
 import LoginView from "./views/LoginView.vue";
 import SettingsView from "./views/SettingsView.vue";
@@ -18,6 +19,7 @@ export const router = createRouter({
     { path: "/stacks", component: StacksView },
     { path: "/stacks/new", component: StackNewView },
     { path: "/stacks/:id", component: StackView },
+    { path: "/backup", component: BackupView },
     { path: "/settings", component: SettingsView },
   ],
 });

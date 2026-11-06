@@ -2,17 +2,21 @@ import { buildApp } from "./app.js";
 import { ensureBootstrapToken } from "./bootstrap.js";
 import { loadConfig } from "./config.js";
 import { createPool, migrate } from "./db.js";
+import { loadOrCreateMasterKey } from "./secretbox.js";
 
 const config = loadConfig();
 const pool = createPool(config.databaseUrl);
 
 await migrate(pool, (m) => console.log(m));
-const { app, setup, ops } = await buildApp({ config, pool, logger: true });
+const masterKey = await loadOrCreateMasterKey(config.dataDir);
+const { app, setup, ops, backup } = await buildApp({ config, pool, logger: true, masterKey });
 // Une opération active avant le redémarrage a un résultat inconnu : jamais rejouée.
 await ops.markInterruptedUnknown();
 await ensureBootstrapToken(pool, config.sharedDir);
 
 await app.listen({ host: config.host, port: config.port });
+// Boucle de sauvegarde Git : démarre une fois le serveur à l'écoute.
+await backup.start();
 
 if (setup.token) {
   // Le secret n'est jamais exposé par l'API : il faut avoir accès aux logs locaux.

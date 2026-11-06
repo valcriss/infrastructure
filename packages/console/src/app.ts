@@ -12,7 +12,11 @@ import {
 import Fastify, { type FastifyInstance } from "fastify";
 import { existsSync } from "node:fs";
 import { z, ZodError } from "zod";
+import { BackupService } from "./backup.js";
+import { registerBackupRoutes } from "./backup-routes.js";
+import { GitRunner, validateRepoUrl } from "./git.js";
 import { createRestorationKey } from "./restoration.js";
+import { SecretBox } from "./secretbox.js";
 import {
   LoginLimiter,
   SESSION_COOKIE,
@@ -38,6 +42,10 @@ export interface AppDeps {
   config: Config;
   pool: Pool;
   logger?: boolean;
+  /** Clé maître locale (32 octets) qui chiffre le jeton Git. */
+  masterKey: Buffer;
+  /** Tests uniquement : autorise file:// et http:// pour le dépôt de sauvegarde. */
+  allowInsecureGit?: boolean;
 }
 
 export interface SetupState {
@@ -50,6 +58,7 @@ export interface BuiltApp {
   setup: SetupState;
   gateway: AgentGateway;
   ops: OperationsService;
+  backup: BackupService;
   /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
   routes: string[];
 }
@@ -60,7 +69,7 @@ const apiError = (code: string, message: string) => ({ error: { code, message } 
 const DUMMY_HASH =
   "$argon2id$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-export async function buildApp({ config, pool, logger = false }: AppDeps): Promise<BuiltApp> {
+export async function buildApp({ config, pool, logger = false, masterKey, allowInsecureGit = false }: AppDeps): Promise<BuiltApp> {
   const app = Fastify({ logger, bodyLimit: 1024 * 1024 });
   const limiter = new LoginLimiter();
   // `auth` : session de l'administrateur uniquement. `apiAuth` : session ou jeton API.
@@ -151,14 +160,12 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
       return reply.code(403).send(apiError("invalid_setup_token", "Secret d'initialisation invalide"));
     }
     const passwordHash = await hashPassword(body.password);
-    const restoration = await createRestorationKey();
     try {
       // La clé primaire `singleton` garantit un seul administrateur, même si
-      // deux requêtes concurrentes passent la vérification ci-dessus.
-      await pool.query(
-        "INSERT INTO admin (username, password_hash, restoration_recipient) VALUES ($1, $2, $3)",
-        [body.username, passwordHash, restoration.recipient],
-      );
+      // deux requêtes concurrentes passent la vérification ci-dessus. La clé de
+      // restauration est générée (ou reprise du dépôt Git) à l'étape suivante
+      // de l'assistant d'initialisation.
+      await pool.query("INSERT INTO admin (username, password_hash) VALUES ($1, $2)", [body.username, passwordHash]);
     } catch (err) {
       if ((err as { code?: string }).code === "23505") {
         setup.token = null;
@@ -170,13 +177,7 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     await audit(pool, body.username, "setup", null, "success");
     await ensureBootstrapToken(pool, config.sharedDir);
     await createSession(pool, config, reply);
-    // La clé privée de restauration n'est montrée qu'ici, une seule fois.
-    reply.header("Cache-Control", "no-store");
-    return reply.code(201).send({
-      username: body.username,
-      restorationKey: restoration.identity,
-      restorationRecipient: restoration.recipient,
-    });
+    return reply.code(201).send({ username: body.username });
   });
 
   // --- Session ----------------------------------------------------------------
@@ -216,6 +217,19 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
       "SELECT restoration_recipient FROM admin",
     );
     return { recipient: rows[0]?.restoration_recipient ?? null };
+  });
+
+  // Génère la clé de restauration (une seule fois). La clé privée n'est jamais
+  // stockée : elle n'est montrée qu'ici. Pas de rotation dans cette version.
+  app.post("/api/v1/admin/restoration-key", { preHandler: auth }, async (request, reply) => {
+    const key = await createRestorationKey();
+    const res = await pool.query("UPDATE admin SET restoration_recipient = $1 WHERE restoration_recipient IS NULL", [key.recipient]);
+    if ((res.rowCount ?? 0) === 0) {
+      throw new HttpError(409, "restoration_key_exists", "Une clé de restauration existe déjà (la rotation n'est pas supportée).");
+    }
+    await audit(pool, request.actor, "restoration-key.create", null, "success");
+    reply.header("Cache-Control", "no-store");
+    return reply.code(201).send({ restorationKey: key.identity, recipient: key.recipient });
   });
 
   app.put("/api/v1/admin/credentials", { preHandler: auth }, async (request, reply) => {
@@ -345,8 +359,22 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
   });
   app.addHook("onClose", async () => ops.close());
-  registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, isOnline: (id) => gateway.isOnline(id) });
+  const backup = new BackupService({
+    pool,
+    box: new SecretBox(masterKey),
+    git: new GitRunner({ dataDir: config.dataDir, caFile: config.gitCaFile, allowInsecureProtocols: allowInsecureGit }),
+    dataDir: config.dataDir,
+    log: {
+      info: (m) => app.log.info(m),
+      warn: (m) => app.log.warn(m),
+      error: (o, m) => app.log.error(o as object, m),
+    },
+    validateUrl: (url) => validateRepoUrl(url, allowInsecureGit),
+  });
+  app.addHook("onClose", async () => backup.close());
+  registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
+  registerBackupRoutes(app, { backup, session: auth, apiAuth });
 
   app.get("/agent/ws", { websocket: true }, (socket) => gateway.handle(socket));
 
@@ -362,5 +390,5 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     });
   }
 
-  return { app, setup, gateway, ops, routes };
+  return { app, setup, gateway, ops, backup, routes };
 }

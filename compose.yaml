@@ -35,10 +35,14 @@ services:
       DATABASE_URL: postgres://infra:${POSTGRES_PASSWORD}@postgres:5432/infra
       # Passer à true dès que la console est servie en HTTPS.
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      # Autorité de certification d'un serveur Git interne (optionnel) : fichier monté dans le conteneur.
+      GIT_CA_FILE: ${GIT_CA_FILE:-}
     ports:
       - "${CONSOLE_PORT:-8080}:8080"
     volumes:
       - shared:/shared
+      # Clé maître (chiffre le jeton Git) et dépôt de travail de la sauvegarde.
+      - console-data:/data
     networks: [internal]
 
   agent:
@@ -73,6 +77,7 @@ volumes:
   postgres-data:
   agent-data:
   shared:
+  console-data:
 
 networks:
   internal:

@@ -95,6 +95,8 @@ export interface StackDetail extends StackSummary {
   compose: string;
   variables: VariableView[];
   files: string[];
+  sensitiveFiles: string[];
+  composeSensitive: boolean;
   containers: Container[];
 }
 
@@ -110,6 +112,8 @@ export interface RevisionDetail extends RevisionSummary {
   compose: string;
   variables: VariableView[];
   files: Record<string, string>;
+  sensitiveFiles: string[];
+  composeSensitive: boolean;
 }
 
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "unknown";
@@ -145,4 +149,42 @@ export interface ObservedProject {
   total: number;
   running: number;
   services: { service: string; image: string }[];
+}
+
+export type BackupState = "not_configured" | "disabled" | "ok" | "pending" | "error" | "blocked";
+
+export interface BackupStatus {
+  state: BackupState;
+  configured: boolean;
+  enabled: boolean;
+  repoUrl: string | null;
+  username: string | null;
+  branch: string | null;
+  configRevision: number;
+  pushedRevision: number;
+  pendingRevisions: number;
+  localCommit: string | null;
+  pushedCommit: string | null;
+  lastPushAt: string | null;
+  lastError: { code: string; message: string; at: string } | null;
+  nextRetryAt: string | null;
+  hasRestorationKey: boolean;
+  installationId: string;
+}
+
+export interface ConnectionTest {
+  remote: "empty" | "branch_missing" | "has_backup" | "foreign_content";
+  backup: { installationId: string; configRevision: number; formatVersion: number; sameInstallation: boolean } | null;
+}
+
+export interface RestorePreview {
+  previewId: string;
+  expiresAt: string;
+  installationId: string;
+  configRevision: number;
+  hasSecrets: boolean;
+  restorationKeyWillChange: boolean;
+  stacks: { id: string; name: string; hostId: string; description: string; variables: number; files: number; conflict: "none" | "same_id" | "same_name" }[];
+  backupHosts: { id: string; name: string }[];
+  availableHosts: { id: string; name: string }[];
 }

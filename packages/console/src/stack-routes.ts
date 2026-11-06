@@ -36,8 +36,16 @@ export const CreateBody = z.object({
   variables: z.record(z.string(), VariableInput).default({}),
   /** Importe un projet Compose déjà présent sur l'hôte au lieu de le refuser. */
   adopt: z.boolean().default(false),
+  /** Chiffre le Compose dans la sauvegarde Git. */
+  composeSensitive: z.boolean().default(false),
 });
-export const ComposeBody = z.object({ expectedRevision: Expected, compose: z.string(), message: Message });
+export const ComposeBody = z.object({
+  expectedRevision: Expected,
+  compose: z.string(),
+  /** Chiffre (true) ou non (false) le Compose dans la sauvegarde Git ; inchangé si absent. */
+  sensitive: z.boolean().optional(),
+  message: Message,
+});
 export const VariablesBody = z.object({
   expectedRevision: Expected,
   set: z.record(z.string(), VariableInput).optional(),
@@ -50,7 +58,13 @@ export const ServiceEnvBody = z.object({
   unset: z.array(z.string()).max(200).optional(),
   message: Message,
 });
-export const FileBody = z.object({ expectedRevision: Expected, content: z.string(), message: Message });
+export const FileBody = z.object({
+  expectedRevision: Expected,
+  content: z.string(),
+  /** Chiffre (true) ou non (false) ce fichier dans la sauvegarde Git ; inchangé si absent. */
+  sensitive: z.boolean().optional(),
+  message: Message,
+});
 export const DeployBody = z
   .object({
     revision: z.number().int().positive().optional(),
@@ -60,8 +74,11 @@ export const DeployBody = z
   .default({});
 const IdParams = z.object({ id: z.uuid() });
 
-/** Dans cette première version, aucune sauvegarde Git n'existe encore (Phase 3). */
-const BACKUP = { status: "not_configured" } as const;
+/** Ce que les routes de stacks attendent du service de sauvegarde. */
+export interface BackupStatusProvider {
+  /** « pending » dès qu'un dépôt est configuré : le push est asynchrone, jamais présumé réussi. */
+  changeStatus(): Promise<"not_configured" | "pending">;
+}
 
 interface StackListRow {
   id: string;
@@ -84,10 +101,12 @@ export function registerStackRoutes(
     auth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     ops: OperationsService;
     logStreams: LogStreams;
+    backup: BackupStatusProvider;
     isOnline: (hostId: string) => boolean;
   },
 ): void {
   const { pool, auth, ops } = deps;
+  const backupInfo = async () => ({ status: await deps.backup.changeStatus() });
 
   const summarize = (r: StackListRow) => {
     const mine = (r.inventory ?? []).filter((c) => c.composeProject === r.name);
@@ -134,7 +153,7 @@ export function registerStackRoutes(
   app.post("/api/v1/stacks", { preHandler: auth }, async (request, reply) => {
     const body = CreateBody.parse(request.body);
     const { id } = await createStack(pool, { ...body, author: request.actor });
-    return reply.code(201).send({ id, revision: 1, backup: BACKUP });
+    return reply.code(201).send({ id, revision: 1, backup: await backupInfo() });
   });
 
   // Projets Compose observés sur un hôte : gérés par une stack ou à importer.
@@ -181,6 +200,8 @@ export function registerStackRoutes(
       compose: rev.compose,
       variables: maskVariables(rev.variables),
       files: Object.keys(rev.files).sort(),
+      sensitiveFiles: [...rev.sensitiveFiles].sort(),
+      composeSensitive: rev.composeSensitive,
       containers: mine,
     };
   });
@@ -191,8 +212,9 @@ export function registerStackRoutes(
     const result = await changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? "Compose modifié", (c) => ({
       ...c,
       compose: body.compose,
+      composeSensitive: body.sensitive ?? c.composeSensitive,
     }));
-    return { ...result, backup: BACKUP };
+    return { ...result, backup: await backupInfo() };
   });
 
   app.patch("/api/v1/stacks/:id/variables", { preHandler: auth }, async (request) => {
@@ -202,7 +224,7 @@ export function registerStackRoutes(
       ...c,
       variables: applyVariableChanges(c.variables, body.set, body.unset),
     }));
-    return { ...result, backup: BACKUP };
+    return { ...result, backup: await backupInfo() };
   });
 
   // Variables d'environnement d'un service : édition du YAML en préservant sa forme.
@@ -236,7 +258,7 @@ export function registerStackRoutes(
         }
       },
     );
-    return { ...result, backup: BACKUP };
+    return { ...result, backup: await backupInfo() };
   });
 
   const filePath = (request: FastifyRequest): string => {
@@ -253,8 +275,14 @@ export function registerStackRoutes(
     const result = await changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? `Fichier ${path} enregistré`, (c) => ({
       ...c,
       files: { ...c.files, [path]: body.content },
+      sensitiveFiles:
+        body.sensitive === undefined
+          ? c.sensitiveFiles
+          : body.sensitive
+            ? [...new Set([...c.sensitiveFiles, path])]
+            : c.sensitiveFiles.filter((p) => p !== path),
     }));
-    return { ...result, backup: BACKUP };
+    return { ...result, backup: await backupInfo() };
   });
 
   app.delete("/api/v1/stacks/:id/files/*", { preHandler: auth }, async (request) => {
@@ -264,9 +292,9 @@ export function registerStackRoutes(
     const result = await changeStack(pool, id, expectedRevision, request.actor, `Fichier ${path} supprimé`, (c) => {
       const files = { ...c.files };
       delete files[path];
-      return { ...c, files };
+      return { ...c, files, sensitiveFiles: c.sensitiveFiles.filter((p) => p !== path) };
     });
-    return { ...result, backup: BACKUP };
+    return { ...result, backup: await backupInfo() };
   });
 
   app.get("/api/v1/stacks/:id/revisions", { preHandler: auth }, async (request) => {
@@ -301,6 +329,8 @@ export function registerStackRoutes(
       compose: rev.compose,
       variables: maskVariables(rev.variables),
       files: rev.files,
+      sensitiveFiles: [...rev.sensitiveFiles].sort(),
+      composeSensitive: rev.composeSensitive,
     };
   });
 

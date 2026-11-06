@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { PROTOCOL_VERSION } from "@infra/shared";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -24,7 +25,8 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
     await migrate(pool);
     sharedDir = await mkdtemp(join(tmpdir(), "infra-shared-"));
     built = await buildApp({
-      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false },
+      masterKey: randomBytes(32),
+      config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir: join(tmpdir(), "infra-data-test"), gitCaFile: null },
       pool,
     });
     baseUrl = await built.app.listen({ host: "127.0.0.1", port: 0 });
@@ -75,13 +77,10 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
     cookie = (ok.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     expect(cookie).toContain("sid=");
 
-    // La clé de restauration est remise une seule fois ; seule sa partie publique est stockée.
-    const body = (await ok.json()) as { restorationKey: string; restorationRecipient: string };
-    expect(body.restorationKey).toMatch(/^AGE-SECRET-KEY-/);
-    const stored = (await pool.query("SELECT restoration_recipient FROM admin")).rows[0];
-    expect(stored.restoration_recipient).toBe(body.restorationRecipient);
-    const dump = JSON.stringify((await pool.query("SELECT * FROM admin")).rows);
-    expect(dump).not.toContain(body.restorationKey);
+    // L'initialisation ne génère plus de clé : elle est créée (ou reprise du dépôt Git)
+    // à l'étape suivante de l'assistant.
+    expect(await ok.json()).toEqual({ username: expect.any(String) });
+    expect((await pool.query("SELECT restoration_recipient FROM admin")).rows[0].restoration_recipient).toBeNull();
   });
 
   it("ferme la route d'initialisation après coup", async () => {
@@ -188,11 +187,27 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
     expect((await post("/api/v1/session", { username: "root", password: "nouveau-mot-de-passe-2" })).status).toBe(200);
   });
 
-  it("expose la clé publique de restauration uniquement aux utilisateurs connectés", async () => {
+  it("génère la clé de restauration une seule fois et n'en conserve que la partie publique", async () => {
     expect((await fetch(`${baseUrl}/api/v1/admin/restoration-key`)).status).toBe(401);
-    const res = await fetch(`${baseUrl}/api/v1/admin/restoration-key`, { headers: { cookie } });
-    const { recipient } = (await res.json()) as { recipient: string };
+    expect((await fetch(`${baseUrl}/api/v1/admin/restoration-key`, { method: "POST" })).status).toBe(401);
+    const before = (await (await fetch(`${baseUrl}/api/v1/admin/restoration-key`, { headers: { cookie } })).json()) as { recipient: string | null };
+    expect(before.recipient).toBeNull();
+
+    const created = await fetch(`${baseUrl}/api/v1/admin/restoration-key`, { method: "POST", headers: { cookie } });
+    expect(created.status).toBe(201);
+    expect(created.headers.get("cache-control")).toBe("no-store");
+    const { restorationKey, recipient } = (await created.json()) as { restorationKey: string; recipient: string };
+    expect(restorationKey).toMatch(/^AGE-SECRET-KEY-/);
     expect(recipient).toMatch(/^age1/);
+
+    const stored = await pool.query("SELECT restoration_recipient FROM admin");
+    expect(stored.rows[0].restoration_recipient).toBe(recipient);
+    expect(JSON.stringify((await pool.query("SELECT * FROM admin")).rows)).not.toContain(restorationKey);
+
+    const again = await fetch(`${baseUrl}/api/v1/admin/restoration-key`, { method: "POST", headers: { cookie } });
+    expect(again.status).toBe(409);
+    const read = (await (await fetch(`${baseUrl}/api/v1/admin/restoration-key`, { headers: { cookie } })).json()) as { recipient: string };
+    expect(read.recipient).toBe(recipient);
   });
 
   it("n'enrôle pas avec un jeton manuel expiré ou inconnu", async () => {
