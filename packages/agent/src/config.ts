@@ -11,6 +11,10 @@ export interface AgentConfig {
   trivyImage: string;
   trivyMemory: string;
   trivyMaxImageBytes: number;
+  /** Projets Compose que la console ne peut ni arrêter ni redéployer (en plus du projet de l'agent lui-même). */
+  protectedProjects: string[];
+  /** Conteneur de l'agent (HOSTNAME dans Docker), pour retrouver son projet Compose. */
+  selfContainer: string | undefined;
 }
 
 export const AGENT_VERSION = "0.0.0";
@@ -37,5 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     trivyImage: env.TRIVY_IMAGE ?? DEFAULT_TRIVY_IMAGE,
     trivyMemory: /^[0-9]+[kmg]$/i.test(env.TRIVY_MEMORY ?? "") ? (env.TRIVY_MEMORY as string) : "2g",
     trivyMaxImageBytes: Number(env.TRIVY_MAX_IMAGE_BYTES) > 0 ? Number(env.TRIVY_MAX_IMAGE_BYTES) : 5 * 1024 ** 3,
+    protectedProjects: (env.PROTECTED_PROJECTS ?? "").split(",").map((p) => p.trim()).filter(Boolean),
+    selfContainer: env.HOSTNAME,
   };
 }

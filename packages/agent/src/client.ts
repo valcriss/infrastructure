@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import { AGENT_VERSION, TRIVY_CACHE_VOLUME, type AgentConfig } from "./config.js";
 import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
+import { ReplayGuard, SelfProtection } from "./guard.js";
 import { LogStreamer } from "./logs.js";
 import { MetricsCollector } from "./metrics.js";
 import { TrivyScanner } from "./scanner.js";
@@ -63,6 +64,8 @@ export class AgentClient {
   private readonly executor: Executor;
   private readonly logs: LogStreamer;
   private readonly scanner: TrivyScanner;
+  private readonly guard = new ReplayGuard();
+  private readonly protection: SelfProtection;
   /** Résultats terminés pendant une coupure : renvoyés à la reconnexion. */
   private unsent: AgentMessage[] = [];
 
@@ -74,6 +77,7 @@ export class AgentClient {
       workspaceDir: config.workspaceDir,
       dockerSocket: config.dockerSocket,
     });
+    this.protection = new SelfProtection(config.dockerSocket, config.selfContainer, config.protectedProjects);
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
     this.scanner = new TrivyScanner({
       workspaceDir: config.workspaceDir,
@@ -194,13 +198,22 @@ export class AgentClient {
               // Premier relevé : sert de référence pour le calcul du CPU du suivant.
               void sendMetrics();
               break;
-            case "scan":
+            case "scan": {
+              const verdict = this.guard.check(msg.scanId, msg.expiresAt);
+              if (verdict !== "ok") {
+                this.log(`demande de scan ${verdict === "replayed" ? "rejouée" : "expirée"} ignorée (${msg.scanId})`);
+                if (verdict === "expired") {
+                  this.emit({ type: "scan_result", scanId: msg.scanId, status: "failed", error: "Demande de scan expirée (vérifiez l'horloge de l'hôte)." });
+                }
+                break;
+              }
               // Un scan à la fois ; le résultat repasse par emit() (conservé si la connexion est coupée).
               void this.scanner
                 .scan(msg)
                 .then((result) => this.emit(result))
                 .catch((err: unknown) => this.log(`erreur de scan : ${(err as Error).message}`));
               break;
+            }
             case "logs_start":
               void this.logs
                 .start(msg, (m) => this.emit(m))
@@ -209,12 +222,29 @@ export class AgentClient {
             case "logs_stop":
               this.logs.stop(msg.streamId);
               break;
-            case "run":
+            case "run": {
+              const verdict = this.guard.check(msg.operationId, msg.expiresAt);
+              if (verdict === "replayed") {
+                // Ne répond pas : un « échec » écraserait le vrai résultat de l'opération déjà traitée.
+                this.log(`demande rejouée ignorée (${msg.operationId})`);
+                break;
+              }
+              const refuse = (error: string): void => this.emit({ type: "operation_result", operationId: msg.operationId, status: "failed", error });
+              if (verdict === "expired") {
+                refuse("Demande expirée avant exécution (vérifiez l'horloge de l'hôte).");
+                break;
+              }
               // Traité en tâche de fond ; le résultat repasse par emit().
-              void this.executor
-                .run(msg, (m) => this.emit(m))
+              void this.protection
+                .isProtected(msg.stack.project)
+                .then((isProtected) =>
+                  isProtected
+                    ? refuse(`La stack « ${msg.stack.project} » fait tourner la console ou son agent : elle ne peut pas être arrêtée ni redéployée depuis son propre interface.`)
+                    : this.executor.run(msg, (m) => this.emit(m)),
+                )
                 .catch((err: unknown) => this.log(`erreur d'exécution : ${(err as Error).message}`));
               break;
+            }
             case "request_inventory":
               await sendInventory();
               break;

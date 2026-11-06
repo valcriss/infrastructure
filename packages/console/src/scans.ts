@@ -221,7 +221,7 @@ export class ScanService {
     );
     const next = rows[0];
     if (!next) return;
-    const sent = this.transport.send(hostId, { type: "scan", scanId: next.id, imageId: next.image_id, imageRef: next.image_ref });
+    const sent = this.transport.send(hostId, { type: "scan", scanId: next.id, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), imageId: next.image_id, imageRef: next.image_ref });
     if (!sent) {
       await this.pool.query(
         "UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Agent hors ligne : scan non envoyé.' WHERE id = $1",

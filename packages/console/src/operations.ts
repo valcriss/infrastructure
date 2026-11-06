@@ -211,6 +211,7 @@ export class OperationsService {
     const message: RunMessage = {
       type: "run",
       operationId: id,
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       action: input.type,
       stack: { id: input.stackId, project: s.name },
       ...(payload ? { revision: payload } : {}),

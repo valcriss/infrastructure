@@ -76,6 +76,8 @@ Limites connues : la rotation de la clé de restauration n'est pas implémentée
 5. Abstraction registre, tests sur registre local contrôlé
 
 ## Phase 6 — Livraison
+
+État (6 novembre 2026) : **en cours**. Fait : revue de sécurité du §14 (écarts corrigés : demandes rejouées ou expirées refusées par l'agent, protection de la stack de la console et de l'agent contre leur propre interface ; section « Sécurité » du README). Reste : durcissement et tests de bout en bout, guide d'exploitation, exemples d'appels API.
 1. Durcissement erreurs et reconnexions, tests de bout en bout
 2. Documentation : installation, mise à jour, dépannage, restauration, limites du MVP
 3. Contrat OpenAPI publié et exemples d'appels

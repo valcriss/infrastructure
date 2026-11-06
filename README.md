@@ -94,6 +94,18 @@ Page « Images » (`GET /api/v1/images`) et onglet « Sécurité et versions » 
 - **Divergence** : si le dépôt a évolué ailleurs, ou s'il appartient à une autre installation, la synchronisation est **bloquée** (aucun écrasement) jusqu'à action explicite. Les fichiers étrangers du dépôt (README…) sont préservés.
 - **Restauration** (assistant d'initialisation, ou API `POST /api/v1/backup/restore/preview` puis `/restore`) : le dépôt est analysé dans un espace temporaire (format, chemins, liens symboliques, intégrité), déchiffré avec la clé fournie, puis importé **sans démarrer ni arrêter de conteneur**. Les agents ne sont pas restaurés : chaque hôte de la sauvegarde est associé à un hôte enrôlé. Les stacks restaurées sont « jamais déployées » ; leur premier déploiement peut reprendre un projet Compose déjà présent. La console reprend l'identifiant d'installation et la clé de restauration du dépôt, et continue son historique en avance rapide. Sur une installation existante, les stacks en conflit ne sont remplacées que sur demande explicite (nouvelle révision, rien n'est supprimé).
 
+## Sécurité
+
+Revue du §14 de [project.md](project.md) (6 novembre 2026) :
+
+- **Compte** : un seul administrateur, mot de passe haché en Argon2id (jamais chiffré). Sessions en cookie `HttpOnly`, `SameSite=Strict` (`Secure` avec `SECURE_COOKIES=true`), stockées par empreinte. Les requêtes modifiantes dont l'en-tête `Origin` ne correspond pas à l'hôte sont refusées ; aucun CORS n'est ouvert. En-têtes `Content-Security-Policy`, `X-Frame-Options` et `nosniff`. Les tentatives de connexion et d'authentification par jeton échouées sont limitées (429).
+- **Jetons** : API et enrôlement aléatoires, affichés une fois, stockés par empreinte SHA-256, révocables, avec expiration.
+- **Agent** : connexion sortante authentifiée par un secret propre à l'agent ; `wss://` obligatoire hors réseau de confiance. L'agent n'accepte que les messages typés du protocole (aucun shell, aucune commande arbitraire), lance `docker` avec des arguments structurés, des délais et des sorties bornées. **Chaque demande porte un identifiant et une échéance de 10 minutes : l'agent ignore une demande déjà reçue et refuse une demande expirée** (l'horloge de l'hôte doit donc être à l'heure).
+- **Auto-protection** : l'agent refuse d'arrêter ou de redéployer le projet Compose qui le fait tourner (détecté depuis son propre conteneur) ainsi que ceux listés dans `PROTECTED_PROJECTS` (séparés par des virgules). Le projet de la console doit y figurer s'il tourne sur un autre projet Compose que l'agent. Le remplacement automatique de l'outil par lui-même n'est pas proposé : mise à jour manuelle (`docker compose pull && up -d`).
+- **Fichiers** : chemins, liens symboliques et archives contrôlés à l'import et à la restauration ; le `.env` d'une stack contient ses secrets en clair dans l'espace de travail de l'hôte (permissions 0600, nécessaire à Compose) : quiconque est root sur l'hôte les lit ; secrets masqués dans les journaux.
+- **Exposition** : seul le port de la console est publié ; PostgreSQL et le socket Docker ne le sont pas. La console tourne sans privilèges (utilisateur `node`).
+- **À savoir** : le contrôle du démon Docker donne des capacités très élevées sur l'hôte, **même avec un socket monté en lecture seule** (créer un conteneur privilégié équivaut à root). L'agent s'exécute donc en root et doit être traité comme tel. Les scans Trivy, eux, n'ont pas accès au socket.
+
 ## Développement
 
 Node.js 24 (voir `mise.toml`) et npm.

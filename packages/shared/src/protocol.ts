@@ -273,6 +273,8 @@ export type RevisionPayload = z.infer<typeof RevisionPayloadSchema>;
 export const RunSchema = z.object({
   type: z.literal("run"),
   operationId: z.uuid(),
+  /** Échéance de la demande : l'agent refuse une demande reçue après cette date. */
+  expiresAt: z.iso.datetime().optional(),
   action: z.enum(["deploy", "stop", "start"]),
   stack: z.object({ id: z.uuid(), project: z.string() }),
   /** Obligatoire pour `deploy`, absent pour `stop` et `start`. */
@@ -310,6 +312,7 @@ export const LogsStopSchema = z.object({
 export const ScanSchema = z.object({
   type: z.literal("scan"),
   scanId: z.uuid(),
+  expiresAt: z.iso.datetime().optional(),
   imageId: z.string().min(8).max(100).regex(/^(sha256:)?[0-9a-f]{12,64}$/),
   /** Référence lisible, pour les journaux uniquement. */
   imageRef: z.string().max(300),
