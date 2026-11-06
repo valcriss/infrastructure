@@ -7,7 +7,9 @@ const config = loadConfig();
 const pool = createPool(config.databaseUrl);
 
 await migrate(pool, (m) => console.log(m));
-const { app, setup } = await buildApp({ config, pool, logger: true });
+const { app, setup, ops } = await buildApp({ config, pool, logger: true });
+// Une opération active avant le redémarrage a un résultat inconnu : jamais rejouée.
+await ops.markInterruptedUnknown();
 await ensureBootstrapToken(pool, config.sharedDir);
 
 await app.listen({ host: config.host, port: config.port });

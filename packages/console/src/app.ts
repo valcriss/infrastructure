@@ -26,6 +26,9 @@ import type { Config } from "./config.js";
 import { hashPassword, randomToken, safeEqualHex, sha256, verifyPassword } from "./crypto.js";
 import { audit, type Pool } from "./db.js";
 import { AgentGateway } from "./gateway.js";
+import { HttpError } from "./http-error.js";
+import { OperationsService } from "./operations.js";
+import { registerStackRoutes } from "./stack-routes.js";
 
 export interface AppDeps {
   config: Config;
@@ -42,6 +45,7 @@ export interface BuiltApp {
   app: FastifyInstance;
   setup: SetupState;
   gateway: AgentGateway;
+  ops: OperationsService;
 }
 
 const apiError = (code: string, message: string) => ({ error: { code, message } });
@@ -94,8 +98,19 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
   });
 
   app.setErrorHandler(async (err: Error & { statusCode?: number }, _request, reply) => {
+    if (err instanceof HttpError) {
+      return reply.code(err.status).send({
+        error: { code: err.code, message: err.message, ...(err.details !== undefined ? { details: err.details } : {}) },
+      });
+    }
     if (err instanceof ZodError) {
-      return reply.code(400).send(apiError("validation_error", "Requête invalide"));
+      return reply.code(400).send({
+        error: {
+          code: "validation_error",
+          message: "Requête invalide",
+          details: err.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+        },
+      });
     }
     if (err.statusCode && err.statusCode < 500) {
       return reply.code(err.statusCode).send(apiError("bad_request", err.message));
@@ -299,6 +314,11 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     return reply.code(201).send({ token, expiresAt: rows[0]?.expires_at.toISOString() });
   });
 
+  const ops = new OperationsService(pool, gateway);
+  gateway.setHandlers(ops);
+  app.addHook("onClose", async () => ops.close());
+  registerStackRoutes(app, { pool, auth, ops, isOnline: (id) => gateway.isOnline(id) });
+
   app.get("/agent/ws", { websocket: true }, (socket) => gateway.handle(socket));
 
   // --- Frontend statique ------------------------------------------------------
@@ -313,5 +333,5 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
     });
   }
 
-  return { app, setup, gateway };
+  return { app, setup, gateway, ops };
 }

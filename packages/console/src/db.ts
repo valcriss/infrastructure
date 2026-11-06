@@ -48,7 +48,7 @@ export async function migrate(pool: Pool, log: (msg: string) => void = () => {})
 }
 
 export async function audit(
-  pool: Pool,
+  pool: Pick<pg.Pool, "query">,
   actor: string,
   action: string,
   target: string | null,

@@ -52,12 +52,21 @@ services:
     environment:
       CONSOLE_URL: ws://console:8080/agent/ws
       AGENT_HOSTNAME: hôte-local
+      WORKSPACE_DIR: ${WORKSPACE_DIR:-/var/lib/console-docker/workspace}
     volumes:
       # Le contrôle du démon Docker donne des capacités très élevées sur l'hôte,
       # même avec un montage présenté comme lecture seule.
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-data:/data
       - shared:/shared:ro
+      # Espace de travail des stacks, monté au MÊME chemin absolu côté hôte et
+      # côté conteneur : le démon Docker de l'hôte résout les bind mounts
+      # relatifs des Compose à partir de ce chemin.
+      - type: bind
+        source: ${WORKSPACE_DIR:-/var/lib/console-docker/workspace}
+        target: ${WORKSPACE_DIR:-/var/lib/console-docker/workspace}
+        bind:
+          create_host_path: true
     networks: [internal]
 
 volumes:

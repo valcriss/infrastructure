@@ -6,7 +6,9 @@ import {
   PROTOCOL_VERSION,
   type ConsoleMessage,
   type Inventory,
+  type OperationResultSchema,
 } from "@infra/shared";
+import type { z } from "zod";
 import type { FastifyBaseLogger } from "fastify";
 import type { WebSocket } from "ws";
 import { removeBootstrapFile } from "./bootstrap.js";
@@ -14,6 +16,13 @@ import { randomToken, safeEqualHex, sha256 } from "./crypto.js";
 import { audit, type Pool } from "./db.js";
 
 const HELLO_TIMEOUT_MS = 10_000;
+
+/** Retours des agents vers le service d'opérations. */
+export interface GatewayHandlers {
+  onLog(hostId: string, operationId: string, text: string): Promise<void>;
+  onResult(hostId: string, msg: z.infer<typeof OperationResultSchema>): Promise<void>;
+  onDisconnect(hostId: string): Promise<void>;
+}
 
 interface Connection {
   socket: WebSocket;
@@ -27,6 +36,7 @@ interface Connection {
 export class AgentGateway {
   private readonly connections = new Map<string, Connection>();
   private readonly reaper: NodeJS.Timeout;
+  private handlers: GatewayHandlers | null = null;
 
   constructor(
     private readonly pool: Pool,
@@ -37,8 +47,20 @@ export class AgentGateway {
     this.reaper.unref();
   }
 
+  setHandlers(handlers: GatewayHandlers): void {
+    this.handlers = handlers;
+  }
+
   isOnline(hostId: string): boolean {
     return this.connections.has(hostId);
+  }
+
+  /** Envoie une commande typée à l'agent ; faux si l'hôte n'est pas connecté. */
+  send(hostId: string, message: ConsoleMessage): boolean {
+    const conn = this.connections.get(hostId);
+    if (!conn || conn.socket.readyState !== conn.socket.OPEN) return false;
+    conn.socket.send(JSON.stringify(message));
+    return true;
   }
 
   disconnect(hostId: string): void {
@@ -63,7 +85,7 @@ export class AgentGateway {
     }
   }
 
-  private send(socket: WebSocket, message: ConsoleMessage): void {
+  private sendTo(socket: WebSocket, message: ConsoleMessage): void {
     socket.send(JSON.stringify(message));
   }
 
@@ -72,7 +94,7 @@ export class AgentGateway {
     code: "bad_request" | "unauthorized" | "protocol_mismatch" | "revoked",
     message: string,
   ): void {
-    this.send(socket, { type: "error", code, message });
+    this.sendTo(socket, { type: "error", code, message });
     socket.close(1008, code);
   }
 
@@ -111,7 +133,7 @@ export class AgentGateway {
              WHERE id = $1`,
             [hostId, msg.agentVersion, JSON.stringify(msg.capabilities)],
           );
-          this.send(socket, {
+          this.sendTo(socket, {
             type: "welcome",
             protocol: PROTOCOL_VERSION,
             agentId: hostId,
@@ -133,6 +155,12 @@ export class AgentGateway {
           case "inventory":
             await this.storeInventory(hostId, msg.inventory);
             break;
+          case "operation_log":
+            await this.handlers?.onLog(hostId, msg.operationId, msg.text);
+            break;
+          case "operation_result":
+            await this.handlers?.onResult(hostId, msg);
+            break;
           case "hello":
             this.fail(socket, "bad_request", "hello déjà reçu");
             break;
@@ -145,8 +173,14 @@ export class AgentGateway {
 
     socket.on("close", () => {
       clearTimeout(helloTimer);
-      if (hostId && this.connections.get(hostId)?.socket === socket) {
-        this.connections.delete(hostId);
+      if (hostId) {
+        if (this.connections.get(hostId)?.socket === socket) this.connections.delete(hostId);
+        // Aucune reconnexion déjà établie : les opérations en cours deviennent « inconnues ».
+        if (!this.connections.has(hostId)) {
+          void this.handlers?.onDisconnect(hostId).catch((err: unknown) =>
+            this.log.error({ err }, "erreur lors de la perte de connexion d'un agent"),
+          );
+        }
       }
     });
     socket.on("error", (err) => this.log.warn({ err }, "erreur de socket agent"));

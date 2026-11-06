@@ -5,6 +5,8 @@ export interface AgentConfig {
   enrollmentToken: string | null;
   dockerSocket: string;
   hostname: string;
+  /** Doit être monté au même chemin absolu dans le conteneur et sur l'hôte. */
+  workspaceDir: string;
 }
 
 export const AGENT_VERSION = "0.0.0";
@@ -23,5 +25,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     enrollmentToken: env.ENROLLMENT_TOKEN?.trim() || null,
     dockerSocket: env.DOCKER_SOCKET ?? "/var/run/docker.sock",
     hostname: env.AGENT_HOSTNAME ?? process.env.HOSTNAME ?? "agent",
+    workspaceDir: env.WORKSPACE_DIR ?? "/var/lib/console-docker/workspace",
   };
 }

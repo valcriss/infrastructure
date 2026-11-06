@@ -28,8 +28,13 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    // Les tests lisent des réponses JSON non typées.
+    files: ["**/*.test.ts"],
+    rules: { "@typescript-eslint/no-explicit-any": "off" },
+  },
+  {
     rules: {
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", ignoreRestSiblings: true }],
       "@typescript-eslint/no-floating-promises": "off",
     },
   },

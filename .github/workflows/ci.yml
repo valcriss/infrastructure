@@ -27,6 +27,8 @@ jobs:
     env:
       # Base jetable : les tests d'intégration y recréent le schéma public.
       TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/test
+      # Tests de l'agent avec le vrai Docker de l'exécuteur (bind mounts relatifs, etc.).
+      DOCKER_INTEGRATION: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { AGENT_VERSION, type AgentConfig } from "./config.js";
 import { collectInventory } from "./docker.js";
+import { Executor } from "./executor.js";
 
 interface Credentials {
   agentId: string;
@@ -55,11 +56,29 @@ async function readEnrollmentToken(config: AgentConfig): Promise<string | null> 
 export class AgentClient {
   private stopped = false;
   private socket: WebSocket | null = null;
+  private readonly executor: Executor;
+  /** Résultats terminés pendant une coupure : renvoyés à la reconnexion. */
+  private unsent: AgentMessage[] = [];
 
   constructor(
     private readonly config: AgentConfig,
     private readonly log: (msg: string) => void = console.log,
-  ) {}
+  ) {
+    this.executor = new Executor({
+      workspaceDir: config.workspaceDir,
+      dockerSocket: config.dockerSocket,
+    });
+  }
+
+  /** Envoie un message sur la connexion courante ; conserve les résultats si elle est coupée. */
+  private emit(message: AgentMessage): void {
+    const ws = this.socket;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(message));
+    } else if (message.type === "operation_result") {
+      this.unsent.push(message);
+    }
+  }
 
   stop(): void {
     this.stopped = true;
@@ -117,7 +136,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy"],
           auth: auth,
         });
       });
@@ -142,7 +161,14 @@ export class AgentClient {
               }
               heartbeat = setInterval(() => send({ type: "heartbeat" }), msg.heartbeatIntervalSec * 1000);
               inventoryTimer = setInterval(() => void sendInventory(), msg.inventoryIntervalSec * 1000);
+              for (const pending of this.unsent.splice(0)) this.emit(pending);
               await sendInventory();
+              break;
+            case "run":
+              // Traité en tâche de fond ; le résultat repasse par emit().
+              void this.executor
+                .run(msg, (m) => this.emit(m))
+                .catch((err: unknown) => this.log(`erreur d'exécution : ${(err as Error).message}`));
               break;
             case "request_inventory":
               await sendInventory();

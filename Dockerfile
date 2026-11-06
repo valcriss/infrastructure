@@ -43,6 +43,8 @@ FROM node:24-alpine AS agent
 WORKDIR /app
 ENV NODE_ENV=production \
     STATE_DIR=/data
+# CLI Docker et plugin Compose : l'agent pilote `docker compose` par arguments structurés.
+RUN apk add --no-cache docker-cli docker-cli-compose
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/console/package.json packages/console/

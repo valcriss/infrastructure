@@ -62,10 +62,44 @@ export const InventoryMessageSchema = z.object({
   inventory: InventorySchema,
 });
 
+export const OperationLogSchema = z.object({
+  type: z.literal("operation_log"),
+  operationId: z.uuid(),
+  text: z.string().max(32 * 1024),
+});
+
+export const ImageUsedSchema = z.object({
+  service: z.string(),
+  image: z.string(),
+  imageId: z.string(),
+  repoDigests: z.array(z.string()),
+});
+export type ImageUsed = z.infer<typeof ImageUsedSchema>;
+
+export const ServiceStateSchema = z.object({
+  service: z.string(),
+  state: z.string(),
+  health: z.string().optional(),
+});
+export type ServiceState = z.infer<typeof ServiceStateSchema>;
+
+export const OperationResultSchema = z.object({
+  type: z.literal("operation_result"),
+  operationId: z.uuid(),
+  status: z.enum(["succeeded", "failed"]),
+  error: z.string().max(4096).optional(),
+  /** Images réellement utilisées après un déploiement (digests inclus). */
+  images: z.array(ImageUsedSchema).max(200).optional(),
+  /** État observé après exécution, distinct du succès de la commande Compose. */
+  services: z.array(ServiceStateSchema).max(200).optional(),
+});
+
 export const AgentMessageSchema = z.discriminatedUnion("type", [
   HelloSchema,
   HeartbeatSchema,
   InventoryMessageSchema,
+  OperationLogSchema,
+  OperationResultSchema,
 ]);
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
 
@@ -89,10 +123,36 @@ export const ErrorMessageSchema = z.object({
 
 export const RequestInventorySchema = z.object({ type: z.literal("request_inventory") });
 
+/** Contenu figé d'une révision, transmis à l'agent pour un déploiement. */
+export const RevisionPayloadSchema = z.object({
+  number: z.number().int().positive(),
+  compose: z.string(),
+  /** Variables d'interpolation de stack (nom -> valeur). */
+  variables: z.record(z.string(), z.string()),
+  /** Noms des variables sensibles : leurs valeurs sont masquées dans les logs. */
+  sensitive: z.array(z.string()),
+  files: z.record(z.string(), z.string()),
+});
+export type RevisionPayload = z.infer<typeof RevisionPayloadSchema>;
+
+export const RunSchema = z.object({
+  type: z.literal("run"),
+  operationId: z.uuid(),
+  action: z.enum(["deploy", "stop", "start"]),
+  stack: z.object({ id: z.uuid(), project: z.string() }),
+  /** Obligatoire pour `deploy`, absent pour `stop` et `start`. */
+  revision: RevisionPayloadSchema.optional(),
+  options: z
+    .object({ pullImages: z.boolean(), forceRecreate: z.boolean() })
+    .optional(),
+});
+export type RunMessage = z.infer<typeof RunSchema>;
+
 export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   WelcomeSchema,
   ErrorMessageSchema,
   RequestInventorySchema,
+  RunSchema,
 ]);
 export type ConsoleMessage = z.infer<typeof ConsoleMessageSchema>;
 

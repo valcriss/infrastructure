@@ -17,9 +17,16 @@ services:
     environment:
       CONSOLE_URL: ${CONSOLE_URL:?définir CONSOLE_URL}
       ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
+      WORKSPACE_DIR: ${WORKSPACE_DIR:-/var/lib/console-docker/workspace}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-data:/data
+      # Même chemin absolu côté hôte et côté conteneur (bind mounts relatifs).
+      - type: bind
+        source: ${WORKSPACE_DIR:-/var/lib/console-docker/workspace}
+        target: ${WORKSPACE_DIR:-/var/lib/console-docker/workspace}
+        bind:
+          create_host_path: true
 
 volumes:
   agent-data:
