@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "typecheck": "npm run build -w @infra/shared && npm run typecheck -w @infra/console -w @infra/agent -w @infra/web",
-    "test": "npm run build -w @infra/shared && npm run test -w @infra/shared -w @infra/console -w @infra/agent"
+    "test": "npm run build -w @infra/shared && npm run test -w @infra/shared -w @infra/console -w @infra/agent -w @infra/web"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

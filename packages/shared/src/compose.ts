@@ -30,7 +30,8 @@ export function validateCompose(text: string): ComposeValidation {
     return {
       ok: false,
       issues: doc.errors.map((e) => ({
-        message: e.message.split("\n")[0] ?? e.message,
+        // La position est fournie à part : on retire le « at line N, column M: » de la bibliothèque.
+        message: (e.message.split("\n")[0] ?? e.message).replace(/\s+at line \d+, column \d+:?$/, ""),
         ...(e.linePos?.[0] ? { line: e.linePos[0].line, column: e.linePos[0].col } : {}),
       })),
     };

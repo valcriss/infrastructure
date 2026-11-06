@@ -11,6 +11,7 @@ import WebSocket from "ws";
 import { AGENT_VERSION, type AgentConfig } from "./config.js";
 import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
+import { LogStreamer } from "./logs.js";
 
 interface Credentials {
   agentId: string;
@@ -57,6 +58,7 @@ export class AgentClient {
   private stopped = false;
   private socket: WebSocket | null = null;
   private readonly executor: Executor;
+  private readonly logs: LogStreamer;
   /** Résultats terminés pendant une coupure : renvoyés à la reconnexion. */
   private unsent: AgentMessage[] = [];
 
@@ -68,6 +70,7 @@ export class AgentClient {
       workspaceDir: config.workspaceDir,
       dockerSocket: config.dockerSocket,
     });
+    this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
   }
 
   /** Envoie un message sur la connexion courante ; conserve les résultats si elle est coupée. */
@@ -136,7 +139,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream"],
           auth: auth,
         });
       });
@@ -164,6 +167,14 @@ export class AgentClient {
               for (const pending of this.unsent.splice(0)) this.emit(pending);
               await sendInventory();
               break;
+            case "logs_start":
+              void this.logs
+                .start(msg, (m) => this.emit(m))
+                .catch((err: unknown) => this.log(`erreur de flux de logs : ${(err as Error).message}`));
+              break;
+            case "logs_stop":
+              this.logs.stop(msg.streamId);
+              break;
             case "run":
               // Traité en tâche de fond ; le résultat repasse par emit().
               void this.executor
@@ -181,6 +192,8 @@ export class AgentClient {
       });
 
       const finish = (): void => {
+        // Plus de client pour lire les flux : ils sont arrêtés avec la connexion.
+        this.logs.stopAll();
         clearInterval(heartbeat);
         clearInterval(inventoryTimer);
         this.socket = null;

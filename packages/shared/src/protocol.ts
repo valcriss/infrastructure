@@ -94,12 +94,27 @@ export const OperationResultSchema = z.object({
   services: z.array(ServiceStateSchema).max(200).optional(),
 });
 
+/** Lignes de logs d'un flux demandé par la console (suivi en direct). */
+export const LogChunkSchema = z.object({
+  type: z.literal("log_chunk"),
+  streamId: z.uuid(),
+  lines: z.array(z.string().max(8192)).max(500),
+});
+
+export const LogEndSchema = z.object({
+  type: z.literal("log_end"),
+  streamId: z.uuid(),
+  reason: z.string().max(200),
+});
+
 export const AgentMessageSchema = z.discriminatedUnion("type", [
   HelloSchema,
   HeartbeatSchema,
   InventoryMessageSchema,
   OperationLogSchema,
   OperationResultSchema,
+  LogChunkSchema,
+  LogEndSchema,
 ]);
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
 
@@ -148,11 +163,28 @@ export const RunSchema = z.object({
 });
 export type RunMessage = z.infer<typeof RunSchema>;
 
+export const LogsStartSchema = z.object({
+  type: z.literal("logs_start"),
+  streamId: z.uuid(),
+  stack: z.object({ id: z.uuid(), project: z.string() }),
+  /** Service Compose ciblé ; tous les services si absent. */
+  service: z.string().min(1).max(128).optional(),
+  tail: z.number().int().min(0).max(1000),
+});
+export type LogsStartMessage = z.infer<typeof LogsStartSchema>;
+
+export const LogsStopSchema = z.object({
+  type: z.literal("logs_stop"),
+  streamId: z.uuid(),
+});
+
 export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   WelcomeSchema,
   ErrorMessageSchema,
   RequestInventorySchema,
   RunSchema,
+  LogsStartSchema,
+  LogsStopSchema,
 ]);
 export type ConsoleMessage = z.infer<typeof ConsoleMessageSchema>;
 

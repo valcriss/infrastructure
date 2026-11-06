@@ -2,7 +2,7 @@
 
 Outil auto-hébergé de gestion de stacks Docker. Cadrage complet : [project.md](project.md). Décisions techniques : [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md). Backlog : [docs/backlog.md](docs/backlog.md).
 
-État : **Phase 1 terminée**, **Phase 2 en cours** : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage et jetons API. Pas encore d'interface pour les stacks ni de logs en direct.
+État : **Phase 1 terminée**, **Phase 2 quasi terminée** : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage, jetons API, logs en direct et interface complète des stacks (éditeur Compose, différences, historique, opérations). Reste le contrat OpenAPI et l'import des stacks déjà présentes sur l'hôte.
 
 ## API (extrait)
 
@@ -18,6 +18,7 @@ PUT  /api/v1/stacks/{id}/files/{chemin}    {"expectedRevision":3,"content":"…"
 POST /api/v1/stacks/{id}/deploy            {"revision":4,"pullImages":true}   → 202 + operationId (en-tête Idempotency-Key accepté)
 POST /api/v1/stacks/{id}/stop | start
 GET  /api/v1/operations/{id}               état, journal expurgé, images déployées (digests)
+GET  /api/v1/stacks/{id}/logs?service=web&tail=100   logs en direct (Server-Sent Events : `lines`, `end`)
 ```
 
 Les valeurs sensibles ne sont jamais renvoyées par l'API ni écrites dans les journaux d'opération. Un déploiement applique exactement la révision demandée ; une configuration invalide échoue avant toute modification des conteneurs.
@@ -72,7 +73,9 @@ TypeScript est volontairement limité à la version 6 : `vue-tsc` ne fonctionne 
 
 ## Limites actuelles
 
-- Phase 2 incomplète : pas d'interface pour les stacks, pas de logs de conteneurs, pas de retour arrière en un clic (on redéploie une ancienne révision).
+- Pas de retour arrière en un clic : on redéploie une ancienne révision depuis l'onglet Historique (la configuration est restaurée, pas les données).
+- Les logs en direct sont bornés (5 flux par hôte, 1 h par flux, 2 000 lignes/s, 5 000 lignes conservées dans le navigateur) et affichés tels que produits par les conteneurs : les valeurs sensibles n'y sont pas masquées.
+- L'interface n'a été vérifiée que par navigation automatisée (pas de contrôle visuel de la mise en page, ni sur mobile) ; le bundle JavaScript fait environ 580 Ko à cause de l'éditeur.
 - L'édition des variables d'un service conserve commentaires, ordre et expressions `${…}`, mais refuse les alias YAML et les clés de fusion `<<`. Avec une indentation de 4 espaces et des listes non indentées, la bibliothèque YAML décale les listes de 2 espaces. Les valeurs écrites dans `environment` restent dans le texte du Compose : mettre les secrets dans des variables de stack sensibles (`${NOM}`).
 - Les valeurs de variables sont stockées en clair dans PostgreSQL (le chiffrement concerne l'export Git de la Phase 3) et transmises à l'agent par la connexion WebSocket : utiliser `wss://` hors réseau de confiance.
 - Le Compose doit utiliser des images préconstruites : `build` et `include` sont rejetés.

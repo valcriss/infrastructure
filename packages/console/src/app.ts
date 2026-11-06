@@ -28,6 +28,7 @@ import { hashPassword, randomToken, safeEqualHex, sha256, verifyPassword } from 
 import { audit, type Pool } from "./db.js";
 import { AgentGateway } from "./gateway.js";
 import { HttpError } from "./http-error.js";
+import { LogStreams } from "./log-streams.js";
 import { OperationsService } from "./operations.js";
 import { registerStackRoutes } from "./stack-routes.js";
 import { registerTokenRoutes } from "./token-routes.js";
@@ -320,9 +321,19 @@ export async function buildApp({ config, pool, logger = false }: AppDeps): Promi
   });
 
   const ops = new OperationsService(pool, gateway);
-  gateway.setHandlers(ops);
+  const logStreams = new LogStreams(gateway);
+  gateway.setHandlers({
+    onLog: (hostId, operationId, text) => ops.onLog(hostId, operationId, text),
+    onResult: (hostId, msg) => ops.onResult(hostId, msg),
+    onDisconnect: async (hostId) => {
+      logStreams.onHostDisconnect(hostId);
+      await ops.onDisconnect(hostId);
+    },
+    onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
+    onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
+  });
   app.addHook("onClose", async () => ops.close());
-  registerStackRoutes(app, { pool, auth: apiAuth, ops, isOnline: (id) => gateway.isOnline(id) });
+  registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
 
   app.get("/agent/ws", { websocket: true }, (socket) => gateway.handle(socket));

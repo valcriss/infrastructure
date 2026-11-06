@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { Executor } from "./executor.js";
+import { LogStreamer } from "./logs.js";
 
 /**
  * Test d'intégration avec un vrai démon Docker (Linux uniquement). Le dossier
@@ -90,6 +91,43 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
     expect(logs).toContain(`D=${variables.D}`);
     // Les valeurs sensibles ne sont pas dans le journal d'opération renvoyé à la console.
     expect(log).not.toContain("motdepasse-secret-123");
+  }, 240_000);
+
+  it("suit les logs d'une stack en direct puis arrête le flux", async () => {
+    const project = "it-" + randomBytes(4).toString("hex");
+    projects.push(project);
+    const stackId = randomUUID();
+    const compose = [
+      "services:",
+      "  app:",
+      "    image: alpine:3.20",
+      '    command: ["sh", "-c", "echo ligne-logs-1; sleep 1; echo ligne-logs-2; sleep 120"]',
+      "",
+    ].join("\n");
+    expect((await runAction(deployMsg(project, stackId, compose, {}, {}))).result.status).toBe("succeeded");
+
+    const streamer = new LogStreamer({ workspaceDir: root, dockerSocket: socket });
+    const streamId = randomUUID();
+    const lines: string[] = [];
+    let ended = "";
+    await streamer.start({ type: "logs_start", streamId, stack: { id: stackId, project }, service: "app", tail: 10 }, (m) => {
+      if (m.type === "log_chunk") lines.push(...m.lines);
+      if (m.type === "log_end") ended = m.reason;
+    });
+    const deadline = Date.now() + 15_000;
+    while (!lines.join(" ").includes("ligne-logs-2") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+    streamer.stop(streamId);
+    expect(lines.join(" ")).toContain("ligne-logs-1");
+    expect(lines.join(" ")).toContain("ligne-logs-2");
+    expect(lines[0]).toMatch(/\d{4}-\d{2}-\d{2}T/); // horodatage demandé à Docker
+    expect(ended).toBe("");
+
+    // Stack jamais déployée : fin immédiate et explicite.
+    let reason = "";
+    await streamer.start({ type: "logs_start", streamId: randomUUID(), stack: { id: randomUUID(), project: "x" }, tail: 5 }, (m) => {
+      if (m.type === "log_end") reason = m.reason;
+    });
+    expect(reason).toContain("jamais été déployée");
   }, 240_000);
 
   it("rejette une configuration invalide avant de toucher aux conteneurs", async () => {

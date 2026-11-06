@@ -22,6 +22,8 @@ export interface GatewayHandlers {
   onLog(hostId: string, operationId: string, text: string): Promise<void>;
   onResult(hostId: string, msg: z.infer<typeof OperationResultSchema>): Promise<void>;
   onDisconnect(hostId: string): Promise<void>;
+  onLogChunk(hostId: string, streamId: string, lines: string[]): void;
+  onLogEnd(hostId: string, streamId: string, reason: string): void;
 }
 
 interface Connection {
@@ -160,6 +162,12 @@ export class AgentGateway {
             break;
           case "operation_result":
             await this.handlers?.onResult(hostId, msg);
+            break;
+          case "log_chunk":
+            this.handlers?.onLogChunk(hostId, msg.streamId, msg.lines);
+            break;
+          case "log_end":
+            this.handlers?.onLogEnd(hostId, msg.streamId, msg.reason);
             break;
           case "hello":
             this.fail(socket, "bad_request", "hello déjà reçu");

@@ -29,7 +29,7 @@ function downloadKey() {
 
 async function done() {
   restorationKey.value = "";
-  await router.push("/hosts");
+  await router.push("/stacks");
 }
 
 async function submit() {

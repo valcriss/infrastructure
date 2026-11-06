@@ -10,6 +10,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
+import { LogLimitError, LogOfflineError, type LogStreams } from "./log-streams.js";
 import type { OperationsService } from "./operations.js";
 import {
   applyVariableChanges,
@@ -79,6 +80,7 @@ export function registerStackRoutes(
     pool: Pool;
     auth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     ops: OperationsService;
+    logStreams: LogStreams;
     isOnline: (hostId: string) => boolean;
   },
 ): void {
@@ -315,6 +317,78 @@ export function registerStackRoutes(
       return accepted(reply, operation, created);
     });
   }
+
+  // --- Logs en direct (Server-Sent Events) ------------------------------------------
+  // Événements : `lines` (tableau de lignes), `end` (raison), commentaires `: ping`.
+  app.get("/api/v1/stacks/:id/logs", { preHandler: auth }, async (request, reply) => {
+    const { id } = IdParams.parse(request.params);
+    const q = z
+      .object({
+        service: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/).optional(),
+        tail: z.coerce.number().int().min(0).max(1000).default(100),
+      })
+      .parse(request.query);
+    const stack = await loadStack(id);
+    if (!deps.isOnline(stack.host_id)) {
+      throw new HttpError(409, "host_offline", "L'agent de l'hôte est hors ligne : logs indisponibles");
+    }
+
+    const raw = reply.raw;
+    let stop: () => void = () => {};
+    let closed = false;
+    let started = false;
+    const timers: { ping?: NodeJS.Timeout } = {};
+    let dropped = 0;
+    const write = (chunk: string): boolean => (closed ? true : raw.write(chunk));
+    const event = (name: string, data: unknown): void => {
+      // Client lent : on ignore les lignes plutôt que d'accumuler de la mémoire.
+      if (name === "lines" && raw.writableNeedDrain) {
+        dropped += (data as string[]).length;
+        return;
+      }
+      if (dropped > 0 && name === "lines") {
+        write(`event: lines\ndata: ${JSON.stringify([`[${dropped} lignes ignorées : client trop lent]`])}\n\n`);
+        dropped = 0;
+      }
+      write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    let handle: { streamId: string; stop: () => void };
+    try {
+      handle = deps.logStreams.start(stack.host_id, { id, project: stack.name }, { tail: q.tail, ...(q.service ? { service: q.service } : {}) }, {
+        lines: (lines) => event("lines", lines),
+        end: (reason) => {
+          // Avant l'ouverture du flux, l'erreur est renvoyée par la route elle-même.
+          if (!started) return;
+          event("end", reason);
+          closed = true;
+          clearInterval(timers.ping);
+          raw.end();
+        },
+      });
+    } catch (err) {
+      if (err instanceof LogLimitError) throw new HttpError(429, "too_many_streams", "Trop de flux de logs simultanés");
+      if (err instanceof LogOfflineError) throw new HttpError(409, "host_offline", "L'agent de l'hôte est hors ligne");
+      throw err;
+    }
+    stop = handle.stop;
+    started = true;
+    timers.ping = setInterval(() => write(": ping\n\n"), 15_000);
+    reply.hijack();
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+      "X-Content-Type-Options": "nosniff",
+    });
+    write(": ouvert\n\n");
+    request.raw.on("close", () => {
+      closed = true;
+      clearInterval(timers.ping);
+      stop();
+    });
+  });
 
   app.get("/api/v1/operations", { preHandler: auth }, async (request) => {
     const q = z

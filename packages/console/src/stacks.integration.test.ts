@@ -14,6 +14,7 @@ const COMPOSE = "services:\n  web:\n    image: nginx:1.27\n    ports:\n      - '
 interface FakeAgent {
   ws: WebSocket;
   runs: RunMessage[];
+  received: Record<string, any>[];
   agentId: string;
   secret: string;
   send: (m: unknown) => void;
@@ -45,6 +46,7 @@ describe.skipIf(!url)("stacks et opérations (intégration)", () => {
     new Promise((resolve, reject) => {
       const ws = new WebSocket(wsUrl);
       const runs: RunMessage[] = [];
+      const received: Record<string, any>[] = [];
       ws.on("open", () =>
         ws.send(
           JSON.stringify({
@@ -64,6 +66,7 @@ describe.skipIf(!url)("stacks et opérations (intégration)", () => {
           resolve({
             ws,
             runs,
+            received,
             agentId: msg.agentId,
             secret: c?.secret ?? "",
             send: (m) => ws.send(JSON.stringify(m)),
@@ -71,6 +74,8 @@ describe.skipIf(!url)("stacks et opérations (intégration)", () => {
           });
         } else if (msg.type === "run") {
           runs.push(msg as unknown as RunMessage);
+        } else if (msg.type === "logs_start" || msg.type === "logs_stop") {
+          received.push(msg);
         } else if (msg.type === "error") {
           reject(new Error(msg.message));
         }
@@ -296,6 +301,62 @@ describe.skipIf(!url)("stacks et opérations (intégration)", () => {
     await waitFor(async () => ((await call("GET", `/api/v1/operations/${op}`)).json as any).status === "succeeded");
   });
 
+  // --- Logs en direct ---------------------------------------------------------------
+
+  /** Lit un flux SSE jusqu'à ce que le texte cumulé satisfasse la condition. */
+  const readSse = async (res: Response, until: (text: string) => boolean, ms = 3000): Promise<string> => {
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    const deadline = Date.now() + ms;
+    while (!until(text)) {
+      if (Date.now() > deadline) throw new Error("flux SSE : délai dépassé, reçu : " + text);
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value);
+    }
+    reader.releaseLock();
+    return text;
+  };
+
+  it("relaie les logs en direct de l'agent vers le client et arrête le flux à la déconnexion", async () => {
+    const id = (await createStack("app-logs")).json.id as string;
+    expect((await fetch(`${baseUrl}/api/v1/stacks/${id}/logs`)).status).toBe(401);
+    expect((await call("GET", `/api/v1/stacks/${id}/logs?service=a%20b`)).status).toBe(400);
+
+    const ctl = new AbortController();
+    const before = agent.received.length;
+    const res = await fetch(`${baseUrl}/api/v1/stacks/${id}/logs?service=web&tail=50`, { headers: { cookie }, signal: ctl.signal });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    await waitFor(() => agent.received.length > before);
+    const start = agent.received[agent.received.length - 1] as Record<string, any>;
+    expect(start).toMatchObject({ type: "logs_start", service: "web", tail: 50, stack: { id, project: "app-logs" } });
+
+    // Un flux inconnu n'a aucun effet ; le bon flux transmet ses lignes.
+    agent.send({ type: "log_chunk", streamId: "00000000-0000-4000-8000-000000000000", lines: ["ignorée"] });
+    agent.send({ type: "log_chunk", streamId: start.streamId, lines: ["2026-11-06T10:00:00Z premier", "deuxième"] });
+    const text = await readSse(res, (t) => t.includes("deuxième"));
+    expect(text).toContain("event: lines");
+    expect(text).toContain('["2026-11-06T10:00:00Z premier","deuxième"]');
+    expect(text).not.toContain("ignorée");
+
+    ctl.abort();
+    await waitFor(() => agent.received.some((m) => m.type === "logs_stop" && m.streamId === start.streamId));
+  });
+
+  it("termine le flux de logs quand l'agent le clôt", async () => {
+    const id = (await createStack("app-logs2")).json.id as string;
+    const before = agent.received.length;
+    const res = await fetch(`${baseUrl}/api/v1/stacks/${id}/logs`, { headers: { cookie } });
+    await waitFor(() => agent.received.length > before);
+    const start = agent.received[agent.received.length - 1] as Record<string, any>;
+    agent.send({ type: "log_end", streamId: start.streamId, reason: "Flux terminé." });
+    const text = await readSse(res, (t) => t.includes("event: end"));
+    expect(text).toContain('event: end\ndata: "Flux terminé."');
+  });
+
   it("marque une opération « inconnue » à la perte de l'agent, sans la rejouer, et refuse si hors ligne", async () => {
     const id = (await createStack("app8")).json.id as string;
     const before = agent.runs.length;
@@ -313,6 +374,7 @@ describe.skipIf(!url)("stacks et opérations (intégration)", () => {
     expect(offline.status).toBe(409);
     expect(offline.json.error.code).toBe("host_offline");
     expect(((await call("GET", `/api/v1/stacks/${id}`)).json as any).hostPresence).toBe("offline");
+    expect((await call("GET", `/api/v1/stacks/${id}/logs`)).status).toBe(409);
 
     // À la reconnexion, le résultat tardif de l'agent est pris en compte.
     agent = await connectAgent({ kind: "credentials", agentId: hostId, secret: await currentSecret() });
