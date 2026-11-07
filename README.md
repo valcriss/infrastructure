@@ -1,8 +1,8 @@
-#uuundefineddundundefundefundefinednednedfinedfineddefinedndundefinedfundefinednedCundefinednundundefinedfinedoundefinedundefinedundefinedDoundefinedkeundefined,undefinedundefinedundefinedcuriundefinedundefinedundefinedeundefined undefineduundefinedervision
+# Console Docker, sécurité et supervision
 
-Ouundefinedil undefineduto-héundefinedergé de gestion de stundefinedcks Docker. Cadrage coundefinedplet : [project.md](project.md). Décisions techniques : [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md). Backlog : [docs/backlog.md](docs/backlog.md). Exploitation : [docs/exploitation.md](docs/exploitation.md). Exemples dundefinedAPI : [docs/api-exemples.md](docs/api-exemples.md).
+Outil auto-hébergé de gestion de stacks Docker. Cadrage complet : [project.md](project.md). Décisions techniques : [docs/adr/0001-architecture.md](docs/adr/0001-architecture.md). Backlog : [docs/backlog.md](docs/backlog.md). Exploitation : [docs/exploitation.md](docs/exploitation.md). Exemples d'API : [docs/api-exemples.md](docs/api-exemples.md).
 
-État : undefinedundefinedPhases 1 et 2 terminéesundefinedundefined : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage, jetons API, logs en direct et interface complète des stacks (éditeur Compose, différences, historique, opérations). Contrat OpenAPI 3.1 dans [docs/openapi.json](docs/openapi.json) (servi par `GET /api/v1/openapi.json`) et import des projets Compose déjà présents sur l'hôte.
+État : **Phases 1 et 2 terminées** : stacks, révisions, variables (stack et service), fichiers associés, déploiement / arrêt / démarrage, jetons API, logs en direct et interface complète des stacks (éditeur Compose, différences, historique, opérations). Contrat OpenAPI 3.1 dans [docs/openapi.json](docs/openapi.json) (servi par `GET /api/v1/openapi.json`) et import des projets Compose déjà présents sur l'hôte.
 
 **Phase 3 (sauvegarde Git et restauration)** : la configuration est sauvegardée dans un dépôt Git unique (HTTPS + jeton), secrets chiffrés avec age, et restaurable sur une console vierge depuis l'assistant d'initialisation.
 
@@ -12,7 +12,7 @@ Ouundefinedil undefineduto-héundefinedergé de gestion de stundefinedcks Docker
 
 Contrat complet : [docs/openapi.json](docs/openapi.json), généré depuis le code (`npm run build && npm run openapi -w @infra/console`) ; un test vérifie qu'il décrit exactement les routes enregistrées et qu'il est à jour.
 
-Authentification : jeton API (`Authorization: Bearer cdt_…`) ou cookie de session (`POST /api/v1/session`). undefinedes jetons se gèrent depuis une session (`POST /api/v1/api-tokens`, `GET`, `DELETE /{id}`) : ils sont affichés une seule fois, stockés par empreinte, révocables, avec expiration facultative et une portée `read` (GET uniquement) ou `write`. Un jeton ne peut ni gérer les jetons ni modifier le compte administrateur. Toute modification de stack exige `expectedRevision` (409 en cas de conflit).
+Authentification : jeton API (`Authorization: Bearer cdt_…`) ou cookie de session (`POST /api/v1/session`). Les jetons se gèrent depuis une session (`POST /api/v1/api-tokens`, `GET`, `DELETE /{id}`) : ils sont affichés une seule fois, stockés par empreinte, révocables, avec expiration facultative et une portée `read` (GET uniquement) ou `write`. Un jeton ne peut ni gérer les jetons ni modifier le compte administrateur. Toute modification de stack exige `expectedRevision` (409 en cas de conflit).
 
 ```bash
 # Créer une stack (révision 1) : le Compose doit référencer une image, pas de « build »
@@ -85,7 +85,7 @@ Réservé à la **session de l'administrateur** (un jeton API, même en écritur
 | Volumes | anonymes, ou **tous** les volumes inutilisés (nommés compris) : suppression définitive, confirmée en saisissant le nom de l'hôte |
 | Cache de build | tout, ou plus ancien que 7 j / 1 mois / 3 mois / N jours (dernière **utilisation**), avec un volume à conserver |
 
-Garanties : Docker n'ayant pas de mode simulation, l'aperçu vient d'un relevé de l'agent de moins de 5 minutes. La console recalcule la sélection ; l'agent ne supprime que ce qui est **encore** inutilisé et non protégé, **sans jamais forcer** (Docker refuse ce qui sert). Les conteneurs de la console et de l'agent, le cache de Trivy et l'image de Trivy ne sont jamais proposés ; supprimer un conteneur ne supprime pas ses volumes. Un nettoyage à la fois par hôte, refusé pendant un déploiement. L'espace libéré est une **estimation** (mesure exacte de Docker pour le cache de build). Il faut un agent à jour ; les routes sont `GET /api/v1/hosts/{id}/disk-usage`, `POST …/prune/preview` et `POST …/prune`.
+Garanties : Docker n'ayant pas de mode simulation, l'aperçu vient d'un relevé de l'agent de moins de 5 minutes. La console recalcule la sélection ; l'agent ne supprime que ce qui est **encore** inutilisé et non protégé, **sans jamais forcer** (Docker refuse ce qui sert). Les conteneurs de la console et de l'agent, le cache de Trivy et l'image de Trivy ne sont jamais proposés ; supprimer un conteneur ne supprime pas ses volumes. Un nettoyage à la fois par hôte, refusé pendant un déploiement. Pendant le nettoyage, la boîte de dialogue affiche l'**avancement** : phase en cours (conteneurs, réseaux, images, volumes), élément en cours de suppression, compteurs, espace libéré jusqu'ici et durée ; le cache de build, supprimé d'un seul bloc par Docker, est signalé comme tel. L'espace libéré est une **estimation** (mesure exacte de Docker pour le cache de build). Il faut un agent à jour ; les routes sont `GET /api/v1/hosts/{id}/disk-usage`, `POST …/prune/preview` et `POST …/prune`.
 
 ## Supervision
 
