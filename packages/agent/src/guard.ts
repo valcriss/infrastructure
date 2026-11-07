@@ -81,6 +81,13 @@ export class SelfProtection {
     return null;
   }
 
+  /** Parmi ces projets, ceux que la console ne doit ni arrêter, ni redéployer, ni nettoyer. */
+  async protectedAmong(projects: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (const p of projects) if (await this.isProtected(p)) out.add(p);
+    return out;
+  }
+
   async isProtected(project: string): Promise<boolean> {
     if (this.extra.includes(project)) return true;
     const self = await this.selfProject();

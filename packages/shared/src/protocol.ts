@@ -190,6 +190,46 @@ export const MetricsMessageSchema = z.object({
   host: HostMetricsSchema.optional(),
 });
 
+// --- Espace disque Docker et nettoyage -------------------------------------------------------------
+
+const UsageSchema = z.object({ count: z.number().int().min(0), sizeBytes: z.number().min(0), reclaimableBytes: z.number().min(0) });
+export type DiskUsageEntry = z.infer<typeof UsageSchema>;
+
+/** Candidats au nettoyage : uniquement ce qui n'est utilisé par aucun conteneur actif et n'appartient pas à la console. */
+export const DiskCandidatesSchema = z.object({
+  containers: z.array(z.object({ id: z.string().max(80), name: z.string().max(200), image: z.string().max(300), project: z.string().max(100).optional(), service: z.string().max(200).optional(), state: z.string().max(30), created: z.number().int(), sizeBytes: z.number().min(0).nullable() })).max(300),
+  images: z.array(z.object({ id: z.string().max(100), ref: z.string().max(300), created: z.number().int(), sizeBytes: z.number().min(0), dangling: z.boolean() })).max(300),
+  networks: z.array(z.object({ id: z.string().max(80), name: z.string().max(200), created: z.string().max(40).nullable() })).max(300),
+  volumes: z.array(z.object({ name: z.string().max(255), sizeBytes: z.number().min(0).nullable(), anonymous: z.boolean(), created: z.string().max(40).nullable(), project: z.string().max(100).optional() })).max(300),
+  buildCache: z.array(z.object({ id: z.string().max(80), type: z.string().max(40), description: z.string().max(200).optional(), sizeBytes: z.number().min(0), lastUsedAt: z.string().max(40).nullable() })).max(300),
+});
+export type DiskCandidates = z.infer<typeof DiskCandidatesSchema>;
+
+/** Équivalent de `docker system df` : totaux et part récupérable, plus la liste de ce qui pourrait être supprimé. */
+export const DiskUsageMessageSchema = z.object({
+  type: z.literal("disk_usage"),
+  observedAt: z.iso.datetime(),
+  summary: z.object({ images: UsageSchema, containers: UsageSchema, volumes: UsageSchema, buildCache: UsageSchema }),
+  candidates: DiskCandidatesSchema,
+  /** Une liste a été tronquée (les plus volumineux sont conservés). */
+  truncated: z.boolean(),
+});
+export type DiskUsageMessage = z.infer<typeof DiskUsageMessageSchema>;
+
+export const PruneResultSchema = z.object({
+  type: z.literal("prune_result"),
+  operationId: z.uuid(),
+  status: z.enum(["succeeded", "failed"]),
+  error: z.string().max(2000).optional(),
+  removed: z.object({ containers: z.number().int().min(0), images: z.number().int().min(0), networks: z.number().int().min(0), volumes: z.number().int().min(0), buildCache: z.number().int().min(0) }),
+  /** Espace libéré : estimation d'après la taille des éléments supprimés, valeur mesurée par Docker pour le cache de build. */
+  reclaimedBytes: z.number().min(0),
+  /** Éléments demandés mais non supprimés par prudence (protégés, devenus utilisés, plus candidats). */
+  skipped: z.array(z.string().max(300)).max(100),
+  errors: z.array(z.string().max(300)).max(100),
+});
+export type PruneResult = z.infer<typeof PruneResultSchema>;
+
 export const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"] as const;
 export type Severity = (typeof SEVERITIES)[number];
 /** Nombre maximal de vulnérabilités détaillées renvoyées pour un scan (les compteurs restent exacts). */
@@ -249,6 +289,8 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   InventoryMessageSchema,
   MetricsMessageSchema,
   ScanResultSchema,
+  DiskUsageMessageSchema,
+  PruneResultSchema,
   OperationLogSchema,
   OperationResultSchema,
   LogChunkSchema,
@@ -278,6 +320,22 @@ export const ErrorMessageSchema = z.object({
 });
 
 export const RequestInventorySchema = z.object({ type: z.literal("request_inventory") });
+export const RequestDiskUsageSchema = z.object({ type: z.literal("request_disk_usage") });
+
+/** Éléments à supprimer, désignés un par un : l'agent ne supprime que ce qui reste candidat au moment de l'exécution. */
+export const PruneSchema = z.object({
+  type: z.literal("prune"),
+  operationId: z.uuid(),
+  expiresAt: z.iso.datetime().optional(),
+  targets: z.object({
+    containers: z.array(z.string().regex(/^[0-9a-f]{12,64}$/)).max(300),
+    images: z.array(z.string().regex(/^(sha256:)?[0-9a-f]{12,64}$/)).max(300),
+    networks: z.array(z.string().regex(/^[0-9a-f]{12,64}$/)).max(300),
+    volumes: z.array(z.string().min(1).max(255)).max(300),
+    buildCache: z.object({ mode: z.enum(["all", "older"]), olderThanHours: z.number().int().min(1).max(87600).optional(), keepBytes: z.number().min(0).optional() }).optional(),
+  }),
+});
+export type PruneMessage = z.infer<typeof PruneSchema>;
 
 /** Contenu figé d'une révision, transmis à l'agent pour un déploiement. */
 export const RevisionPayloadSchema = z.object({
@@ -347,6 +405,8 @@ export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   WelcomeSchema,
   ErrorMessageSchema,
   RequestInventorySchema,
+  RequestDiskUsageSchema,
+  PruneSchema,
   RunSchema,
   ScanSchema,
   LogsStartSchema,
@@ -396,4 +456,6 @@ export interface HostSummary {
   dockerVersion: string | null;
   inventoryObservedAt: string | null;
   containerCount: number | null;
+  /** Dernier relevé de l'espace disque Docker (équivalent de `docker system df`), null avant le premier. */
+  diskUsage: { observedAt: string; summary: DiskUsageMessage["summary"]; truncated: boolean } | null;
 }

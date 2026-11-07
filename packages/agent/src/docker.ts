@@ -5,9 +5,9 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /** Requête GET en lecture seule vers l'API Docker locale (socket Unix). */
-export function dockerGet(socketPath: string, path: string): Promise<unknown> {
+export function dockerGet(socketPath: string, path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath, path, method: "GET", timeout: REQUEST_TIMEOUT_MS }, (res) => {
+    const req = request({ socketPath, path, method: "GET", timeout: timeoutMs }, (res) => {
       const chunks: Buffer[] = [];
       let size = 0;
       res.on("data", (chunk: Buffer) => {
@@ -28,6 +28,38 @@ export function dockerGet(socketPath: string, path: string): Promise<unknown> {
         } catch (err) {
           reject(err);
         }
+      });
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(new Error("délai Docker dépassé")));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+export interface DockerResponse {
+  status: number;
+  body: unknown;
+}
+
+/**
+ * Requête d'écriture vers l'API Docker (suppression, nettoyage du cache de build). Contrairement à `dockerGet`, un statut
+ * d'erreur n'est pas une exception : l'appelant décide (404 = déjà supprimé, 409 = en cours d'utilisation…).
+ */
+export function dockerRequest(socketPath: string, method: "DELETE" | "POST", path: string, timeoutMs = 60_000): Promise<DockerResponse> {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath, path, method, timeout: timeoutMs }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        let body: unknown = text;
+        try {
+          body = text ? JSON.parse(text) : null;
+        } catch {
+          /* corps non JSON : conservé tel quel */
+        }
+        resolve({ status: res.statusCode ?? 0, body });
       });
       res.on("error", reject);
     });

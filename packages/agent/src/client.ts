@@ -14,9 +14,11 @@ import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { ReplayGuard, SelfProtection } from "./guard.js";
 import { HostMetricsCollector } from "./host-metrics.js";
+import { collectDiskUsage } from "./disk-usage.js";
 import { fitInventory } from "./inventory-fit.js";
 import { LogStreamer } from "./logs.js";
 import { MetricsCollector } from "./metrics.js";
+import { Pruner } from "./pruner.js";
 import { TrivyScanner } from "./scanner.js";
 
 interface Credentials {
@@ -25,6 +27,8 @@ interface Credentials {
 }
 
 const MIN_BACKOFF_MS = 1_000;
+/** Relevé de l'espace disque Docker : coûteux, donc espacé (un relevé à la demande reste possible). */
+const DISK_USAGE_INTERVAL_MS = 10 * 60_000;
 const MAX_BACKOFF_MS = 60_000;
 
 async function readCredentials(stateDir: string): Promise<Credentials | null> {
@@ -70,6 +74,7 @@ export class AgentClient {
   private clockOffsetMs = 0;
   private readonly guard = new ReplayGuard(() => Date.now() + this.clockOffsetMs);
   private readonly protection: SelfProtection;
+  private readonly pruner: Pruner;
   /** Résultats terminés pendant une coupure : renvoyés à la reconnexion. */
   private unsent: AgentMessage[] = [];
 
@@ -82,6 +87,7 @@ export class AgentClient {
       dockerSocket: config.dockerSocket,
     });
     this.protection = new SelfProtection(config.dockerSocket, config.selfContainer, config.protectedProjects, { warn: (m) => this.log(m) });
+    this.pruner = new Pruner({ socket: config.dockerSocket, collect: () => this.collectDisk() });
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
     this.scanner = new TrivyScanner({
       workspaceDir: config.workspaceDir,
@@ -91,6 +97,15 @@ export class AgentClient {
       memory: config.trivyMemory,
       maxImageBytes: config.trivyMaxImageBytes,
       timeoutMs: 20 * 60 * 1000,
+    });
+  }
+
+  /** Espace disque Docker et candidats au nettoyage, sans les projets protégés ni l'image de Trivy. */
+  private collectDisk() {
+    return collectDiskUsage({
+      socket: this.config.dockerSocket,
+      protectedAmong: (projects) => this.protection.protectedAmong(projects),
+      protectedImageRefs: [this.config.trivyImage],
     });
   }
 
@@ -143,6 +158,8 @@ export class AgentClient {
       let heartbeat: NodeJS.Timeout | undefined;
       let inventoryTimer: NodeJS.Timeout | undefined;
       let metricsTimer: NodeJS.Timeout | undefined;
+      let diskTimer: NodeJS.Timeout | undefined;
+      let diskBusy = false;
       const collector = new MetricsCollector(this.config.dockerSocket);
       const hostCollector = new HostMetricsCollector(this.config.workspaceDir);
 
@@ -157,6 +174,18 @@ export class AgentClient {
           send({ type: "metrics", observedAt: new Date().toISOString(), samples, ...(host ? { host } : {}) });
         } catch (err) {
           this.log(`métriques Docker impossibles : ${(err as Error).message}`);
+        }
+      };
+      // `docker system df` peut être lent avec beaucoup d'images : un relevé à la fois, jamais en parallèle d'un autre.
+      const sendDiskUsage = async (): Promise<void> => {
+        if (diskBusy) return;
+        diskBusy = true;
+        try {
+          send(await this.collectDisk());
+        } catch (err) {
+          this.log(`espace disque Docker indisponible : ${(err as Error).message}`);
+        } finally {
+          diskBusy = false;
         }
       };
       const sendInventory = async (): Promise<void> => {
@@ -204,6 +233,8 @@ export class AgentClient {
               heartbeat = setInterval(() => send({ type: "heartbeat" }), msg.heartbeatIntervalSec * 1000);
               inventoryTimer = setInterval(() => void sendInventory(), msg.inventoryIntervalSec * 1000);
               // Période de collecte fixée par la console (30 s par défaut).
+              diskTimer = setInterval(() => void sendDiskUsage(), DISK_USAGE_INTERVAL_MS);
+              setTimeout(() => void sendDiskUsage(), 15_000).unref();
               metricsTimer = setInterval(() => void sendMetrics(), (msg.metricsIntervalSec ?? DEFAULT_METRICS_INTERVAL_SEC) * 1000);
               for (const pending of this.unsent.splice(0)) this.emit(pending);
               await sendInventory();
@@ -257,6 +288,31 @@ export class AgentClient {
                 .catch((err: unknown) => this.log(`erreur d'exécution : ${(err as Error).message}`));
               break;
             }
+            case "request_disk_usage":
+              void sendDiskUsage();
+              break;
+            case "prune": {
+              const verdict = this.guard.check(msg.operationId, msg.expiresAt);
+              if (verdict === "replayed") {
+                this.log(`demande de nettoyage rejouée ignorée (${msg.operationId})`);
+                break;
+              }
+              const failed = (error: string): void =>
+                this.emit({ type: "prune_result", operationId: msg.operationId, status: "failed", error, removed: { containers: 0, images: 0, networks: 0, volumes: 0, buildCache: 0 }, reclaimedBytes: 0, skipped: [], errors: [] });
+              if (verdict === "expired") {
+                failed("Demande de nettoyage expirée avant exécution.");
+                break;
+              }
+              // Un nettoyage à la fois ; le résultat repasse par emit() (conservé si la connexion est coupée).
+              void this.pruner
+                .run(msg)
+                .then((result) => {
+                  this.emit(result);
+                  void sendDiskUsage();
+                })
+                .catch((err: unknown) => failed(`erreur de nettoyage : ${(err as Error).message}`));
+              break;
+            }
             case "request_inventory":
               await sendInventory();
               break;
@@ -273,6 +329,7 @@ export class AgentClient {
         clearInterval(heartbeat);
         clearInterval(inventoryTimer);
         clearInterval(metricsTimer);
+        clearInterval(diskTimer);
         this.socket = null;
         resolve(Date.now() - startedAt);
       };

@@ -7,6 +7,7 @@ import {
   MAX_MESSAGE_BYTES,
   OFFLINE_AFTER_SEC,
   SetupRequestSchema,
+  type DiskUsageMessage,
   type HostSummary,
 } from "@infra/shared";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -21,6 +22,8 @@ import { RegistryClient, createFetch } from "./registry.js";
 import { ScanService } from "./scans.js";
 import { listApplications } from "./applications.js";
 import { registerDashboardRoutes } from "./dashboard-routes.js";
+import { PruneService } from "./host-prune.js";
+import { registerHostDiskRoutes } from "./host-disk-routes.js";
 import { registerProjectRoutes } from "./project-routes.js";
 import { MetricsStore } from "./metrics-store.js";
 import { registerBackupRoutes } from "./backup-routes.js";
@@ -71,6 +74,7 @@ export interface BuiltApp {
   backup: BackupService;
   metrics: MetricsStore;
   scans: ScanService;
+  pruning: PruneService;
   watcher: ImageWatcher;
   /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
   routes: string[];
@@ -290,6 +294,9 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     docker_version: string | null;
     inventory_observed_at: Date | null;
     inventory: unknown[] | null;
+    disk_summary?: DiskUsageMessage["summary"] | null;
+    disk_observed_at?: string | null;
+    disk_truncated?: boolean | null;
   }
 
   const toSummary = (row: HostRow): HostSummary => {
@@ -305,11 +312,13 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       dockerVersion: row.docker_version,
       inventoryObservedAt: row.inventory_observed_at?.toISOString() ?? null,
       containerCount: row.inventory ? row.inventory.length : null,
+      diskUsage: row.disk_summary && row.disk_observed_at ? { observedAt: row.disk_observed_at, summary: row.disk_summary, truncated: row.disk_truncated ?? false } : null,
     };
   };
 
   const HOST_COLUMNS = `id, name, agent_version, capabilities, last_seen_at, docker_version,
-                        inventory_observed_at, inventory`;
+                        inventory_observed_at, inventory, disk_usage->'summary' AS disk_summary,
+                        disk_usage->>'observedAt' AS disk_observed_at, (disk_usage->>'truncated')::boolean AS disk_truncated`;
 
   app.get("/api/v1/hosts", { preHandler: apiAuth }, async () => {
     const { rows } = await pool.query<HostRow>(
@@ -367,6 +376,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const logStreams = new LogStreams(gateway);
+  const pruning = new PruneService(pool, gateway);
   gateway.setHandlers({
     onLog: (hostId, operationId, text) => ops.onLog(hostId, operationId, text),
     onResult: (hostId, msg) => ops.onResult(hostId, msg),
@@ -374,6 +384,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       logStreams.onHostDisconnect(hostId);
       await ops.onDisconnect(hostId);
       await scans.onDisconnect(hostId);
+      await pruning.onDisconnect(hostId);
     },
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
@@ -381,6 +392,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       await metrics.ingest(hostId, samples, host);
     },
     onScanResult: (hostId, result) => scans.onResult(hostId, result),
+    onPruneResult: (hostId, result) => pruning.onResult(hostId, result),
   });
   app.addHook("onClose", async () => ops.close());
   const backup = new BackupService({
@@ -403,6 +415,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   });
   const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, isOnline: (id) => gateway.isOnline(id) });
   registerImageRoutes(app, { pool, session: auth, apiAuth, scans, watcher, registries, registryClient, isOnline: (id) => gateway.isOnline(id) });
+  registerHostDiskRoutes(app, { auth: apiAuth, session: auth, pruning });
   registerProjectRoutes(app, { pool, auth: apiAuth, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
@@ -423,5 +436,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, scans, watcher, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, pruning, watcher, routes };
 }

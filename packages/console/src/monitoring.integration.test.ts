@@ -324,6 +324,99 @@ describe.skipIf(!url)("supervision (intégration)", () => {
     expect((await fetch(baseUrl + `/api/v1/hosts/${hostId}/projects/legacy`)).status).toBe(401);
   });
 
+  it("relève l'espace disque Docker et prépare un nettoyage exact, réservé à la session de l'administrateur", async () => {
+    const received: Record<string, any>[] = [];
+    ws.on("message", (raw) => received.push(JSON.parse(raw.toString())));
+    const usage = (over: Record<string, unknown> = {}) => ({
+      type: "disk_usage",
+      observedAt: new Date().toISOString(),
+      summary: { images: { count: 3, sizeBytes: 900, reclaimableBytes: 400 }, containers: { count: 2, sizeBytes: 10, reclaimableBytes: 5 }, volumes: { count: 2, sizeBytes: 700, reclaimableBytes: 700 }, buildCache: { count: 1, sizeBytes: 1000, reclaimableBytes: 1000 } },
+      candidates: {
+        containers: [{ id: "2".repeat(64), name: "app-migrate-1", image: "img", project: "app", service: "migrate", state: "exited", created: 100, sizeBytes: 5 }],
+        images: [{ id: "sha256:" + "b".repeat(64), ref: "old:1", created: 100, sizeBytes: 300, dangling: false }, { id: "sha256:" + "c".repeat(64), ref: "cccccccccccc", created: 100, sizeBytes: 50, dangling: true }],
+        networks: [{ id: "a".repeat(64), name: "app_default", created: null }],
+        volumes: [{ name: "f".repeat(64), sizeBytes: 100, anonymous: true, created: null }, { name: "app_data", sizeBytes: 600, anonymous: false, created: null, project: "app" }],
+        buildCache: [{ id: "b1", type: "regular", sizeBytes: 1000, lastUsedAt: "2020-01-01T00:00:00Z" }],
+      },
+      truncated: false,
+      ...over,
+    });
+    const sendUsage = async () => {
+      const before = (await pool.query("SELECT disk_usage_at FROM hosts WHERE id = $1", [hostId])).rows[0].disk_usage_at as Date | null;
+      ws.send(JSON.stringify(usage()));
+      await waitFor(async () => {
+        const at = (await pool.query("SELECT disk_usage_at FROM hosts WHERE id = $1", [hostId])).rows[0].disk_usage_at as Date | null;
+        return at !== null && (before === null || at > before);
+      });
+    };
+    await sendUsage();
+
+    const du = (await call("GET", `/api/v1/hosts/${hostId}/disk-usage`)).json;
+    expect(du.summary.images).toEqual({ count: 3, sizeBytes: 900, reclaimableBytes: 400 });
+    const hosts = (await call("GET", "/api/v1/hosts")).json.hosts as any[];
+    expect(hosts.find((h) => h.id === hostId).diskUsage.summary.volumes.reclaimableBytes).toBe(700);
+
+    // Aperçu : volumes anonymes seulement, puis tous les volumes (avec confirmation exigée et avertissement « danger »).
+    const preview = async (options: Record<string, unknown>) => (await call("POST", `/api/v1/hosts/${hostId}/prune/preview`, { options })).json;
+    const anon = await preview({ volumes: { mode: "anonymous" } });
+    expect(anon.items.volumes.map((v: any) => v.name)).toEqual(["f".repeat(64)]);
+    const all = await preview({ containers: { enabled: true }, volumes: { mode: "all" }, buildCache: { mode: "older", olderThanDays: 7 } });
+    expect(all.items.volumes.map((v: any) => v.name).sort()).toEqual(["app_data", "f".repeat(64)].sort());
+    expect(all.requiresHostConfirmation).toBe(true);
+    expect(all.warnings.filter((w: any) => w.level === "danger").length).toBeGreaterThan(0);
+    expect(all.warnings.map((w: any) => w.text).join(" ")).toContain("applications gérées"); // le projet « app » est géré par la console
+    expect(all.items.buildCache.count).toBe(1); // dernière utilisation en 2020
+    expect(all.totals.reclaimableBytes).toBe(5 + 700 + 1000);
+    expect((await preview({ containers: { enabled: true, olderThanDays: 7 } })).items.containers).toHaveLength(1); // créé en 1970 : plus vieux que 7 jours
+    expect((await call("POST", `/api/v1/hosts/${hostId}/prune/preview`, { options: { containers: { enabled: true, olderThanDays: 99999 } } })).status).toBe(400); // borne validée
+    expect((await preview({})).totals.items).toBe(0);
+
+    // Un jeton API, même en écriture, ne peut rien supprimer.
+    const token = (await call("POST", "/api/v1/api-tokens", { name: "ci", scope: "write" })).json.token as string;
+    const asToken = await fetch(baseUrl + `/api/v1/hosts/${hostId}/prune`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ options: { networks: { enabled: true } } }) });
+    expect([401, 403]).toContain(asToken.status);
+    expect((await fetch(baseUrl + `/api/v1/hosts/${hostId}/prune/preview`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ options: {} }) })).status).toBeGreaterThanOrEqual(401);
+
+    // Volumes : le nom de l'hôte doit être saisi ; rien n'est lancé sinon.
+    const hostName = (await pool.query("SELECT name FROM hosts WHERE id = $1", [hostId])).rows[0].name as string;
+    const body = { options: { containers: { enabled: true }, volumes: { mode: "all" } } };
+    expect((await call("POST", `/api/v1/hosts/${hostId}/prune`, body)).json.error.code).toBe("confirmation_required");
+    expect((await call("POST", `/api/v1/hosts/${hostId}/prune`, { ...body, confirmHostName: "autre" })).json.error.code).toBe("confirmation_required");
+    expect((await call("POST", `/api/v1/hosts/${hostId}/prune`, { options: {} })).json.error.code).toBe("nothing_to_prune");
+    expect(received.filter((m) => m.type === "prune")).toHaveLength(0);
+
+    const started = await call("POST", `/api/v1/hosts/${hostId}/prune`, { ...body, confirmHostName: hostName });
+    expect(started.status).toBe(202);
+    await waitFor(() => received.some((m) => m.type === "prune"));
+    const sent = received.find((m) => m.type === "prune") as Record<string, any>;
+    // Sélection explicite, recalculée par la console : jamais ce que le navigateur envoie.
+    expect(sent.operationId).toBe(started.json.run.id);
+    expect(sent.targets).toMatchObject({ containers: ["2".repeat(64)], volumes: expect.arrayContaining(["app_data", "f".repeat(64)]), images: [], networks: [] });
+    expect(Date.parse(sent.expiresAt)).toBeGreaterThan(Date.now());
+
+    // Un seul nettoyage à la fois par hôte.
+    expect((await call("POST", `/api/v1/hosts/${hostId}/prune`, { ...body, confirmHostName: hostName })).json.error.code).toBe("prune_in_progress");
+
+    ws.send(JSON.stringify({ type: "prune_result", operationId: sent.operationId, status: "succeeded", removed: { containers: 1, images: 0, networks: 0, volumes: 2, buildCache: 0 }, reclaimedBytes: 705, skipped: [], errors: [] }));
+    await waitFor(async () => (await call("GET", `/api/v1/prune-runs/${sent.operationId}`)).json.run.status === "succeeded");
+    const run = (await call("GET", `/api/v1/prune-runs/${sent.operationId}`)).json.run;
+    expect(run).toMatchObject({ requestedBy: expect.any(String), result: { reclaimedBytes: 705, removed: { volumes: 2 } } });
+    expect(((await call("GET", `/api/v1/hosts/${hostId}/prune-runs`)).json.runs as any[])[0].id).toBe(sent.operationId);
+
+    // Un relevé trop ancien est refusé : l'aperçu doit refléter l'état actuel.
+    await pool.query("UPDATE hosts SET disk_usage_at = now() - interval '10 minutes' WHERE id = $1", [hostId]);
+    expect((await call("POST", `/api/v1/hosts/${hostId}/prune/preview`, { options: { networks: { enabled: true } } })).json.error.code).toBe("disk_usage_stale");
+
+    // Actualisation : l'agent répond à la demande de relevé.
+    const answer = (raw: unknown) => {
+      if (JSON.parse(String(raw)).type === "request_disk_usage") ws.send(JSON.stringify(usage()));
+    };
+    ws.on("message", answer);
+    expect((await call("POST", `/api/v1/hosts/${hostId}/disk-usage/refresh`)).status).toBe(200);
+    ws.off("message", answer);
+    expect((await call("POST", `/api/v1/hosts/${hostId}/prune/preview`, { options: { networks: { enabled: true } } })).json.items.networks).toHaveLength(1);
+  });
+
   it("purge les échantillons au-delà de la rétention (7 jours)", async () => {
     await pool.query(
       `INSERT INTO metric_samples (host_id, observed_at, container_id, container_name, project, service, cpu_percent, mem_bytes, mem_limit, net_rx, net_tx)

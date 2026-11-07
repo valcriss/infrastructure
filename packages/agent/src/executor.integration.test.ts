@@ -5,11 +5,13 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { collectDiskUsage } from "./disk-usage.js";
 import { collectInventory } from "./docker.js";
 import { Executor } from "./executor.js";
 import { LogStreamer } from "./logs.js";
 import { DEFAULT_TRIVY_IMAGE } from "./config.js";
 import { MetricsCollector } from "./metrics.js";
+import { Pruner } from "./pruner.js";
 import { TrivyScanner } from "./scanner.js";
 
 /**
@@ -276,4 +278,61 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
       rmSync(foreign, { recursive: true, force: true });
     }
   }, 240_000);
+
+  it("nettoie l'hôte en ne supprimant que l'inutilisé : conteneur arrêté, volume, réseau — jamais ce qui tourne", async () => {
+    const tag = randomBytes(3).toString("hex");
+    const stopped = `infra-prune-stopped-${tag}`;
+    const running = `infra-prune-running-${tag}`;
+    const freeVolume = `infra-prune-free-${tag}`;
+    const busyVolume = `infra-prune-busy-${tag}`;
+    const network = `infra-prune-net-${tag}`;
+    const cleanup = (): void => {
+      for (const args of [["rm", "-f", stopped, running], ["volume", "rm", "-f", freeVolume, busyVolume], ["network", "rm", network]]) {
+        try {
+          dockerOut(...args);
+        } catch {
+          /* déjà supprimé */
+        }
+      }
+    };
+    try {
+      dockerOut("create", "--name", stopped, "alpine:3.20", "true");
+      dockerOut("volume", "create", freeVolume);
+      dockerOut("volume", "create", busyVolume);
+      dockerOut("network", "create", network);
+      dockerOut("run", "-d", "--name", running, "-v", `${busyVolume}:/data`, "alpine:3.20", "sleep", "120");
+
+      const collect = () => collectDiskUsage({ socket, protectedAmong: async () => new Set(), protectedImageRefs: [] });
+      const before = await collect();
+      const ids = {
+        stopped: before.candidates.containers.find((c) => c.name === stopped)?.id,
+        network: before.candidates.networks.find((n) => n.name === network)?.id,
+      };
+      expect(ids.stopped).toBeDefined();
+      expect(ids.network).toBeDefined();
+      expect(before.candidates.volumes.map((v) => v.name)).toContain(freeVolume);
+      expect(before.candidates.volumes.map((v) => v.name)).not.toContain(busyVolume); // utilisé par un conteneur en marche
+      expect(before.candidates.containers.map((c) => c.name)).not.toContain(running);
+
+      const result = await new Pruner({ socket, collect }).run({
+        type: "prune",
+        operationId: randomUUID(),
+        // On désigne aussi, volontairement, ce qui est utilisé : l'agent doit le refuser.
+        targets: { containers: [ids.stopped as string], images: [], networks: [ids.network as string], volumes: [freeVolume, busyVolume] },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.removed).toMatchObject({ containers: 1, networks: 1, volumes: 1 });
+      expect(result.skipped.join(" ")).toContain(busyVolume);
+
+      const containers = dockerOut("ps", "-a", "--format", "{{.Names}}");
+      expect(containers).not.toContain(stopped);
+      expect(containers).toContain(running); // le conteneur en marche n'a pas été touché
+      const volumes = dockerOut("volume", "ls", "--format", "{{.Name}}");
+      expect(volumes).not.toContain(freeVolume);
+      expect(volumes).toContain(busyVolume);
+      expect(dockerOut("network", "ls", "--format", "{{.Name}}")).not.toContain(network);
+    } finally {
+      cleanup();
+    }
+  }, 120_000);
 });

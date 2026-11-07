@@ -79,6 +79,7 @@ export interface Host {
   dockerVersion: string | null;
   inventoryObservedAt: string | null;
   containerCount: number | null;
+  diskUsage: { observedAt: string; summary: DiskUsageSummary; truncated: boolean } | null;
 }
 
 export interface HostDetail extends Host {
@@ -464,4 +465,53 @@ export interface Application {
   pendingDeploy: boolean;
   lastDeployAt: string | null;
   importable: boolean;
+}
+
+// --- Espace disque Docker et nettoyage ----------------------------------------------------------------
+
+export interface DiskUsageEntry {
+  count: number;
+  sizeBytes: number;
+  reclaimableBytes: number;
+}
+
+export interface DiskUsageSummary {
+  images: DiskUsageEntry;
+  containers: DiskUsageEntry;
+  volumes: DiskUsageEntry;
+  buildCache: DiskUsageEntry;
+}
+
+export interface PruneOptions {
+  containers: { enabled: boolean; olderThanDays?: number };
+  images: { mode: "off" | "dangling" | "unused"; olderThanDays?: number };
+  networks: { enabled: boolean };
+  volumes: { mode: "off" | "anonymous" | "all" };
+  buildCache: { mode: "off" | "all" | "older"; olderThanDays?: number; keepGB?: number };
+}
+
+export interface PrunePlan {
+  observedAt: string;
+  items: {
+    containers: { id: string; name: string; image: string; project?: string; service?: string; created: number; sizeBytes: number | null }[];
+    images: { id: string; ref: string; created: number; sizeBytes: number; dangling: boolean }[];
+    networks: { id: string; name: string }[];
+    volumes: { name: string; sizeBytes: number | null; anonymous: boolean; project?: string }[];
+    buildCache: { mode: "off" | "all" | "older"; count: number; sizeBytes: number; olderThanDays: number | null; keepGB: number | null; sample: { id: string; description?: string; sizeBytes: number; lastUsedAt: string | null }[] };
+  };
+  totals: { items: number; reclaimableBytes: number };
+  warnings: { level: "info" | "warning" | "danger"; text: string }[];
+  requiresHostConfirmation: boolean;
+  truncated: boolean;
+}
+
+export interface PruneRun {
+  id: string;
+  hostId: string;
+  requestedBy: string;
+  status: "running" | "succeeded" | "failed" | "unknown";
+  result: { removed: { containers: number; images: number; networks: number; volumes: number; buildCache: number }; reclaimedBytes: number; skipped: string[]; errors: string[] } | null;
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
 }

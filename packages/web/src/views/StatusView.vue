@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ago, api, fmtDate, formatBytes, type BackupState, type BackupStatus, type Dashboard, type ImageView, type OverviewResult } from "../api";
-import MeterBar from "../components/MeterBar.vue";
+import { ago, api, fmtDate, formatBytes, type BackupState, type BackupStatus, type Dashboard, type ImageView } from "../api";
 import PanelCard from "../components/PanelCard.vue";
 
 const dash = ref<Dashboard | null>(null);
 const backup = ref<BackupStatus | null>(null);
-const overview = ref<OverviewResult | null>(null);
 const images = ref<ImageView[]>([]);
 const error = ref("");
 const now = ref(Date.now());
@@ -14,15 +12,13 @@ let timer: number | undefined;
 
 async function load() {
   try {
-    const [d, b, o, i] = await Promise.all([
+    const [d, b, i] = await Promise.all([
       api<Dashboard>("/api/v1/dashboard"),
       api<BackupStatus>("/api/v1/backup/status"),
-      api<OverviewResult>("/api/v1/dashboard/overview?range=1h"),
       api<{ images: ImageView[] }>("/api/v1/images"),
     ]);
     dash.value = d;
     backup.value = b;
-    overview.value = o;
     images.value = i.images;
     now.value = Date.now();
     error.value = "";
@@ -47,8 +43,6 @@ const BACKUP: Record<BackupState, { text: string; tone: "ok" | "warn" | "bad" | 
 };
 const TONE_CLS = { ok: "text-green-600", warn: "text-amber-500", bad: "text-red-600", mute: "text-slate-400" } as const;
 
-const resources = (hostId: string) => overview.value?.hosts.find((h) => h.hostId === hostId)?.latest ?? null;
-const pct = (used: number | null | undefined, total: number | null | undefined): number | null => (used === null || used === undefined || !total ? null : (used / total) * 100);
 
 // Fraîcheur de la base de vulnérabilités : le scan réussi le plus récent la renseigne.
 const trivy = computed(() => {
@@ -94,7 +88,7 @@ const problems = computed(() => {
       <PanelCard title="Hôtes et agents" icon="server">
         <p v-if="dash.agents.items.length === 0" class="text-sm text-slate-500">Aucun agent enrôlé.</p>
         <ul class="divide-y divide-slate-200">
-          <li v-for="a in dash.agents.items" :key="a.id" class="grid gap-4 py-4 first:pt-0 last:pb-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          <li v-for="a in dash.agents.items" :key="a.id" class="grid gap-4 py-4 first:pt-0 last:pb-0 lg:grid-cols-[minmax(0,1fr)_auto]">
             <div>
               <p class="flex items-center gap-2 font-medium">
                 <span :class="['inline-block h-2.5 w-2.5 rounded-full', a.presence === 'online' ? 'bg-green-500' : 'bg-red-500']" aria-hidden="true"></span>
@@ -107,12 +101,7 @@ const problems = computed(() => {
               </p>
               <p v-if="a.hostInfo" class="text-xs text-slate-500">{{ a.hostInfo.os }} · {{ a.hostInfo.cpus }} cœur(s) · {{ formatBytes(a.hostInfo.memTotalBytes) }} · {{ a.hostInfo.containersRunning }} conteneur(s) en marche · {{ a.hostInfo.images }} image(s)</p>
             </div>
-            <div v-if="resources(a.id)" class="space-y-2">
-              <MeterBar label="CPU" icon="microchip" :percent="resources(a.id)?.cpuPercent ?? null" />
-              <MeterBar label="Mémoire" icon="memory" :percent="pct(resources(a.id)?.memUsed, resources(a.id)?.memTotal)" :detail="resources(a.id)?.memTotal ? `${formatBytes(resources(a.id)?.memUsed ?? 0)} / ${formatBytes(resources(a.id)?.memTotal ?? 0)}` : undefined" />
-              <MeterBar label="Disque" icon="hard-drive" :percent="pct(resources(a.id)?.diskUsed, resources(a.id)?.diskTotal)" :detail="resources(a.id)?.diskTotal ? `${formatBytes(resources(a.id)?.diskUsed ?? 0)} / ${formatBytes(resources(a.id)?.diskTotal ?? 0)}` : undefined" />
-            </div>
-            <p v-else class="self-center text-xs text-slate-500">Pas de relevé de la machine pour le moment.</p>
+            <RouterLink to="/hosts" class="self-center text-sm text-blue-600 underline">CPU, mémoire, disque et espace Docker : voir la page Hôtes</RouterLink>
           </li>
         </ul>
       </PanelCard>

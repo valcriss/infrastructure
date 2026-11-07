@@ -2750,6 +2750,670 @@
         }
       }
     },
+    "/api/v1/hosts/{id}/disk-usage": {
+      "get": {
+        "summary": "Espace disque Docker d'un hôte (docker system df)",
+        "description": "Le relevé est effectué par l'agent toutes les 10 minutes (et à la demande). Les images sont comptées avec leurs couches partagées, d'après Docker.",
+        "tags": [
+          "Hôtes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Totaux et part récupérable des images, conteneurs, volumes et cache de build, avec la date du relevé",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/disk-usage/refresh": {
+      "post": {
+        "summary": "Actualiser le relevé de l'espace disque",
+        "description": "Demande un relevé à l'agent et attend sa réponse (30 s au plus).",
+        "tags": [
+          "Hôtes"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Nouveau relevé",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Erreur",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/prune/preview": {
+      "post": {
+        "summary": "Aperçu d'un nettoyage (rien n'est supprimé)",
+        "description": "Calculé sur le dernier relevé (5 minutes au plus). Docker n'ayant pas de mode simulation, la liste vient du relevé de l'agent.",
+        "tags": [
+          "Hôtes"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "options": {
+                    "type": "object",
+                    "properties": {
+                      "containers": {
+                        "default": {
+                          "enabled": false
+                        },
+                        "type": "object",
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "olderThanDays": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650
+                          }
+                        },
+                        "required": [
+                          "enabled"
+                        ]
+                      },
+                      "images": {
+                        "default": {
+                          "mode": "off"
+                        },
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "dangling",
+                              "unused"
+                            ]
+                          },
+                          "olderThanDays": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650
+                          }
+                        },
+                        "required": [
+                          "mode"
+                        ]
+                      },
+                      "networks": {
+                        "default": {
+                          "enabled": false
+                        },
+                        "type": "object",
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "enabled"
+                        ]
+                      },
+                      "volumes": {
+                        "default": {
+                          "mode": "off"
+                        },
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "anonymous",
+                              "all"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "mode"
+                        ]
+                      },
+                      "buildCache": {
+                        "default": {
+                          "mode": "off"
+                        },
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "all",
+                              "older"
+                            ]
+                          },
+                          "olderThanDays": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650
+                          },
+                          "keepGB": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 100000
+                          }
+                        },
+                        "required": [
+                          "mode"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "options"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Éléments exacts qui seraient supprimés, espace estimé, avertissements",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/prune": {
+      "post": {
+        "summary": "Nettoyer un hôte (conteneurs arrêtés, images, réseaux, volumes, cache de build)",
+        "description": "Réservé à la session de l'administrateur (jamais un jeton API). La sélection est recalculée par la console ; l'agent ne supprime que ce qui est encore inutilisé et non protégé, sans jamais forcer. Supprimer des volumes exige confirmHostName (nom de l'hôte).",
+        "tags": [
+          "Hôtes"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "options": {
+                    "type": "object",
+                    "properties": {
+                      "containers": {
+                        "default": {
+                          "enabled": false
+                        },
+                        "type": "object",
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "olderThanDays": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650
+                          }
+                        },
+                        "required": [
+                          "enabled"
+                        ]
+                      },
+                      "images": {
+                        "default": {
+                          "mode": "off"
+                        },
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "dangling",
+                              "unused"
+                            ]
+                          },
+                          "olderThanDays": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650
+                          }
+                        },
+                        "required": [
+                          "mode"
+                        ]
+                      },
+                      "networks": {
+                        "default": {
+                          "enabled": false
+                        },
+                        "type": "object",
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "enabled"
+                        ]
+                      },
+                      "volumes": {
+                        "default": {
+                          "mode": "off"
+                        },
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "anonymous",
+                              "all"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "mode"
+                        ]
+                      },
+                      "buildCache": {
+                        "default": {
+                          "mode": "off"
+                        },
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "all",
+                              "older"
+                            ]
+                          },
+                          "olderThanDays": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3650
+                          },
+                          "keepGB": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 100000
+                          }
+                        },
+                        "required": [
+                          "mode"
+                        ]
+                      }
+                    }
+                  },
+                  "confirmHostName": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "options"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Nettoyage lancé ; suivre son résultat avec GET /api/v1/prune-runs/{runId}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{id}/prune-runs": {
+      "get": {
+        "summary": "Historique des nettoyages d'un hôte",
+        "tags": [
+          "Hôtes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "20 derniers nettoyages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prune-runs/{runId}": {
+      "get": {
+        "summary": "Résultat d'un nettoyage",
+        "tags": [
+          "Hôtes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "État, éléments supprimés, espace libéré (estimation), éléments ignorés et erreurs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/applications": {
       "get": {
         "summary": "Applications (gérées et observées)",

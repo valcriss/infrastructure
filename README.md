@@ -66,11 +66,26 @@ En-tête (nom du produit défini à un seul endroit, `packages/web/src/brand.ts`
 - **Tableau de bord** : indicateurs, anneaux (applications, conteneurs, images), courbes CPU / mémoire / réseau avec animation à l'affichage, utilisation des machines hôtes, top 5 CPU et mémoire, alertes. Un conteneur terminé avec le code 0 est « terminé », jamais en erreur.
 - **Applications** : une tuile par projet Compose. Les applications **gérées** par la console (icône pleine) se distinguent de celles **observées**, qui tournent sans que la console ait leur Compose (bordure en pointillés, bouton « Prendre en charge »). Chaque tuile indique état, conteneurs, CPU / mémoire, images avec badges de vulnérabilités (jamais de badge à zéro), mises à jour et boutons démarrer / arrêter / déployer. Un clic sur une application **observée** ouvre une **fiche en lecture seule** (`/hosts/{hôte}/projects/{nom}`) : conteneurs avec ports, réseaux, montages et libellés Compose (dossier et fichiers d'origine, chemins de l'hôte), sécurité des images, métriques et logs en direct d'un conteneur. Les variables d'environnement des conteneurs ne sont jamais lues, et le contenu du fichier Compose n'est pas accessible à l'agent : « Prendre en charge » reste le moyen de la gérer.
 - **Images** : tableau des images avec vulnérabilités par gravité, détails et scan à la demande.
-- **Statut** : agents et hôtes (CPU, mémoire, disque), sauvegarde Git, sécurité des images.
+- **Hôtes** : une tuile par machine avec ses ressources (CPU, mémoire, disque de la partition de l'espace de travail) et son espace **Docker** comme `docker system df` (images, conteneurs, volumes, cache de build : nombre, taille, part récupérable), relevé toutes les 10 minutes et à la demande. Le bouton **Nettoyer…** ouvre une boîte de dialogue (voir ci-dessous).
+- **Statut** : agents (état, versions), sauvegarde Git, sécurité des images.
 - **Paramètres de l'application** (menu latéral, `/settings`) : onglet « Sauvegarde Git » (dépôt, jeton, clé de restauration, synchronisation) et onglet « Sécurité des images » (périodicité des scans et de la recherche de versions, **gravité minimale signalée** et prise en compte des vulnérabilités « inconnues », registres d'images). Le seuil s'applique à la lecture (compteurs, badges, alertes, graphiques) : les scans restent complets et un changement est immédiat, sans nouveau scan. Le graphique « Images » du tableau de bord ne compte que les CVE critiques et élevées.
 - **Paramètres de l'utilisateur** (menu utilisateur en haut à droite, `/account`) : mot de passe (et identifiant) de l'administrateur, thème clair / sombre.
 
 Les graphiques utilisent Apache ECharts (chargé à la demande) et les icônes Font Awesome Free. L'utilisation de la **machine hôte** (CPU global, mémoire hors cache, disque de la partition de l'espace de travail) est mesurée par l'agent depuis `/proc` : elle n'apparaît qu'avec un agent à jour, sur un hôte Linux.
+
+## Nettoyage d'un hôte
+
+Réservé à la **session de l'administrateur** (un jeton API, même en écriture, ne peut rien supprimer) et tracé dans le journal d'audit. La boîte de dialogue propose, avec un aperçu exact de ce qui sera supprimé (noms, tailles, ancienneté) et des avertissements explicites :
+
+| Catégorie | Options |
+| --- | --- |
+| Conteneurs arrêtés | tous, ou plus anciens que 7 j / 1 mois / 3 mois / N jours (date de **création**) |
+| Images | sans nom, ou toutes celles qu'aucun conteneur n'utilise (mêmes ancienneté) |
+| Réseaux | inutilisés |
+| Volumes | anonymes, ou **tous** les volumes inutilisés (nommés compris) : suppression définitive, confirmée en saisissant le nom de l'hôte |
+| Cache de build | tout, ou plus ancien que 7 j / 1 mois / 3 mois / N jours (dernière **utilisation**), avec un volume à conserver |
+
+Garanties : Docker n'ayant pas de mode simulation, l'aperçu vient d'un relevé de l'agent de moins de 5 minutes. La console recalcule la sélection ; l'agent ne supprime que ce qui est **encore** inutilisé et non protégé, **sans jamais forcer** (Docker refuse ce qui sert). Les conteneurs de la console et de l'agent, le cache de Trivy et l'image de Trivy ne sont jamais proposés ; supprimer un conteneur ne supprime pas ses volumes. Un nettoyage à la fois par hôte, refusé pendant un déploiement. L'espace libéré est une **estimation** (mesure exacte de Docker pour le cache de build). Il faut un agent à jour ; les routes sont `GET /api/v1/hosts/{id}/disk-usage`, `POST …/prune/preview` et `POST …/prune`.
 
 ## Supervision
 

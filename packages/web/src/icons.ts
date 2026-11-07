@@ -47,6 +47,10 @@ import {
   faTerminal,
   faClockRotateLeft,
   faListCheck,
+  faBroom,
+  faTrashCan,
+  faDatabase,
+  faBox,
 } from "@fortawesome/free-solid-svg-icons";
 
 // Seules les icônes déclarées ici sont embarquées dans l'application.
@@ -55,5 +59,5 @@ library.add(
   faCircleHalfStroke, faCircleInfo, faCircleXmark, faCloudArrowUp, faCube, faDesktop, faEye, faGaugeHigh, faGear,
   faHardDrive, faHeartPulse, faKey, faLayerGroup, faMemory, faMicrochip, faMoon, faNetworkWired, faPlug, faServer,
   faShieldHalved, faSun, faTriangleExclamation, faUser, faXmark, faPlay, faStop, faRocket, faMagnifyingGlass, faPlus, faClock, faArrowUpRightFromSquare, faCodeBranch, faDownload,
-  faFileCode, faSliders, faFolderOpen, faChartLine, faTerminal, faClockRotateLeft, faListCheck,
+  faFileCode, faSliders, faFolderOpen, faChartLine, faTerminal, faClockRotateLeft, faListCheck, faBroom, faTrashCan, faDatabase, faBox,
 );

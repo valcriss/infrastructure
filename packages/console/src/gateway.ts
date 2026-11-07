@@ -9,6 +9,7 @@ import {
   type Inventory,
   type HostMetrics,
   type MetricSample,
+  type PruneResult,
   type ScanResult,
   type OperationResultSchema,
 } from "@infra/shared";
@@ -30,6 +31,7 @@ export interface GatewayHandlers {
   onLogEnd(hostId: string, streamId: string, reason: string): void;
   onMetrics(hostId: string, samples: MetricSample[], host?: HostMetrics): Promise<void>;
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
+  onPruneResult(hostId: string, result: PruneResult): Promise<void>;
 }
 
 interface Connection {
@@ -168,6 +170,12 @@ export class AgentGateway {
             break;
           case "metrics":
             await this.handlers?.onMetrics(hostId, msg.samples, msg.host);
+            break;
+          case "disk_usage":
+            await this.pool.query("UPDATE hosts SET disk_usage = $2, disk_usage_at = now() WHERE id = $1", [hostId, JSON.stringify(msg)]);
+            break;
+          case "prune_result":
+            await this.handlers?.onPruneResult(hostId, msg);
             break;
           case "scan_result":
             await this.handlers?.onScanResult(hostId, msg);
