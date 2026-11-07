@@ -9,6 +9,7 @@ import {
   type Inventory,
   type HostMetrics,
   type MetricSample,
+  type PruneProgress,
   type PruneResult,
   type ScanResult,
   type OperationResultSchema,
@@ -32,6 +33,7 @@ export interface GatewayHandlers {
   onMetrics(hostId: string, samples: MetricSample[], host?: HostMetrics): Promise<void>;
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
   onPruneResult(hostId: string, result: PruneResult): Promise<void>;
+  onPruneProgress(hostId: string, progress: PruneProgress): Promise<void>;
 }
 
 interface Connection {
@@ -173,6 +175,9 @@ export class AgentGateway {
             break;
           case "disk_usage":
             await this.pool.query("UPDATE hosts SET disk_usage = $2, disk_usage_at = now() WHERE id = $1", [hostId, JSON.stringify(msg)]);
+            break;
+          case "prune_progress":
+            await this.handlers?.onPruneProgress(hostId, msg);
             break;
           case "prune_result":
             await this.handlers?.onPruneResult(hostId, msg);

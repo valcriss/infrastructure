@@ -49,7 +49,27 @@ const confirmName = ref("");
 const run = ref<PruneRun | null>(null);
 const dialog = ref<HTMLElement | null>(null);
 let timer: number | undefined;
+let clock: number | undefined;
 let debounce: number | undefined;
+const tick = ref(Date.now());
+
+const PHASE_LABEL = { containers: "Conteneurs", networks: "Réseaux", images: "Images", volumes: "Volumes", buildCache: "Cache de build" } as const;
+const elapsed = computed(() => {
+  if (!run.value) return "";
+  const s = Math.max(0, Math.round((tick.value - Date.parse(run.value.createdAt)) / 1000));
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+});
+/** « Conteneurs 56 / 300 » (le cache de build n'a pas de compteur : c'est un seul bloc). */
+const phaseText = computed(() => {
+  const p = run.value?.progress;
+  if (!p) return "";
+  if (p.phase === "buildCache") return PHASE_LABEL.buildCache;
+  return `${PHASE_LABEL[p.phase]} ${Math.min(p.done + (p.current ? 1 : 0), p.total)} / ${p.total}`;
+});
+const overallPct = computed(() => {
+  const p = run.value?.progress;
+  return p && p.overall.total > 0 ? Math.min(100, Math.round((p.overall.done / p.overall.total) * 100)) : 0;
+});
 let planSeq = 0;
 
 async function refresh() {
@@ -102,7 +122,8 @@ async function start() {
     });
     run.value = r.run;
     step.value = "running";
-    timer = window.setInterval(() => void poll(), 1500);
+    timer = window.setInterval(() => void poll(), 1000);
+    clock = window.setInterval(() => (tick.value = Date.now()), 1000);
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : describeError(err);
   }
@@ -114,6 +135,7 @@ async function poll() {
     run.value = (await api<{ run: PruneRun }>(`/api/v1/prune-runs/${run.value.id}`)).run;
     if (run.value.status !== "running") {
       window.clearInterval(timer);
+      window.clearInterval(clock);
       step.value = "result";
       emit("done");
     }
@@ -139,6 +161,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKey);
   window.clearInterval(timer);
+  window.clearInterval(clock);
   window.clearTimeout(debounce);
 });
 
@@ -299,8 +322,35 @@ const reclaim = (k: keyof DiskUsageSummary): string => (summary.value ? formatBy
         </footer>
       </template>
 
-      <div v-else-if="step === 'running'" class="flex items-center gap-3 p-10 text-slate-600" role="status">
-        <FaIcon :icon="['fas', 'arrows-rotate']" spin /> Nettoyage en cours… ne fermez pas cette fenêtre (le suivi se fait jusqu'au bout).
+      <div v-else-if="step === 'running'" class="space-y-4 p-8" role="status" aria-live="polite">
+        <p class="flex items-center gap-2 font-medium"><FaIcon :icon="['fas', 'arrows-rotate']" spin /> Nettoyage en cours… <span class="text-sm font-normal text-slate-500">{{ elapsed }}</span></p>
+        <template v-if="run?.progress">
+          <div>
+            <div class="mb-1 flex justify-between text-sm">
+              <span class="font-medium">{{ phaseText }}</span>
+              <span class="tabular-nums text-slate-500">{{ run.progress.overall.done }} / {{ run.progress.overall.total }} éléments · {{ overallPct }} %</span>
+            </div>
+            <div class="h-3 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="Progression du nettoyage" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="overallPct">
+              <div class="h-full rounded-full bg-blue-600 transition-all duration-500" :style="{ width: `${overallPct}%` }"></div>
+            </div>
+          </div>
+          <p v-if="run.progress.current" class="truncate rounded-md bg-slate-50 px-3 py-2 font-mono text-sm" :title="run.progress.current">
+            <span class="text-slate-500">En cours :</span> {{ run.progress.current }}
+          </p>
+          <div v-if="run.progress.phase === 'buildCache' && run.progress.done === 0" class="space-y-2 rounded-md border border-blue-300 bg-blue-50 p-3 text-sm text-blue-900">
+            <div class="h-2 overflow-hidden rounded-full bg-white"><div class="h-full w-1/3 animate-pulse rounded-full bg-blue-500"></div></div>
+            <p>Suppression du cache de build<template v-if="run.progress.buildCacheBytes"> (≈ {{ formatBytes(run.progress.buildCacheBytes) }})</template> : Docker la traite d'un seul bloc, sans détail intermédiaire. Cette étape peut durer plusieurs minutes.</p>
+          </div>
+          <ul class="flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-600">
+            <li>Conteneurs <strong class="tabular-nums">{{ run.progress.removed.containers }}</strong></li>
+            <li>Réseaux <strong class="tabular-nums">{{ run.progress.removed.networks }}</strong></li>
+            <li>Images <strong class="tabular-nums">{{ run.progress.removed.images }}</strong></li>
+            <li>Volumes <strong class="tabular-nums">{{ run.progress.removed.volumes }}</strong></li>
+            <li class="text-slate-500">≈ {{ formatBytes(run.progress.reclaimedBytes) }} libérés jusqu'ici</li>
+          </ul>
+        </template>
+        <p v-else class="text-sm text-slate-500">Démarrage… relevé des éléments encore supprimables.</p>
+        <p class="text-xs text-slate-500">Ne fermez pas cette fenêtre : le suivi se fait jusqu'au bout.</p>
       </div>
 
       <div v-else-if="step === 'result' && run" class="space-y-4 p-6">

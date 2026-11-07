@@ -339,12 +339,18 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
       expect(before.candidates.volumes.map((v) => v.name)).not.toContain(busyVolume); // utilisé par un conteneur en marche
       expect(before.candidates.containers.map((c) => c.name)).not.toContain(running);
 
-      const result = await new Pruner({ socket, collect }).run({
-        type: "prune",
-        operationId: randomUUID(),
-        // On désigne aussi, volontairement, ce qui est utilisé : l'agent doit le refuser.
-        targets: { containers: [ids.stopped as string], images: [], networks: [ids.network as string], volumes: [freeVolume, busyVolume] },
-      });
+      const progress: string[] = [];
+      const result = await new Pruner({ socket, collect }).run(
+        {
+          type: "prune",
+          operationId: randomUUID(),
+          // On désigne aussi, volontairement, ce qui est utilisé : l'agent doit le refuser.
+          targets: { containers: [ids.stopped as string], images: [], networks: [ids.network as string], volumes: [freeVolume, busyVolume] },
+        },
+        (p) => progress.push(`${p.phase}:${p.current ?? "fin"}`),
+      );
+      // L'avancement nomme l'élément en cours avant sa suppression.
+      expect(progress).toEqual(expect.arrayContaining([`containers:${stopped}`, `networks:${network}`, `volumes:${freeVolume}`]));
       expect(result.status).toBe("succeeded");
       expect(result.removed).toMatchObject({ containers: 1, networks: 1, volumes: 1 });
       expect(result.skipped.join(" ")).toContain(busyVolume);

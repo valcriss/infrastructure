@@ -305,7 +305,7 @@ export class AgentClient {
               }
               // Un nettoyage à la fois ; le résultat repasse par emit() (conservé si la connexion est coupée).
               void this.pruner
-                .run(msg)
+                .run(msg, (p) => this.emit(p))
                 .then((result) => {
                   this.emit(result);
                   void sendDiskUsage();

@@ -513,6 +513,17 @@ export interface PruneRun {
   requestedBy: string;
   status: "running" | "succeeded" | "failed" | "unknown";
   result: { removed: { containers: number; images: number; networks: number; volumes: number; buildCache: number }; reclaimedBytes: number; skipped: string[]; errors: string[] } | null;
+  /** Dernier avancement reçu de l'agent pendant le nettoyage. */
+  progress: {
+    phase: "containers" | "networks" | "images" | "volumes" | "buildCache";
+    done: number;
+    total: number;
+    current?: string;
+    overall: { done: number; total: number };
+    removed: { containers: number; images: number; networks: number; volumes: number; buildCache: number };
+    reclaimedBytes: number;
+    buildCacheBytes?: number;
+  } | null;
   error: string | null;
   createdAt: string;
   finishedAt: string | null;

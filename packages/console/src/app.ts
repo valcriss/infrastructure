@@ -393,6 +393,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     },
     onScanResult: (hostId, result) => scans.onResult(hostId, result),
     onPruneResult: (hostId, result) => pruning.onResult(hostId, result),
+    onPruneProgress: (hostId, progress) => pruning.onProgress(hostId, progress),
   });
   app.addHook("onClose", async () => ops.close());
   const backup = new BackupService({

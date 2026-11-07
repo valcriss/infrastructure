@@ -394,6 +394,11 @@ describe.skipIf(!url)("supervision (intégration)", () => {
     expect(sent.targets).toMatchObject({ containers: ["2".repeat(64)], volumes: expect.arrayContaining(["app_data", "f".repeat(64)]), images: [], networks: [] });
     expect(Date.parse(sent.expiresAt)).toBeGreaterThan(Date.now());
 
+    // Avancement en direct : le dernier point reçu de l'agent est visible dans le suivi du nettoyage.
+    ws.send(JSON.stringify({ type: "prune_progress", operationId: sent.operationId, phase: "volumes", done: 1, total: 2, current: "app_data", overall: { done: 2, total: 3 }, removed: { containers: 1, images: 0, networks: 0, volumes: 1, buildCache: 0 }, reclaimedBytes: 105 }));
+    await waitFor(async () => (await call("GET", `/api/v1/prune-runs/${sent.operationId}`)).json.run.progress?.current === "app_data");
+    expect((await call("GET", `/api/v1/prune-runs/${sent.operationId}`)).json.run).toMatchObject({ status: "running", progress: { phase: "volumes", done: 1, total: 2, overall: { done: 2, total: 3 }, reclaimedBytes: 105 } });
+
     // Un seul nettoyage à la fois par hôte.
     expect((await call("POST", `/api/v1/hosts/${hostId}/prune`, { ...body, confirmHostName: hostName })).json.error.code).toBe("prune_in_progress");
 

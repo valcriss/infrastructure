@@ -1,4 +1,4 @@
-import type { ConsoleMessage, DiskCandidates, DiskUsageMessage, PruneMessage, PruneResult } from "@infra/shared";
+import type { ConsoleMessage, DiskCandidates, DiskUsageMessage, PruneMessage, PruneProgress, PruneResult } from "@infra/shared";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { audit, type Pool } from "./db.js";
@@ -47,6 +47,8 @@ export interface PruneRunRow {
   status: "running" | "succeeded" | "failed" | "unknown";
   options: PruneOptions;
   result: PruneResult | null;
+  /** Avancement du dernier point reçu de l'agent (nettoyage en cours). */
+  progress: Omit<PruneProgress, "type" | "operationId"> | null;
   error: string | null;
   createdAt: string;
   finishedAt: string | null;
@@ -64,6 +66,7 @@ interface DbRun {
   status: PruneRunRow["status"];
   options: PruneOptions;
   result: PruneResult | null;
+  progress: PruneRunRow["progress"];
   error: string | null;
   created_at: Date;
   finished_at: Date | null;
@@ -76,6 +79,7 @@ const toRun = (r: DbRun): PruneRunRow => ({
   status: r.status,
   options: r.options,
   result: r.result,
+  progress: r.progress,
   error: r.error,
   createdAt: r.created_at.toISOString(),
   finishedAt: r.finished_at?.toISOString() ?? null,
@@ -275,6 +279,12 @@ export class PruneService {
       await this.pool.query("UPDATE prune_runs SET status = 'failed', finished_at = now(), error = 'Agent hors ligne : rien n''a été supprimé.' WHERE id = $1", [id]);
     }
     return (await this.get(id)) as PruneRunRow;
+  }
+
+  /** Dernier avancement connu : écrase le précédent (la page l'interroge toutes les secondes). */
+  async onProgress(hostId: string, msg: PruneProgress): Promise<void> {
+    const { type: _t, operationId, ...progress } = msg;
+    await this.pool.query("UPDATE prune_runs SET progress = $3 WHERE id = $1 AND host_id = $2 AND status = 'running'", [operationId, hostId, JSON.stringify(progress)]);
   }
 
   async onResult(hostId: string, msg: PruneResult): Promise<void> {

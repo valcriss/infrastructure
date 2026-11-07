@@ -1,4 +1,4 @@
-import type { DiskUsageMessage, PruneMessage } from "@infra/shared";
+import type { DiskUsageMessage, PruneMessage, PruneProgress } from "@infra/shared";
 import { describe, expect, it } from "vitest";
 import { buildDiskUsage, parseDf, type NetworkInfo } from "./disk-usage.js";
 import { Pruner } from "./pruner.js";
@@ -136,6 +136,40 @@ describe("Pruner", () => {
     expect(call).toContain("keep-storage=2000000000");
     expect(r.removed.buildCache).toBe(1);
     expect(r.reclaimedBytes).toBe(1000);
+  });
+
+  it("rapporte l'avancement : phase, élément en cours avant sa suppression, compteurs, puis la fin de chaque phase", async () => {
+    const events: PruneProgress[] = [];
+    let clock = 0;
+    const p = new Pruner({
+      socket: "s",
+      now: () => clock, // l'horloge ne bouge pas : seuls les débuts et fins de phase sont rapportés (limitation de débit)
+      collect: async () => usage,
+      request: async (_m, path) => ({ status: path.startsWith("/build/prune") ? 200 : 204, body: path.startsWith("/build/prune") ? { CachesDeleted: ["b1"], SpaceReclaimed: 1000 } : null }),
+    });
+    await p.run(msg({ containers: ["2".repeat(64)], images: [], networks: ["n1".padEnd(12, "0")], volumes: ["shop_db", "f".repeat(64)], buildCache: { mode: "all" } }), (e) => events.push(e));
+
+    const first = events[0] as PruneProgress;
+    expect(first).toMatchObject({ phase: "containers", done: 0, total: 1, current: "migrate-1", overall: { done: 0, total: 5 } }); // 1 conteneur + 1 réseau + 2 volumes + le cache
+    const phases = events.map((e) => e.phase);
+    expect(phases[0]).toBe("containers");
+    expect(phases).toContain("networks");
+    expect(phases).toContain("volumes");
+    expect(phases.at(-1)).toBe("buildCache");
+    // Le cache de build est annoncé avant l'appel (un seul bloc, peut être long), avec sa taille.
+    expect(events.find((e) => e.phase === "buildCache")).toMatchObject({ done: 0, current: "cache de build", buildCacheBytes: 1000 });
+    const last = events.at(-1) as PruneProgress;
+    expect(last).toMatchObject({ done: 1, total: 1, overall: { done: 5, total: 5 }, removed: { containers: 1, networks: 1, volumes: 2, buildCache: 1 } });
+    expect(last.reclaimedBytes).toBe(7 + 900 + 500 + 1000);
+    // Limitation de débit : bien moins de messages que d'éléments à chaque tour de boucle.
+    clock = 10_000;
+    expect(events.length).toBeLessThanOrEqual(12);
+  });
+
+  it("n'annonce que les éléments encore supprimables dans le total (les autres sont ignorés)", async () => {
+    const events: PruneProgress[] = [];
+    await pruner(() => 204).run(msg({ containers: ["2".repeat(64), "1".repeat(64)], images: [], networks: [], volumes: ["in-use"] }), (e) => events.push(e));
+    expect(events[0]?.overall.total).toBe(1); // le conteneur en marche et le volume utilisé ne comptent pas
   });
 
   it("échoue proprement si Docker est injoignable", async () => {

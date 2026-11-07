@@ -216,6 +216,28 @@ export const DiskUsageMessageSchema = z.object({
 });
 export type DiskUsageMessage = z.infer<typeof DiskUsageMessageSchema>;
 
+export const PRUNE_PHASES = ["containers", "networks", "images", "volumes", "buildCache"] as const;
+export type PrunePhase = (typeof PRUNE_PHASES)[number];
+
+/** Avancement d'un nettoyage : phase en cours, élément en cours de suppression, compteurs. Envoyé à intervalles réguliers. */
+export const PruneProgressSchema = z.object({
+  type: z.literal("prune_progress"),
+  operationId: z.uuid(),
+  phase: z.enum(PRUNE_PHASES),
+  /** Éléments traités / à traiter dans cette phase (le cache de build est supprimé d'un seul bloc). */
+  done: z.number().int().min(0),
+  total: z.number().int().min(0),
+  /** Nom de l'élément en cours de suppression. */
+  current: z.string().max(200).optional(),
+  /** Avancement global, toutes phases confondues. */
+  overall: z.object({ done: z.number().int().min(0), total: z.number().int().min(0) }),
+  removed: z.object({ containers: z.number().int().min(0), images: z.number().int().min(0), networks: z.number().int().min(0), volumes: z.number().int().min(0), buildCache: z.number().int().min(0) }),
+  reclaimedBytes: z.number().min(0),
+  /** Taille du cache de build ciblé (suppression sans détail intermédiaire). */
+  buildCacheBytes: z.number().min(0).optional(),
+});
+export type PruneProgress = z.infer<typeof PruneProgressSchema>;
+
 export const PruneResultSchema = z.object({
   type: z.literal("prune_result"),
   operationId: z.uuid(),
@@ -290,6 +312,7 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   MetricsMessageSchema,
   ScanResultSchema,
   DiskUsageMessageSchema,
+  PruneProgressSchema,
   PruneResultSchema,
   OperationLogSchema,
   OperationResultSchema,
