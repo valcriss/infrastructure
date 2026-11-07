@@ -34,6 +34,8 @@ export interface GatewayHandlers {
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
   onPruneResult(hostId: string, result: PruneResult): Promise<void>;
   onPruneProgress(hostId: string, progress: PruneProgress): Promise<void>;
+  /** Un agent vient de se connecter (ou reconnecter) : de quoi relancer ce qui attend (file de scans). */
+  onConnect?(hostId: string): Promise<void>;
 }
 
 interface Connection {
@@ -156,6 +158,7 @@ export class AgentGateway {
             metricsIntervalSec: this.metricsIntervalSec,
             serverTime: new Date().toISOString(),
           });
+          void this.handlers?.onConnect?.(hostId)?.catch((err: unknown) => this.log.error({ err }, "erreur après connexion d'un agent"));
           return;
         }
 

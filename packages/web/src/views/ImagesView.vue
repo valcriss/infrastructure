@@ -11,7 +11,7 @@ const info = ref("");
 const filter = ref<"" | "managed" | "never" | "vulnerable" | "failed">("");
 const search = ref("");
 const open = reactive<Record<string, boolean>>({});
-const queue = ref({ pending: 0, running: 0 });
+const queue = ref<{ pending: number; running: number; current: { imageRef: string; startedAt: string } | null }>({ pending: 0, running: 0, current: null });
 const scanAll = ref(false);
 // Plus grand nombre de scans en file depuis l'apparition de la bannière : sert à la barre de progression.
 const peak = ref(0);
@@ -32,9 +32,9 @@ const high = computed(() => images.value.reduce((n, i) => n + (i.scan.current?.c
 
 async function load() {
   try {
-    const r = await api<{ queue?: { pending: number; running: number }; images: ImageView[] }>("/api/v1/images");
+    const r = await api<{ queue?: { pending: number; running: number; current: { imageRef: string; startedAt: string } | null }; images: ImageView[] }>("/api/v1/images");
     images.value = r.images;
-    queue.value = r.queue ?? { pending: 0, running: 0 };
+    queue.value = r.queue ?? { pending: 0, running: 0, current: null };
     const active = queue.value.pending + queue.value.running;
     peak.value = active === 0 ? 0 : Math.max(peak.value, active);
     error.value = "";
@@ -57,6 +57,21 @@ async function onStarted(r: BatchResult) {
   scanAll.value = false;
   info.value = `${r.requested} scan(s) mis en file (un à la fois)${r.alreadyQueued ? `, ${r.alreadyQueued} déjà en file` : ""}${r.skippedOffline ? `, ${r.skippedOffline} ignoré(s) : hôte hors ligne` : ""}.`;
   await load();
+}
+
+// Un scan dure de quelques secondes à quelques minutes : au-delà de 10 minutes, il est probablement perdu.
+const runningMinutes = computed(() => (queue.value.current ? Math.max(0, Math.round((Date.now() - Date.parse(queue.value.current.startedAt)) / 60_000)) : 0));
+const looksStuck = computed(() => queue.value.running > 0 && runningMinutes.value >= 10);
+
+async function unblock() {
+  if (!confirm("Déclarer perdu le scan en cours et reprendre la file ? Si l'agent le terminait quand même, son résultat serait ignoré.")) return;
+  try {
+    const r = await api<{ removed: number; interrupted: number }>("/api/v1/images/scans/queue?only=running", { method: "DELETE" });
+    info.value = `File débloquée : ${r.interrupted} scan(s) en cours interrompu(s), les ${queue.value.pending} en attente reprennent.`;
+    await load();
+  } catch (err) {
+    error.value = describeError(err);
+  }
 }
 
 async function cancelQueue() {
@@ -110,8 +125,15 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <FaIcon :icon="['fas', 'arrows-rotate']" spin />
           Scans : {{ queue.running }} en cours, {{ queue.pending }} en attente — un à la fois
         </p>
-        <button v-if="queue.pending > 0" class="rounded-md border border-blue-400 px-3 py-1 hover:bg-white" @click="cancelQueue">Annuler la file d'attente</button>
+        <div class="flex flex-wrap gap-2">
+          <button v-if="queue.running > 0" :class="['rounded-md border px-3 py-1 hover:bg-white', looksStuck ? 'border-amber-500 bg-amber-100 font-medium text-amber-900' : 'border-blue-400']" @click="unblock">Débloquer la file</button>
+          <button v-if="queue.pending > 0" class="rounded-md border border-blue-400 px-3 py-1 hover:bg-white" @click="cancelQueue">Annuler la file d'attente</button>
+        </div>
       </div>
+      <p v-if="queue.current" class="mt-1 text-xs">
+        En cours : <span class="font-mono">{{ queue.current.imageRef }}</span> depuis {{ runningMinutes < 1 ? "moins d'une minute" : `${runningMinutes} min` }}.
+        <span v-if="looksStuck" class="font-medium text-amber-800">Ce scan dure anormalement longtemps : s'il est perdu (agent redémarré, application mise à jour…), utilisez « Débloquer la file ».</span>
+      </p>
       <div class="mt-2 h-2 overflow-hidden rounded-full bg-white" role="progressbar" aria-label="Progression des scans" aria-valuemin="0" :aria-valuemax="peak" :aria-valuenow="peak - queue.pending - queue.running">
         <div class="h-full rounded-full bg-blue-600 transition-all duration-700" :style="{ width: `${peak ? ((peak - queue.pending - queue.running) / peak) * 100 : 0}%` }"></div>
       </div>

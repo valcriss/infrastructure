@@ -267,7 +267,11 @@ export class AgentClient {
               void this.scanner
                 .scan(msg)
                 .then((result) => this.emit(result))
-                .catch((err: unknown) => this.log(`erreur de scan : ${(err as Error).message}`));
+                .catch((err: unknown) => {
+                  // Toujours répondre : sans résultat, la console garderait le scan « en cours » et bloquerait la file.
+                  this.log(`erreur de scan : ${(err as Error).message}`);
+                  this.emit({ type: "scan_result", scanId: msg.scanId, status: "failed", error: `Erreur inattendue de l'agent : ${(err as Error).message}`.slice(0, 500) });
+                });
               break;
             }
             case "logs_start":

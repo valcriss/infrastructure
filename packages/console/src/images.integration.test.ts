@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
 import { createPool, migrate, type Pool } from "./db.js";
 import { ScanService } from "./scans.js";
@@ -418,6 +418,10 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
       [image, hostId, status, ageHours],
     );
 
+  /** Images « présentes » sur l'hôte (liste de l'inventaire) : un scan en attente sur une autre image serait abandonné. */
+  const withImages = (host: string, ids: string[]) =>
+    pool.query("UPDATE hosts SET images = coalesce(images, '[]'::jsonb) || $2::jsonb WHERE id = $1", [host, JSON.stringify(ids.map((id) => ({ id })))]);
+
   it("conserve le dernier scan réussi même après une longue série d'échecs", async () => {
     const img = sha("7");
     await insertScan(img, "succeeded", 240);
@@ -433,6 +437,7 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
   it("n'exécute jamais deux scans à la fois sur un hôte, même si deux démarrages se font concurrence", async () => {
     await pool.query("UPDATE image_scans SET status = 'failed', finished_at = now() WHERE status IN ('pending', 'running')");
     const [a, b] = [sha("8"), sha("9")];
+    await withImages(hostId, [a, b]);
     await insertScan(a, "pending", 0);
     await insertScan(b, "pending", 0);
     await Promise.all([built.scans.pump(hostId), built.scans.pump(hostId), built.scans.pump(hostId)]);
@@ -500,7 +505,7 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect(counts.find((c) => c.status === "pending")?.n).toBe(2);
 
     const listing = (await call("GET", "/api/v1/images")).json;
-    expect(listing.queue).toEqual({ pending: 2, running: 1 });
+    expect(listing.queue).toMatchObject({ pending: 2, running: 1, current: { imageRef: expect.any(String) } });
     const states = (listing.images as any[]).map((i) => [i.scan.state, i.scan.queuePosition]).sort();
     expect(states).toEqual([["pending", 1], ["pending", 2], ["running", null]]);
 
@@ -508,9 +513,9 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect((await batch({ scope: "all" })).json).toMatchObject({ requested: 0, alreadyQueued: 3 });
 
     // Annulation : seuls les scans en attente sont retirés, celui en cours va à son terme.
-    expect((await call("DELETE", "/api/v1/images/scans/queue")).json).toEqual({ removed: 2 });
+    expect((await call("DELETE", "/api/v1/images/scans/queue")).json).toEqual({ removed: 2, interrupted: 0 });
     expect((await pool.query("SELECT count(*)::int AS n FROM image_scans WHERE status = 'running'")).rows[0].n).toBe(1);
-    expect((await call("GET", "/api/v1/images")).json.queue).toEqual({ pending: 0, running: 1 });
+    expect((await call("GET", "/api/v1/images")).json.queue).toMatchObject({ pending: 0, running: 1 });
 
     // Le scan en cours se termine ; « jamais scannées » ne le recompte plus, « périmées » le reprend quand il vieillit.
     const running = (await pool.query("SELECT id FROM image_scans WHERE status = 'running'")).rows[0].id as string;
@@ -533,6 +538,7 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     const svc = new ScanService(pool, { isOnline: () => true, send: (id, m) => (sent.push(`${id === hostId ? "A" : "B"}:${(m as { scanId: string }).scanId}`), true) });
     const request = (host: string, image: string) => svc.request({ imageId: image, platform: "linux/amd64", hostId: host, imageRef: "x:1", trigger: "manual", requestedBy: "test" });
 
+    await withImages(hostId, [sha("1"), sha("3")]);
     const first = await request(hostId, sha("1"));
     const second = await request(hostB, sha("2")); // un autre hôte, mais la file est unique
     const third = await request(hostId, sha("3"));
@@ -548,6 +554,48 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect(await status(third.scan.id)).toBe("running");
     await pool.query("DELETE FROM image_scans");
     await pool.query("DELETE FROM hosts WHERE id = $1", [hostB]);
+  });
+
+  it("abandonne un scan en attente dont l'image a disparu de l'hôte (application mise à jour) et passe au suivant", async () => {
+    await pool.query("DELETE FROM image_scans");
+    const gone = sha("4"); // plus dans la liste d'images de l'hôte : remplacée par une mise à jour
+    const present = sha("3");
+    await withImages(hostId, [present]);
+    const old = (await insertScan(gone, "pending", 2)).rows[0].id as string; // le plus ancien : il passerait en premier
+    const next = (await insertScan(present, "pending", 1)).rows[0].id as string;
+    await built.scans.pump(hostId);
+    const status = async (id: string) => (await pool.query("SELECT status, error FROM image_scans WHERE id = $1", [id])).rows[0] as { status: string; error: string | null };
+    expect(await status(old)).toMatchObject({ status: "failed", error: expect.stringContaining("retirée de l'hôte") });
+    expect((await status(next)).status).toBe("running"); // la file n'est pas bloquée
+    await pool.query("DELETE FROM image_scans");
+  });
+
+  it("fait avancer la file même quand la planification échoue", async () => {
+    await pool.query("DELETE FROM image_scans");
+    await withImages(hostId, [sha("2")]);
+    await insertScan(sha("2"), "pending", 0);
+    const svc = new ScanService(pool, { isOnline: () => true, send: () => true });
+    vi.spyOn(svc, "scheduledPass").mockRejectedValue(new Error("planification en panne"));
+    await svc.tick(); // ne lève pas, et la file avance malgré l'échec
+    expect((await pool.query("SELECT status FROM image_scans WHERE image_id = $1", [sha("2")])).rows[0].status).toBe("running");
+    await pool.query("DELETE FROM image_scans");
+  });
+
+  it("permet de débloquer la file : le scan en cours est déclaré perdu et les scans en attente reprennent", async () => {
+    await pool.query("DELETE FROM image_scans");
+    await withImages(hostId, [sha("5"), sha("6")]);
+    const lost = (await insertScan(sha("5"), "running", 1)).rows[0].id as string;
+    await pool.query("UPDATE image_scans SET started_at = now() - interval '15 minutes' WHERE id = $1", [lost]);
+    const waiting = (await insertScan(sha("6"), "pending", 0)).rows[0].id as string;
+    await built.scans.pump(hostId);
+    expect((await pool.query("SELECT status FROM image_scans WHERE id = $1", [waiting])).rows[0].status).toBe("pending"); // bloquée derrière le scan perdu
+
+    const out = await call("DELETE", "/api/v1/images/scans/queue?only=running");
+    expect(out.json).toEqual({ removed: 0, interrupted: 1 });
+    expect((await pool.query("SELECT status, error FROM image_scans WHERE id = $1", [lost])).rows[0]).toMatchObject({ status: "failed", error: expect.stringContaining("Interrompu") });
+    expect((await pool.query("SELECT status FROM image_scans WHERE id = $1", [waiting])).rows[0].status).toBe("running"); // la file a repris
+    expect((await call("DELETE", "/api/v1/images/scans/queue?only=inconnu")).status).toBe(400);
+    await pool.query("DELETE FROM image_scans");
   });
 
   it("supprime un registre configuré", async () => {

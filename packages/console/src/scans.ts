@@ -6,7 +6,8 @@ import { getSecuritySettings } from "./settings.js";
 
 /** Un seul scan à la fois, tous hôtes confondus : la file est strictement séquentielle (et l'usage disque borné). */
 const MAX_RUNNING_TOTAL = 1;
-const SCAN_TIMEOUT_MIN = 30;
+/** Un scan « en cours » plus longtemps que ça est perdu (l'agent abandonne lui-même après 20 minutes). */
+const SCAN_TIMEOUT_MIN = 25;
 const KEEP_PER_IMAGE = 5;
 /** Verrou consultatif PostgreSQL qui sérialise le démarrage des scans (limites par hôte et globale). */
 const PUMP_LOCK = 7_305_001;
@@ -225,27 +226,18 @@ export class ScanService {
   /** Démarre le prochain scan en attente d'un hôte, s'il n'en exécute pas déjà un. */
   async pump(hostId: string): Promise<boolean> {
     if (!this.transport.isOnline(hostId)) return false;
-    // Sans verrou, deux appels simultanés voient tous deux « aucun scan en cours » et en démarrent chacun un.
-    const client = await this.pool.connect();
     let next: { id: string; image_id: string; image_ref: string } | undefined;
-    try {
-      await client.query("BEGIN");
-      await client.query("SELECT pg_advisory_xact_lock($1)", [PUMP_LOCK]);
-      const { rows } = await client.query<{ id: string; image_id: string; image_ref: string }>(
-        `UPDATE image_scans SET status = 'running', started_at = now()
-          WHERE id = (SELECT id FROM image_scans WHERE host_id = $1 AND status = 'pending' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-            AND NOT EXISTS (SELECT 1 FROM image_scans WHERE host_id = $1 AND status = 'running')
-            AND (SELECT count(*) FROM image_scans WHERE status = 'running') < $2
-          RETURNING id, image_id, image_ref`,
-        [hostId, MAX_RUNNING_TOTAL],
+    // Les scans en attente dont l'image n'existe plus sur l'hôte (stack mise à jour entre-temps) sont abandonnés :
+    // on passe aussitôt au suivant au lieu de bloquer la file ou de scanner une image qui n'est plus utilisée.
+    for (let attempt = 0; attempt < 200; attempt++) {
+      next = await this.startNext(hostId);
+      if (!next) return false;
+      if (!(await this.imageGone(hostId, next.image_id))) break;
+      await this.pool.query(
+        "UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Image retirée de l''hôte (application mise à jour ?) : scan abandonné.' WHERE id = $1",
+        [next.id],
       );
-      await client.query("COMMIT");
-      next = rows[0];
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw err;
-    } finally {
-      client.release();
+      next = undefined;
     }
     if (!next) return false;
     const sent = this.transport.send(hostId, { type: "scan", scanId: next.id, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), imageId: next.image_id, imageRef: next.image_ref });
@@ -258,6 +250,38 @@ export class ScanService {
     return true;
   }
 
+  /** Passe le plus ancien scan en attente de l'hôte à « en cours », sous verrou (un seul à la fois, hôtes confondus). */
+  private async startNext(hostId: string): Promise<{ id: string; image_id: string; image_ref: string } | undefined> {
+    // Sans verrou, deux appels simultanés voient tous deux « aucun scan en cours » et en démarrent chacun un.
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock($1)", [PUMP_LOCK]);
+      const { rows } = await client.query<{ id: string; image_id: string; image_ref: string }>(
+        `UPDATE image_scans SET status = 'running', started_at = now()
+          WHERE id = (SELECT id FROM image_scans WHERE host_id = $1 AND status = 'pending' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+            AND NOT EXISTS (SELECT 1 FROM image_scans WHERE host_id = $1 AND status = 'running')
+            AND (SELECT count(*) FROM image_scans WHERE status = 'running') < $2
+          RETURNING id, image_id, image_ref`,
+        [hostId, MAX_RUNNING_TOTAL],
+      );
+      await client.query("COMMIT");
+      return rows[0];
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Vrai si la dernière liste d'images de l'hôte ne contient plus cette image (liste absente = agent ancien : on ne sait pas). */
+  private async imageGone(hostId: string, imageId: string): Promise<boolean> {
+    const { rows } = await this.pool.query<{ images: { id: string }[] | null }>("SELECT images FROM hosts WHERE id = $1", [hostId]);
+    const images = rows[0]?.images;
+    return Array.isArray(images) && !images.some((i) => i.id === imageId);
+  }
+
   /** Démarre le plus ancien scan en attente de la file globale (hôtes en ligne), s'il n'y en a pas déjà un en cours. */
   async pumpAny(): Promise<void> {
     const { rows } = await this.pool.query<{ host_id: string }>("SELECT host_id FROM image_scans WHERE status = 'pending' GROUP BY host_id ORDER BY min(created_at)");
@@ -266,20 +290,35 @@ export class ScanService {
     }
   }
 
-  /** File d'attente : scans en attente dans l'ordre de démarrage, et nombre de scans en cours. */
-  async queue(): Promise<{ pending: { id: string; imageId: string; platform: string }[]; running: number }> {
+  /** File d'attente : scans en attente dans l'ordre de démarrage, nombre de scans en cours et description de celui qui tourne. */
+  async queue(): Promise<{
+    pending: { id: string; imageId: string; platform: string }[];
+    running: number;
+    current: { id: string; imageRef: string; hostId: string; startedAt: string } | null;
+  }> {
     const [pending, running] = await Promise.all([
       this.pool.query<{ id: string; image_id: string; platform: string }>("SELECT id, image_id, platform FROM image_scans WHERE status = 'pending' ORDER BY created_at"),
-      this.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM image_scans WHERE status = 'running'"),
+      this.pool.query<{ id: string; image_ref: string; host_id: string; started_at: Date | null }>("SELECT id, image_ref, host_id, started_at FROM image_scans WHERE status = 'running' ORDER BY started_at"),
     ]);
-    return { pending: pending.rows.map((r) => ({ id: r.id, imageId: r.image_id, platform: r.platform })), running: running.rows[0]?.n ?? 0 };
+    const cur = running.rows[0];
+    return {
+      pending: pending.rows.map((r) => ({ id: r.id, imageId: r.image_id, platform: r.platform })),
+      running: running.rows.length,
+      current: cur ? { id: cur.id, imageRef: cur.image_ref, hostId: cur.host_id, startedAt: (cur.started_at ?? new Date()).toISOString() } : null,
+    };
   }
 
   /** Retire les scans encore en attente (ils n'ont pas commencé : l'image retrouve son état précédent). Un scan en cours va à son terme. */
-  async cancelPending(actor: string): Promise<number> {
-    const res = await this.pool.query("DELETE FROM image_scans WHERE status = 'pending'");
-    await audit(this.pool, actor, "scan.cancel-queue", String(res.rowCount ?? 0), "success");
-    return res.rowCount ?? 0;
+  async cancelPending(actor: string, what: "pending" | "running" | "all" = "pending"): Promise<{ removed: number; interrupted: number }> {
+    const res = what === "running" ? { rowCount: 0 } : await this.pool.query("DELETE FROM image_scans WHERE status = 'pending'");
+    let interrupted = 0;
+    if (what !== "pending") {
+      // Déblocage manuel : le scan « en cours » est déclaré perdu (son résultat éventuel sera ignoré) et la file reprend.
+      const r = await this.pool.query("UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Interrompu par l''administrateur : relancez le scan.' WHERE status = 'running'");
+      interrupted = r.rowCount ?? 0;
+    }
+    await audit(this.pool, actor, "scan.cancel-queue", `${res.rowCount ?? 0}+${interrupted}`, "success");
+    return { removed: res.rowCount ?? 0, interrupted };
   }
 
   async onResult(hostId: string, msg: ScanResult): Promise<void> {
@@ -333,15 +372,29 @@ export class ScanService {
 
   /** Planification : relance les scans périmés (la base de vulnérabilités évolue) et traite les files d'attente. */
   async tick(): Promise<void> {
-    await this.pool.query(
-      `UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Délai dépassé : relancez le scan.'
-        WHERE status = 'running' AND started_at < now() - make_interval(mins => $1)`,
-      [SCAN_TIMEOUT_MIN],
+    // Chaque étape est isolée : l'échec d'une (planification, base momentanément indisponible…) ne doit jamais
+    // empêcher de faire avancer la file, sans quoi elle resterait bloquée tant que l'erreur dure.
+    const step = async (name: string, fn: () => Promise<unknown>): Promise<void> => {
+      try {
+        await fn();
+      } catch (err) {
+        this.log.error(err, `scans : ${name}`);
+      }
+    };
+    await step("scans perdus", () =>
+      this.pool.query(
+        `UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Délai dépassé : relancez le scan.'
+          WHERE status = 'running' AND started_at < now() - make_interval(mins => $1)`,
+        [SCAN_TIMEOUT_MIN],
+      ),
     );
-    await this.abandonStalePending();
-    const { scanIntervalHours } = await getSecuritySettings(this.pool);
-    if (scanIntervalHours > 0) await this.scheduledPass(scanIntervalHours);
-    await this.pumpAny();
+    await step("scans abandonnés", () => this.abandonStalePending());
+    await step("file d'attente", () => this.pumpAny());
+    await step("planification", async () => {
+      const { scanIntervalHours } = await getSecuritySettings(this.pool);
+      if (scanIntervalHours > 0) await this.scheduledPass(scanIntervalHours);
+    });
+    await step("file d'attente (après planification)", () => this.pumpAny());
   }
 
   /** Abandonne les scans en attente depuis un moment sur un hôte hors ligne (ou révoqué) : ils bloqueraient l'image. */

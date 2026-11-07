@@ -119,7 +119,7 @@ export function registerImageRoutes(
     const queue = await scans.queue();
     const position = new Map(queue.pending.map((p, i) => [`${p.imageId}|${p.platform}`, i + 1]));
     return {
-      queue: { pending: queue.pending.length, running: queue.running },
+      queue: { pending: queue.pending.length, running: queue.running, current: queue.current },
       images: await Promise.all(images.map((img) => view(img, position.get(`${img.imageId}|${img.platform}`) ?? null))),
     };
   });
@@ -163,7 +163,14 @@ export function registerImageRoutes(
   });
 
   // Annule les scans qui attendent encore leur tour (celui en cours va à son terme).
-  app.delete("/api/v1/images/scans/queue", { preHandler: apiAuth }, async (request) => ({ removed: await scans.cancelPending(request.actor) }));
+  // `only=running` : débloque la file en déclarant perdu le scan en cours (agent muet, résultat jamais arrivé) sans toucher
+  // aux scans en attente, qui reprennent ; `only=all` retire tout.
+  app.delete("/api/v1/images/scans/queue", { preHandler: apiAuth }, async (request) => {
+    const q = z.object({ only: z.enum(["pending", "running", "all"]).default("pending") }).parse(request.query);
+    const out = await scans.cancelPending(request.actor, q.only);
+    if (q.only !== "pending") await scans.pumpAny();
+    return out;
+  });
 
   app.get("/api/v1/images/:imageId/scan", { preHandler: apiAuth }, async (request) => {
     const { imageId } = z.object({ imageId: ImageId }).parse(request.params);

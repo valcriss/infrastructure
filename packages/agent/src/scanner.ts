@@ -267,8 +267,18 @@ export class TrivyScanner {
       return fail((err as Error).message);
     } finally {
       // Arrêt du conteneur s'il tourne encore (délai dépassé) puis nettoyage de l'archive.
-      await this.docker(["rm", "-f", container], 20_000).catch(() => {});
-      await rm(dir, { recursive: true, force: true });
+      // Le nettoyage ne doit jamais faire perdre le résultat (une exception ici l'empêcherait d'être envoyé et
+      // laisserait le scan « en cours » côté console, donc toute la file bloquée).
+      try {
+        await this.docker(["rm", "-f", container], 20_000);
+      } catch {
+        /* conteneur déjà parti */
+      }
+      try {
+        await rm(dir, { recursive: true, force: true });
+      } catch {
+        /* archive laissée sur place ; elle sera réutilisable ou supprimée à la main */
+      }
     }
   }
 }

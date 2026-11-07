@@ -3509,10 +3509,26 @@
             "cookieAuth": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "running",
+                "all"
+              ],
+              "default": "pending"
+            },
+            "description": "pending : retire les scans en attente ; running : déclare perdu le scan en cours et laisse la file reprendre (déblocage manuel) ; all : les deux"
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Nombre de scans retirés de la file",
+            "description": "Nombre de scans retirés de la file (removed) et de scans en cours interrompus (interrupted)",
             "content": {
               "application/json": {
                 "schema": {
