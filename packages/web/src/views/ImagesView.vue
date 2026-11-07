@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ago, api, describeError, fmtDate, shortId, type ImageView } from "../api";
+import ScanAllDialog, { type BatchResult } from "../components/ScanAllDialog.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
 import VulnerabilityTable from "../components/VulnerabilityTable.vue";
 
@@ -10,6 +11,10 @@ const info = ref("");
 const filter = ref<"" | "managed" | "never" | "vulnerable" | "failed">("");
 const search = ref("");
 const open = reactive<Record<string, boolean>>({});
+const queue = ref({ pending: 0, running: 0 });
+const scanAll = ref(false);
+// Plus grand nombre de scans en file depuis l'apparition de la bannière : sert à la barre de progression.
+const peak = ref(0);
 let timer: number | undefined;
 
 const key = (i: ImageView) => `${i.imageId}|${i.platform}`;
@@ -27,7 +32,11 @@ const high = computed(() => images.value.reduce((n, i) => n + (i.scan.current?.c
 
 async function load() {
   try {
-    images.value = (await api<{ images: ImageView[] }>("/api/v1/images")).images;
+    const r = await api<{ queue?: { pending: number; running: number }; images: ImageView[] }>("/api/v1/images");
+    images.value = r.images;
+    queue.value = r.queue ?? { pending: 0, running: 0 };
+    const active = queue.value.pending + queue.value.running;
+    peak.value = active === 0 ? 0 : Math.max(peak.value, active);
     error.value = "";
   } catch (err) {
     error.value = describeError(err);
@@ -38,6 +47,23 @@ async function scan(i: ImageView) {
   try {
     await api(`/api/v1/images/${encodeURIComponent(i.imageId)}/scans`, { method: "POST", body: JSON.stringify({ platform: i.platform || undefined }) });
     info.value = `Scan de ${i.refs[0] ?? shortId(i.imageId)} demandé.`;
+    await load();
+  } catch (err) {
+    error.value = describeError(err);
+  }
+}
+
+async function onStarted(r: BatchResult) {
+  scanAll.value = false;
+  info.value = `${r.requested} scan(s) mis en file (un à la fois)${r.alreadyQueued ? `, ${r.alreadyQueued} déjà en file` : ""}${r.skippedOffline ? `, ${r.skippedOffline} ignoré(s) : hôte hors ligne` : ""}.`;
+  await load();
+}
+
+async function cancelQueue() {
+  if (!confirm(`Annuler les ${queue.value.pending} scan(s) en attente ? Celui en cours ira à son terme.`)) return;
+  try {
+    const r = await api<{ removed: number }>("/api/v1/images/scans/queue", { method: "DELETE" });
+    info.value = `${r.removed} scan(s) retiré(s) de la file.`;
     await load();
   } catch (err) {
     error.value = describeError(err);
@@ -61,6 +87,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-3 text-sm">
+        <button class="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700" @click="scanAll = true">
+          <FaIcon :icon="['fas', 'shield-halved']" /> Scanner tout…
+        </button>
         <label class="relative">
           <span class="sr-only">Rechercher</span>
           <FaIcon :icon="['fas', 'magnifying-glass']" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -75,6 +104,19 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </select>
       </div>
     </div>
+    <section v-if="queue.pending + queue.running > 0" class="rounded-xl border border-blue-300 bg-blue-50 p-4 text-sm text-blue-900" role="status" aria-live="polite">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="flex items-center gap-2 font-medium">
+          <FaIcon :icon="['fas', 'arrows-rotate']" spin />
+          Scans : {{ queue.running }} en cours, {{ queue.pending }} en attente — un à la fois
+        </p>
+        <button v-if="queue.pending > 0" class="rounded-md border border-blue-400 px-3 py-1 hover:bg-white" @click="cancelQueue">Annuler la file d'attente</button>
+      </div>
+      <div class="mt-2 h-2 overflow-hidden rounded-full bg-white" role="progressbar" aria-label="Progression des scans" aria-valuemin="0" :aria-valuemax="peak" :aria-valuenow="peak - queue.pending - queue.running">
+        <div class="h-full rounded-full bg-blue-600 transition-all duration-700" :style="{ width: `${peak ? ((peak - queue.pending - queue.running) / peak) * 100 : 0}%` }"></div>
+      </div>
+      <p class="mt-1 text-xs">{{ Math.max(0, peak - queue.pending - queue.running) }} terminé(s) sur {{ peak }} depuis le lancement.</p>
+    </section>
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
 
@@ -110,7 +152,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 </template>
               </td>
               <td class="px-4 py-3">
-                <SeverityBadges :state="i.scan.state" :counts="i.scan.current?.counts ?? null" :stale="i.scan.stale" :hidden="i.scan.current?.hidden" />
+                <SeverityBadges :state="i.scan.state" :counts="i.scan.current?.counts ?? null" :stale="i.scan.stale" :hidden="i.scan.current?.hidden" :position="i.scan.queuePosition" />
                 <p v-if="i.scan.current?.hidden" class="mt-1 text-xs text-slate-500">{{ i.scan.current.hidden }} sous le seuil, masquée(s)</p>
                 <p v-if="i.scan.state === 'failed'" class="mt-1 max-w-xs text-xs text-red-700">{{ i.scan.lastAttempt?.error }}</p>
                 <p v-if="i.scan.current?.os?.eosl" class="mt-1 text-xs text-amber-700">{{ i.scan.current.os.family }} {{ i.scan.current.os.name }} en fin de vie</p>
@@ -145,5 +187,6 @@ onBeforeUnmount(() => window.clearInterval(timer));
       La périodicité des scans et les registres d'images se règlent dans
       <RouterLink to="/settings?tab=security" class="text-blue-600 underline">Paramètres de l'application</RouterLink>.
     </p>
+    <ScanAllDialog v-if="scanAll" @close="scanAll = false" @started="onStarted" />
   </div>
 </template>

@@ -3414,6 +3414,126 @@
         }
       }
     },
+    "/api/v1/images/scans": {
+      "post": {
+        "summary": "Scanner plusieurs images à la suite",
+        "description": "Périmètre : scope never (aucun scan réussi), outdated (jamais scannées ou périmées) ou all ; managedOnly limite aux applications gérées. Tous les hôtes partagent une seule file : un scan à la fois, dans l'ordre. Un scan en attente a l'état pending (rang dans la file : scan.queuePosition de GET /api/v1/images).",
+        "tags": [
+          "Sécurité des images"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "default": "never",
+                    "type": "string",
+                    "enum": [
+                      "never",
+                      "outdated",
+                      "all"
+                    ]
+                  },
+                  "managedOnly": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "dryRun": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Nombre d'images mises en file, déjà en file ou ignorées (hôte hors ligne) ; avec dryRun, simple décompte (200)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/images/scans/queue": {
+      "delete": {
+        "summary": "Annuler les scans en attente",
+        "description": "Seuls les scans qui n'ont pas commencé sont retirés ; celui en cours va à son terme.",
+        "tags": [
+          "Sécurité des images"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Nombre de scans retirés de la file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/applications": {
       "get": {
         "summary": "Applications (gérées et observées)",

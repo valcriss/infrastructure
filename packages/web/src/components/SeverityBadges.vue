@@ -11,7 +11,7 @@ export interface Counts {
 }
 
 // Un badge par gravité, jamais pour un compteur à zéro. « Sain » seulement si un scan a abouti sans résultat.
-const props = defineProps<{ state: ScanStateName; counts: Counts | null; stale?: boolean; hidden?: number }>();
+const props = defineProps<{ state: ScanStateName; counts: Counts | null; stale?: boolean; hidden?: number; position?: number | null }>();
 
 const LEVELS = [
   { key: "critical", label: "Critiques", short: "C", cls: "bg-red-600 text-white" },
@@ -35,7 +35,8 @@ const shown = computed(() => LEVELS.filter((l) => (props.counts?.[l.key] ?? 0) >
     </span>
     <span v-else-if="state === 'never'" class="rounded bg-slate-200 px-1.5 py-0.5 text-slate-700">Jamais scannée</span>
     <span v-if="state === 'failed'" class="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-amber-800"><FaIcon :icon="['fas', 'triangle-exclamation']" /> Scan en échec</span>
-    <span v-else-if="state === 'pending' || state === 'running'" class="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-blue-800"><FaIcon :icon="['fas', 'arrows-rotate']" spin /> Scan en cours</span>
+    <span v-else-if="state === 'pending'" class="inline-flex items-center gap-1 rounded bg-slate-200 px-1.5 py-0.5 text-slate-700" title="Les scans s'exécutent un à la fois"><FaIcon :icon="['fas', 'clock']" /> En attente<template v-if="position"> · n° {{ position }}</template></span>
+    <span v-else-if="state === 'running'" class="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-blue-800"><FaIcon :icon="['fas', 'arrows-rotate']" spin /> Scan en cours</span>
     <span v-if="stale" class="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600" title="Le dernier scan est ancien">périmé</span>
   </span>
 </template>

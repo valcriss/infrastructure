@@ -4,7 +4,8 @@ import { HttpError } from "./http-error.js";
 import { loadUsedImages, type ImageUser } from "./images.js";
 import { getSecuritySettings } from "./settings.js";
 
-const MAX_RUNNING_TOTAL = 3;
+/** Un seul scan à la fois, tous hôtes confondus : la file est strictement séquentielle (et l'usage disque borné). */
+const MAX_RUNNING_TOTAL = 1;
 const SCAN_TIMEOUT_MIN = 30;
 const KEEP_PER_IMAGE = 5;
 /** Verrou consultatif PostgreSQL qui sérialise le démarrage des scans (limites par hôte et globale). */
@@ -216,14 +217,14 @@ export class ScanService {
     }
     if (!row) throw new Error("scan non créé");
     await audit(this.pool, input.requestedBy, "scan.request", row.id, "success");
-    await this.pump(input.hostId);
+    await this.pumpAny();
     const fresh = await this.get(row.id);
     return { scan: fresh ?? toRow(row), created: true };
   }
 
   /** Démarre le prochain scan en attente d'un hôte, s'il n'en exécute pas déjà un. */
-  async pump(hostId: string): Promise<void> {
-    if (!this.transport.isOnline(hostId)) return;
+  async pump(hostId: string): Promise<boolean> {
+    if (!this.transport.isOnline(hostId)) return false;
     // Sans verrou, deux appels simultanés voient tous deux « aucun scan en cours » et en démarrent chacun un.
     const client = await this.pool.connect();
     let next: { id: string; image_id: string; image_ref: string } | undefined;
@@ -246,7 +247,7 @@ export class ScanService {
     } finally {
       client.release();
     }
-    if (!next) return;
+    if (!next) return false;
     const sent = this.transport.send(hostId, { type: "scan", scanId: next.id, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), imageId: next.image_id, imageRef: next.image_ref });
     if (!sent) {
       await this.pool.query(
@@ -254,6 +255,31 @@ export class ScanService {
         [next.id],
       );
     }
+    return true;
+  }
+
+  /** Démarre le plus ancien scan en attente de la file globale (hôtes en ligne), s'il n'y en a pas déjà un en cours. */
+  async pumpAny(): Promise<void> {
+    const { rows } = await this.pool.query<{ host_id: string }>("SELECT host_id FROM image_scans WHERE status = 'pending' GROUP BY host_id ORDER BY min(created_at)");
+    for (const r of rows) {
+      if (this.transport.isOnline(r.host_id) && (await this.pump(r.host_id))) return;
+    }
+  }
+
+  /** File d'attente : scans en attente dans l'ordre de démarrage, et nombre de scans en cours. */
+  async queue(): Promise<{ pending: { id: string; imageId: string; platform: string }[]; running: number }> {
+    const [pending, running] = await Promise.all([
+      this.pool.query<{ id: string; image_id: string; platform: string }>("SELECT id, image_id, platform FROM image_scans WHERE status = 'pending' ORDER BY created_at"),
+      this.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM image_scans WHERE status = 'running'"),
+    ]);
+    return { pending: pending.rows.map((r) => ({ id: r.id, imageId: r.image_id, platform: r.platform })), running: running.rows[0]?.n ?? 0 };
+  }
+
+  /** Retire les scans encore en attente (ils n'ont pas commencé : l'image retrouve son état précédent). Un scan en cours va à son terme. */
+  async cancelPending(actor: string): Promise<number> {
+    const res = await this.pool.query("DELETE FROM image_scans WHERE status = 'pending'");
+    await audit(this.pool, actor, "scan.cancel-queue", String(res.rowCount ?? 0), "success");
+    return res.rowCount ?? 0;
   }
 
   async onResult(hostId: string, msg: ScanResult): Promise<void> {
@@ -294,7 +320,7 @@ export class ScanService {
         [done.image_id, done.platform, KEEP_PER_IMAGE],
       );
     }
-    await this.pump(hostId);
+    await this.pumpAny();
   }
 
   async onDisconnect(hostId: string): Promise<void> {
@@ -315,8 +341,7 @@ export class ScanService {
     await this.abandonStalePending();
     const { scanIntervalHours } = await getSecuritySettings(this.pool);
     if (scanIntervalHours > 0) await this.scheduledPass(scanIntervalHours);
-    const hosts = await this.pool.query<{ host_id: string }>("SELECT DISTINCT host_id FROM image_scans WHERE status = 'pending'");
-    for (const h of hosts.rows) await this.pump(h.host_id);
+    await this.pumpAny();
   }
 
   /** Abandonne les scans en attente depuis un moment sur un hôte hors ligne (ou révoqué) : ils bloqueraient l'image. */

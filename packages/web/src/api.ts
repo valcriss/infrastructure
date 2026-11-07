@@ -345,6 +345,8 @@ export interface ScanSummary {
 
 export interface ImageScanView {
   state: ScanStateName;
+  /** Rang dans la file d'attente (1 = prochain), pour un scan en attente. */
+  queuePosition?: number | null;
   stale: boolean;
   lastAttempt: ScanSummary | null;
   /** Dernier résultat réussi : conservé et daté même si la dernière tentative a échoué. */

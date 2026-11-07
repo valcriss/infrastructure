@@ -482,6 +482,74 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect((await pool.query("SELECT count(*)::int AS n FROM image_checks WHERE stack_id = $1 AND service = 'web'", [stackId])).rows[0].n).toBe(1); // les services existants restent
   });
 
+  it("scanne plusieurs images à la suite : un seul scan à la fois, file d'attente visible, annulation", async () => {
+    await pool.query("DELETE FROM image_scans");
+    const batch = (body: Record<string, unknown>) => call("POST", "/api/v1/images/scans", body);
+
+    // Décompte (rien n'est lancé) selon le périmètre.
+    expect((await batch({ scope: "never", dryRun: true })).json).toMatchObject({ dryRun: true, total: 3, requested: 3, alreadyQueued: 0, skippedOffline: 0 });
+    expect((await batch({ scope: "never", managedOnly: true, dryRun: true })).json).toMatchObject({ total: 2, requested: 2 }); // l'image hors application est exclue
+    expect((await pool.query("SELECT count(*)::int AS n FROM image_scans")).rows[0].n).toBe(0);
+
+    // Lancement : un en cours, les autres en attente, dans l'ordre.
+    const started = await batch({ scope: "never" });
+    expect(started.status).toBe(202);
+    expect(started.json).toMatchObject({ dryRun: false, requested: 3 });
+    const counts = (await pool.query("SELECT status, count(*)::int AS n FROM image_scans GROUP BY status")).rows as { status: string; n: number }[];
+    expect(counts.find((c) => c.status === "running")?.n).toBe(1);
+    expect(counts.find((c) => c.status === "pending")?.n).toBe(2);
+
+    const listing = (await call("GET", "/api/v1/images")).json;
+    expect(listing.queue).toEqual({ pending: 2, running: 1 });
+    const states = (listing.images as any[]).map((i) => [i.scan.state, i.scan.queuePosition]).sort();
+    expect(states).toEqual([["pending", 1], ["pending", 2], ["running", null]]);
+
+    // Une nouvelle demande n'ajoute rien : tout est déjà en file ou en cours.
+    expect((await batch({ scope: "all" })).json).toMatchObject({ requested: 0, alreadyQueued: 3 });
+
+    // Annulation : seuls les scans en attente sont retirés, celui en cours va à son terme.
+    expect((await call("DELETE", "/api/v1/images/scans/queue")).json).toEqual({ removed: 2 });
+    expect((await pool.query("SELECT count(*)::int AS n FROM image_scans WHERE status = 'running'")).rows[0].n).toBe(1);
+    expect((await call("GET", "/api/v1/images")).json.queue).toEqual({ pending: 0, running: 1 });
+
+    // Le scan en cours se termine ; « jamais scannées » ne le recompte plus, « périmées » le reprend quand il vieillit.
+    const running = (await pool.query("SELECT id FROM image_scans WHERE status = 'running'")).rows[0].id as string;
+    result(running);
+    await waitFor(async () => (await pool.query("SELECT count(*)::int AS n FROM image_scans WHERE status = 'succeeded'")).rows[0].n === 1);
+    expect((await batch({ scope: "never", dryRun: true })).json).toMatchObject({ total: 2, requested: 2 });
+    expect((await batch({ scope: "outdated", dryRun: true })).json).toMatchObject({ total: 2 });
+    await pool.query("UPDATE image_scans SET finished_at = now() - interval '10 days' WHERE status = 'succeeded'");
+    expect((await batch({ scope: "outdated", dryRun: true })).json).toMatchObject({ total: 3 });
+    expect((await batch({ scope: "all", dryRun: true })).json).toMatchObject({ total: 3 });
+    expect((await batch({ scope: "inconnu" })).status).toBe(400);
+    expect((await fetch(baseUrl + "/api/v1/images/scans", { method: "POST" })).status).toBe(401);
+    await pool.query("DELETE FROM image_scans");
+  });
+
+  it("la file est unique pour tous les hôtes : un scan à la fois, le suivant démarre à la fin du précédent", async () => {
+    await pool.query("DELETE FROM image_scans");
+    const hostB = (await pool.query("INSERT INTO hosts (name, secret_hash) VALUES ('hote-b', 'x') RETURNING id")).rows[0].id as string;
+    const sent: string[] = [];
+    const svc = new ScanService(pool, { isOnline: () => true, send: (id, m) => (sent.push(`${id === hostId ? "A" : "B"}:${(m as { scanId: string }).scanId}`), true) });
+    const request = (host: string, image: string) => svc.request({ imageId: image, platform: "linux/amd64", hostId: host, imageRef: "x:1", trigger: "manual", requestedBy: "test" });
+
+    const first = await request(hostId, sha("1"));
+    const second = await request(hostB, sha("2")); // un autre hôte, mais la file est unique
+    const third = await request(hostId, sha("3"));
+    expect(sent).toHaveLength(1); // seul le premier a démarré
+    const status = async (id: string) => (await pool.query("SELECT status FROM image_scans WHERE id = $1", [id])).rows[0].status as string;
+    expect([await status(first.scan.id), await status(second.scan.id), await status(third.scan.id)]).toEqual(["running", "pending", "pending"]);
+
+    // Fin du premier : le plus ancien en attente (celui de l'autre hôte) démarre, puis le troisième.
+    await svc.onResult(hostId, { type: "scan_result", scanId: first.scan.id, status: "failed", error: "x" } as never);
+    expect([await status(second.scan.id), await status(third.scan.id)]).toEqual(["running", "pending"]);
+    expect(sent[1]).toBe(`B:${second.scan.id}`);
+    await svc.onResult(hostB, { type: "scan_result", scanId: second.scan.id, status: "failed", error: "x" } as never);
+    expect(await status(third.scan.id)).toBe("running");
+    await pool.query("DELETE FROM image_scans");
+    await pool.query("DELETE FROM hosts WHERE id = $1", [hostB]);
+  });
+
   it("supprime un registre configuré", async () => {
     expect((await call("DELETE", `/api/v1/registries/${encodeURIComponent(registry.host)}`)).status).toBe(204);
     expect((await call("DELETE", `/api/v1/registries/${encodeURIComponent(registry.host)}`)).status).toBe(404);

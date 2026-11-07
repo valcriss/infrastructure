@@ -35,6 +35,14 @@ export const SecuritySettingsBody = z.object({
   /** Signaler aussi les vulnérabilités de gravité « inconnue ». */
   includeUnknown: z.boolean().default(true),
 });
+/** Scan de plusieurs images : périmètre choisi dans la boîte de dialogue (`dryRun` : compter sans lancer). */
+export const BatchScanBody = z.object({
+  /** « never » : aucun scan réussi ; « outdated » : jamais scannées ou périmées ; « all » : toutes. */
+  scope: z.enum(["never", "outdated", "all"]).default("never"),
+  /** Seulement les images des applications gérées par la console. */
+  managedOnly: z.boolean().default(false),
+  dryRun: z.boolean().default(false),
+});
 export const RegistryBody = z.object({
   username: z.string().max(255).nullable().optional(),
   /** Absent = conserver le mot de passe actuel. */
@@ -82,7 +90,7 @@ export function registerImageRoutes(
   const { pool, session, apiAuth, scans, watcher, registries, registryClient } = deps;
 
   /** Vue d'un contenu d'image : état du scan (jamais confondu avec « sain »), utilisateurs, dernier résultat réussi. */
-  const view = async (img: UsedImage) => {
+  const view = async (img: UsedImage, queuePosition: number | null = null) => {
     const [attempt, ok, settings] = await Promise.all([scans.latest(img.imageId, img.platform), scans.latestSucceeded(img.imageId, img.platform), getSecuritySettings(pool)]);
     const state = scanState(attempt ? briefOf(attempt, settings) : null);
     return {
@@ -95,6 +103,8 @@ export function registerImageRoutes(
       usedBy: img.usedBy,
       scan: {
         state,
+        /** Rang dans la file d'attente (1 = prochain), pour un scan en attente. */
+        queuePosition,
         stale: isScanStale(ok, settings.scanIntervalHours),
         lastAttempt: scanSummary(attempt, settings),
         // Dernier résultat réussi : conservé et daté même si la dernière tentative a échoué.
@@ -106,8 +116,54 @@ export function registerImageRoutes(
   app.get("/api/v1/images", { preHandler: apiAuth }, async (request) => {
     const q = ImageListQuery.parse(request.query);
     const images = await loadUsedImages(pool, q);
-    return { images: await Promise.all(images.map(view)) };
+    const queue = await scans.queue();
+    const position = new Map(queue.pending.map((p, i) => [`${p.imageId}|${p.platform}`, i + 1]));
+    return {
+      queue: { pending: queue.pending.length, running: queue.running },
+      images: await Promise.all(images.map((img) => view(img, position.get(`${img.imageId}|${img.platform}`) ?? null))),
+    };
   });
+
+  // Scan de plusieurs images : tous les hôtes partagent une seule file, un scan à la fois, dans l'ordre de la demande.
+  app.post("/api/v1/images/scans", { preHandler: apiAuth }, async (request, reply) => {
+    const body = BatchScanBody.parse(request.body ?? {});
+    const settings = await getSecuritySettings(pool);
+    const [images, latest] = await Promise.all([loadUsedImages(pool), scans.latestAll()]);
+    const out = { dryRun: body.dryRun, total: 0, requested: 0, alreadyQueued: 0, skippedOffline: 0 };
+    for (const img of images) {
+      if (body.managedOnly && !img.usedBy.some((u) => u.stackId !== null)) continue;
+      const entry = latest.get(`${img.imageId}|${img.platform}`);
+      const never = !entry?.ok;
+      // Intervalle désactivé (0) : « périmé » se juge sur 24 h pour ce choix explicite.
+      const stale = !never && isScanStale(entry?.ok ?? null, settings.scanIntervalHours || 24);
+      if (body.scope === "never" && !never) continue;
+      if (body.scope === "outdated" && !(never || stale)) continue;
+      out.total++;
+      if (entry && (entry.attempt.status === "pending" || entry.attempt.status === "running")) {
+        out.alreadyQueued++;
+        continue;
+      }
+      if (!img.usedBy.some((u) => deps.isOnline(u.hostId))) {
+        out.skippedOffline++;
+        continue;
+      }
+      if (body.dryRun) {
+        out.requested++;
+        continue;
+      }
+      try {
+        const { created } = await requestScan(img, undefined, request.actor);
+        if (created) out.requested++;
+        else out.alreadyQueued++;
+      } catch {
+        out.skippedOffline++; // l'agent s'est déconnecté entre-temps
+      }
+    }
+    return reply.code(body.dryRun ? 200 : 202).send(out);
+  });
+
+  // Annule les scans qui attendent encore leur tour (celui en cours va à son terme).
+  app.delete("/api/v1/images/scans/queue", { preHandler: apiAuth }, async (request) => ({ removed: await scans.cancelPending(request.actor) }));
 
   app.get("/api/v1/images/:imageId/scan", { preHandler: apiAuth }, async (request) => {
     const { imageId } = z.object({ imageId: ImageId }).parse(request.params);
