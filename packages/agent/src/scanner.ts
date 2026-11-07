@@ -103,6 +103,25 @@ export function parseTrivyVersion(raw: unknown): NonNullable<ScanResult["trivy"]
   };
 }
 
+/**
+ * Arguments `docker run` du conteneur Trivy éphémère : sans socket Docker, sans capacités (sauf lecture du dossier
+ * privé), système de fichiers en lecture seule, mémoire et processus bornés. Les fichiers temporaires volumineux sont
+ * dirigés vers le dossier du scan (sur disque) et non vers /tmp (mémoire).
+ */
+export function trivyRunArgs(cfg: Pick<ScannerConfig, "trivyImage" | "cacheVolume" | "memory">, dir: string, container: string): string[] {
+  return [
+    "run", "--rm", "--name", container,
+    // Seule capacité conservée : lire/écrire le dossier privé (0700) d'un agent qui n'est pas root.
+    "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE", "--security-opt", "no-new-privileges",
+    "--read-only", "--tmpfs", "/tmp:rw,size=512m",
+    "-e", "TMPDIR=/scan/tmp",
+    "--memory", cfg.memory, "--pids-limit", "512",
+    "-v", `${dir}:/scan`,
+    "-v", `${cfg.cacheVolume}:/cache`,
+    cfg.trivyImage,
+  ];
+}
+
 /** Efface les chemins et jetons éventuels d'un message d'erreur avant de le remonter. */
 const brief = (msg: string): string => {
   const flat = msg.replace(/\s+/g, " ").trim();
@@ -173,19 +192,12 @@ export class TrivyScanner {
       }
 
       // 3b. Scan par un conteneur Trivy éphémère et restreint.
-      const trivyArgs = [
-        "run", "--rm", "--name", container,
-        // Seule capacité conservée : lire/écrire le dossier privé (0700) d'un agent qui n'est pas root.
-        "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE", "--security-opt", "no-new-privileges",
-        "--read-only", "--tmpfs", "/tmp:rw,size=512m",
-        "--memory", this.cfg.memory, "--pids-limit", "512",
-        "-v", `${dir}:/scan`,
-        "-v", `${this.cfg.cacheVolume}:/cache`,
-        this.cfg.trivyImage,
-      ];
+      // Les gros fichiers temporaires (téléchargement de la base Java, plusieurs centaines de Mo) vont sur disque dans
+      // le dossier du scan, supprimé ensuite : la mémoire de /tmp (tmpfs) est trop petite pour eux.
+      await mkdir(join(dir, "tmp"), { recursive: true, mode: 0o700 });
       const scanned = await this.docker(
         [
-          ...trivyArgs, "image",
+          ...trivyRunArgs(this.cfg, dir, container), "image",
           "--input", "/scan/image.tar", "--format", "json", "--output", "/scan/result.json",
           "--scanners", "vuln", "--quiet", "--no-progress", "--cache-dir", "/cache",
           "--timeout", `${Math.max(1, Math.floor(left() / 60_000))}m`,
@@ -193,7 +205,10 @@ export class TrivyScanner {
         left(),
       );
       if (scanned.timedOut) return fail("Délai dépassé pendant l'analyse Trivy.");
-      if (scanned.code !== 0) return fail(`Trivy a échoué (code ${scanned.code}) : ${scanned.tail}`);
+      if (scanned.code !== 0) {
+        const full = /no space left on device/i.test(scanned.tail);
+        return fail(`Trivy a échoué (code ${scanned.code})${full ? " — espace disque insuffisant sur l'hôte (répertoire de travail ou volume de cache de Trivy)" : ""} : ${scanned.tail}`);
+      }
 
       // 4. Lecture du rapport (borné) et normalisation.
       const report = join(dir, "result.json");

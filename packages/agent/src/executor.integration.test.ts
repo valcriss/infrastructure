@@ -221,6 +221,31 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
     }
   }, 900_000);
 
+  it("scanne une image qui contient un .jar : la base Java (plusieurs centaines de Mo) ne doit pas saturer /tmp", async () => {
+    const tag = "infra-jar-" + randomBytes(3).toString("hex");
+    const cacheVolume = "it-trivy-cache-" + randomBytes(3).toString("hex");
+    try {
+      // Archive ZIP vide nommée .jar : suffit à faire initialiser la base Java par Trivy.
+      execFileSync("docker", ["build", "-q", "-t", tag, "-"], {
+        input: "FROM alpine:3.20\nRUN printf 'PK\\005\\006\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000' > /app.jar\n",
+        encoding: "utf8",
+      });
+      const imageId = dockerOut("image", "inspect", tag, "--format", "{{.Id}}").trim();
+      const scanner = new TrivyScanner({ workspaceDir: root, dockerSocket: socket, trivyImage: DEFAULT_TRIVY_IMAGE, cacheVolume, memory: "2g", maxImageBytes: 5 * 1024 ** 3, timeoutMs: 20 * 60_000 });
+      const r = await scanner.scan({ type: "scan", scanId: randomUUID(), imageId, imageRef: tag });
+      expect(r.status, r.error).toBe("succeeded");
+      expect(readdirSync(root).filter((n) => n.startsWith(".scan-"))).toEqual([]); // les fichiers temporaires sont supprimés avec le scan
+    } finally {
+      for (const args of [["rmi", "-f", tag], ["volume", "rm", "-f", cacheVolume]]) {
+        try {
+          dockerOut(...args);
+        } catch {
+          /* déjà supprimé */
+        }
+      }
+    }
+  }, 25 * 60_000);
+
   it("rejette une configuration invalide avant de toucher aux conteneurs", async () => {
     const project = "it-" + randomBytes(4).toString("hex");
     projects.push(project);

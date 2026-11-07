@@ -1,7 +1,7 @@
 import { MAX_SCAN_VULNERABILITIES } from "@infra/shared";
 import { describe, expect, it } from "vitest";
 import { parseImage } from "./docker.js";
-import { normalizeReport, parseTrivyVersion } from "./scanner.js";
+import { normalizeReport, parseTrivyVersion, trivyRunArgs } from "./scanner.js";
 
 const vuln = (id: string, severity: string, pkg = "openssl", extra: Record<string, unknown> = {}) => ({
   VulnerabilityID: id,
@@ -75,5 +75,20 @@ describe("parseImage", () => {
     expect(parseImage({ Id: "sha256:abc", RepoTags: ["monimage:dev"], RepoDigests: [], Size: 5 })?.repoDigests).toEqual([]);
     expect(parseImage({})).toBeNull();
     expect(parseImage(null)).toBeNull();
+  });
+});
+
+describe("trivyRunArgs", () => {
+  const args = trivyRunArgs({ trivyImage: "ghcr.io/aquasecurity/trivy:0.76.1", cacheVolume: "cache", memory: "2g" }, "/ws/.scan-1", "scan-1");
+
+  it("garde toutes les restrictions du conteneur Trivy", () => {
+    expect(args).toEqual(expect.arrayContaining(["--cap-drop", "ALL", "--read-only", "--security-opt", "no-new-privileges", "--memory", "2g"]));
+    expect(args.join(" ")).not.toContain("docker.sock");
+  });
+
+  it("dirige les gros fichiers temporaires (base Java) vers le dossier du scan, sur disque, et non vers la mémoire", () => {
+    const i = args.indexOf("-e");
+    expect(args[i + 1]).toBe("TMPDIR=/scan/tmp");
+    expect(args).toContain("/ws/.scan-1:/scan"); // le dossier du scan est monté et supprimé après le scan
   });
 });
