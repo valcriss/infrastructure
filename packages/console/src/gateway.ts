@@ -119,8 +119,11 @@ export class AgentGateway {
       if (!hostId) this.fail(socket, "bad_request", "hello attendu");
     }, HELLO_TIMEOUT_MS);
 
+    // Les messages d'une même connexion sont traités DANS L'ORDRE : sans cela, un résultat pourrait être appliqué avant
+    // les lignes de journal envoyées juste avant (qui seraient alors refusées car l'opération serait déjà terminée).
+    let inbox: Promise<void> = Promise.resolve();
     socket.on("message", (raw, isBinary) => {
-      void (async () => {
+      inbox = inbox.then(() => (async () => {
         if (isBinary) return this.fail(socket, "bad_request", "messages JSON uniquement");
         let json: unknown;
         try {
@@ -207,7 +210,7 @@ export class AgentGateway {
       })().catch((err: unknown) => {
         this.log.error({ err }, "erreur de traitement d'un message agent");
         socket.close(1011, "internal");
-      });
+      }));
     });
 
     socket.on("close", () => {

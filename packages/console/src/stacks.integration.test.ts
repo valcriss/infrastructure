@@ -215,6 +215,27 @@ describe.skipIf(!url)("stacks et opérations (intégration)", () => {
 
   // --- Opérations ------------------------------------------------------------------
 
+  it("prend en compte le résultat d'un agent qui répond instantanément (refus immédiat), sans laisser l'opération « en cours »", async () => {
+    const id = (await createStack("app-rapide")).json.id as string;
+    // L'agent répond avant même le retour de l'appel d'envoi : l'opération doit déjà être « en cours » à ce moment-là.
+    const reply = (raw: unknown) => {
+      const m = JSON.parse(String(raw)) as { type?: string; operationId?: string };
+      if (m.type === "run") agent.send({ type: "operation_result", operationId: m.operationId, status: "failed", error: "refus immédiat" });
+    };
+    agent.ws.on("message", reply);
+    try {
+      for (let i = 0; i < 5; i++) {
+        const dep = await call("POST", `/api/v1/stacks/${id}/deploy`, {});
+        expect(dep.status).toBe(202);
+        const opId = dep.json.operationId as string;
+        await waitFor(async () => ((await call("GET", `/api/v1/operations/${opId}`)).json as any).status !== "running", 5000);
+        expect(((await call("GET", `/api/v1/operations/${opId}`)).json as any)).toMatchObject({ status: "failed", error: "refus immédiat" });
+      }
+    } finally {
+      agent.ws.off("message", reply);
+    }
+  });
+
   it("déploie exactement la révision demandée et masque les secrets dans les logs", async () => {
     const id = (await createStack("app5", { variables: { PUBLIC_PORT: "9000", TOKEN: { value: "tok-1234567890", sensitive: true } } })).json.id as string;
     const before = agent.runs.length;

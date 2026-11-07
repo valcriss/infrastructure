@@ -45,10 +45,18 @@ describe.skipIf(!enabled)("console + agent + Docker (bout en bout)", { timeout: 
     return { status: res.status, json: (text ? JSON.parse(text) : {}) as Record<string, any> };
   };
 
-  const waitFor = async (check: () => boolean | Promise<boolean>, ms = 120_000): Promise<void> => {
+  // Journal de l'agent, avec l'heure relative : joint au message d'un délai dépassé pour que l'échec soit diagnosticable.
+  const t0 = Date.now();
+  const agentLogs: string[] = [];
+  const stamp = (m: string): void => void agentLogs.push(`[+${((Date.now() - t0) / 1000).toFixed(1)} s] ${m}`);
+
+  const waitFor = async (check: () => boolean | Promise<boolean>, ms = 120_000, what: () => string | Promise<string> = () => "la condition"): Promise<void> => {
     const start = Date.now();
     while (!(await check())) {
-      if (Date.now() - start > ms) throw new Error("délai dépassé en attendant la condition");
+      if (Date.now() - start > ms) {
+        const recent = agentLogs.slice(-30).join("\n") || "(aucun message de l'agent)";
+        throw new Error(`délai dépassé en attendant ${await what()}\n--- journal de l'agent (30 derniers messages) ---\n${recent}`);
+      }
       await new Promise((r) => setTimeout(r, 250));
     }
   };
@@ -72,7 +80,7 @@ describe.skipIf(!enabled)("console + agent + Docker (bout en bout)", { timeout: 
         protectedProjects: [protectedName],
         selfContainer: undefined,
       },
-      () => {},
+      stamp,
     );
     clients.push(client);
     void client.run();
@@ -89,7 +97,15 @@ describe.skipIf(!enabled)("console + agent + Docker (bout en bout)", { timeout: 
     const res = await call("POST", `/api/v1/stacks/${stackId}/${action}`, action === "deploy" ? { pullImages: true } : undefined);
     expect(res.status).toBe(202);
     const opId = res.json.operationId as string;
-    await waitFor(async () => ["succeeded", "failed"].includes((await call("GET", `/api/v1/operations/${opId}`)).json.status));
+    let last: Record<string, any> = {};
+    await waitFor(
+      async () => {
+        last = (await call("GET", `/api/v1/operations/${opId}`)).json;
+        return ["succeeded", "failed"].includes(last.status);
+      },
+      120_000,
+      async () => `la fin de l'opération ${action} ${opId} (dernier état : ${last.status ?? "inconnu"}, présence de l'hôte : ${await presence()})`,
+    );
     return (await call("GET", `/api/v1/operations/${opId}`)).json;
   };
 

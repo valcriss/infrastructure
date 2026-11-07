@@ -218,6 +218,10 @@ export class OperationsService {
       ...(input.type === "deploy" ? { options } : {}),
     };
 
+    // L'opération passe à « en cours » AVANT l'envoi : un agent qui répond tout de suite (refus immédiat, erreur de
+    // configuration) renvoie son résultat en quelques millisecondes ; si l'opération était encore « en attente », ce
+    // résultat serait ignoré et l'opération resterait « en cours » indéfiniment.
+    await this.pool.query("UPDATE operations SET status = 'running', started_at = now() WHERE id = $1", [id]);
     if (!this.transport.send(s.host_id, message)) {
       await this.pool.query(
         `UPDATE operations SET status = 'failed', finished_at = now(),
@@ -227,7 +231,6 @@ export class OperationsService {
       this.secrets.delete(id);
       throw new HttpError(409, "host_offline", "L'agent de l'hôte est hors ligne : rien n'a été lancé");
     }
-    await this.pool.query("UPDATE operations SET status = 'running', started_at = now() WHERE id = $1", [id]);
     await audit(this.pool, input.requestedBy, `operation.${input.type}`, id, "success");
     const op = await this.get(id);
     if (!op) throw new Error("opération introuvable après création");
