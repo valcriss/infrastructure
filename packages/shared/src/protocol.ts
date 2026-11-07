@@ -195,13 +195,16 @@ export const MetricsMessageSchema = z.object({
 const UsageSchema = z.object({ count: z.number().int().min(0), sizeBytes: z.number().min(0), reclaimableBytes: z.number().min(0) });
 export type DiskUsageEntry = z.infer<typeof UsageSchema>;
 
+/** Le cache de build compte souvent des milliers d'entrées : on les garde presque toutes pour un aperçu exact des filtres d'âge. */
+export const MAX_BUILD_CACHE_CANDIDATES = 5000;
+
 /** Candidats au nettoyage : uniquement ce qui n'est utilisé par aucun conteneur actif et n'appartient pas à la console. */
 export const DiskCandidatesSchema = z.object({
   containers: z.array(z.object({ id: z.string().max(80), name: z.string().max(200), image: z.string().max(300), project: z.string().max(100).optional(), service: z.string().max(200).optional(), state: z.string().max(30), created: z.number().int(), sizeBytes: z.number().min(0).nullable() })).max(300),
   images: z.array(z.object({ id: z.string().max(100), ref: z.string().max(300), created: z.number().int(), sizeBytes: z.number().min(0), dangling: z.boolean() })).max(300),
   networks: z.array(z.object({ id: z.string().max(80), name: z.string().max(200), created: z.string().max(40).nullable() })).max(300),
   volumes: z.array(z.object({ name: z.string().max(255), sizeBytes: z.number().min(0).nullable(), anonymous: z.boolean(), created: z.string().max(40).nullable(), project: z.string().max(100).optional() })).max(300),
-  buildCache: z.array(z.object({ id: z.string().max(80), type: z.string().max(40), description: z.string().max(200).optional(), sizeBytes: z.number().min(0), lastUsedAt: z.string().max(40).nullable() })).max(300),
+  buildCache: z.array(z.object({ id: z.string().max(80), type: z.string().max(40), description: z.string().max(200).optional(), sizeBytes: z.number().min(0), lastUsedAt: z.string().max(40).nullable() })).max(MAX_BUILD_CACHE_CANDIDATES),
 });
 export type DiskCandidates = z.infer<typeof DiskCandidatesSchema>;
 

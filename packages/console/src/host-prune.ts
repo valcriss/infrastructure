@@ -141,7 +141,7 @@ export function buildPlan(usage: DiskUsageMessage, options: PruneOptions, manage
   }
   if (cacheItems.length > 0) {
     w("info", `${cacheItems.length} entrée(s) du cache de build seront supprimées (${fmtGB(cacheSize)}${keepBytes ? `, hors ${fmtGB(keepBytes)} conservés` : ""}) ; le prochain build sera plus long, sans autre conséquence.`);
-    if (bc.mode === "older") w("info", "L'ancienneté du cache de build se mesure à sa dernière utilisation.");
+    if (bc.mode === "older") w("info", "L'ancienneté du cache de build se mesure à sa dernière utilisation. Une entrée ancienne dont une entrée plus récente (ou en cours d'utilisation) dépend est conservée par Docker, et n'est donc pas comptée ici.");
   }
   if (usage.truncated) w("info", "Les listes sont tronquées aux éléments les plus volumineux : un second nettoyage pourra supprimer le reste.");
 

@@ -1,5 +1,6 @@
-import type { DiskCandidates, DiskUsageMessage } from "@infra/shared";
+import { MAX_BUILD_CACHE_CANDIDATES, type DiskCandidates, type DiskUsageMessage } from "@infra/shared";
 import { dockerGet } from "./docker.js";
+import type { RetainedBuildCache } from "./retained-cache.js";
 
 /** Volume de cache de Trivy : jamais proposé au nettoyage. */
 export const TRIVY_CACHE_VOLUME_NAME = "console-docker-trivy-cache";
@@ -60,7 +61,28 @@ export interface NetworkInfo {
   inUse: boolean;
 }
 
+export interface BuildCacheCriteria {
+  mode: "all" | "older";
+  olderThanHours?: number;
+}
+
+/** Entrées du cache de build qui remplissent les critères d'un nettoyage (inutilisées, et assez anciennes selon leur date effective). */
+export function matchingBuildCache(df: ParsedDf, criteria: BuildCacheCriteria, nowMs: number): { id: string; sizeBytes: number }[] {
+  const effective = effectiveBuildCache(df.buildCache);
+  const cutoff = criteria.mode === "older" && criteria.olderThanHours ? nowMs - criteria.olderThanHours * 3_600_000 : null;
+  const out: { id: string; sizeBytes: number }[] = [];
+  for (const b of df.buildCache) {
+    const e = effective.get(str(b.ID));
+    if (!e || e.inUse) continue;
+    if (cutoff !== null && (e.lastUsedMs === null || e.lastUsedMs > cutoff)) continue;
+    out.push({ id: str(b.ID), sizeBytes: Math.max(0, num(b.Size)) });
+  }
+  return out;
+}
+
 export interface BuildOptions {
+  /** Entrées du cache de build que Docker a refusé de supprimer lors d'un nettoyage précédent : plus proposées. */
+  retainedBuildCacheIds?: Set<string>;
   /** Projets Compose protégés (console et agent) : leurs conteneurs, réseaux et volumes ne sont jamais proposés. */
   protectedProjects: Set<string>;
   /** Références d'image jamais proposées (image de Trivy). */
@@ -71,10 +93,61 @@ export interface BuildOptions {
 const labelOf = (item: Raw, key: string): string => str(obj(item.Labels)[key]);
 const project = (item: Raw): string => labelOf(item, "com.docker.compose.project");
 
+/** Entrées parentes d'un enregistrement du cache de build (Docker écrit la clé « " Parents" », avec une espace, dans certaines versions). */
+const parentsOf = (b: Raw): string[] => {
+  const list = [b.Parents, b[" Parents"], b.Parent].flatMap((p) => (Array.isArray(p) ? p : typeof p === "string" && p ? [p] : []));
+  return list.filter((p): p is string => typeof p === "string");
+};
+
+/**
+ * Pour chaque entrée du cache de build : date de dernière utilisation EFFECTIVE (la plus récente parmi elle et tous ses
+ * descendants) et utilisation EFFECTIVE (en cours si elle ou un descendant l'est). BuildKit conserve en effet les parents
+ * d'une entrée qu'il garde : une entrée ancienne dont un dérivé est récent ou utilisé n'est pas supprimée, même avec
+ * « plus de 7 jours ». Sans ce calcul, l'aperçu proposerait indéfiniment des entrées que Docker refuse de supprimer.
+ */
+export function effectiveBuildCache(records: Raw[]): Map<string, { lastUsedMs: number | null; inUse: boolean }> {
+  const byId = new Map<string, Raw>();
+  const children = new Map<string, string[]>();
+  for (const r of records) {
+    const id = str(r.ID);
+    if (!id) continue;
+    byId.set(id, r);
+    for (const p of parentsOf(r)) children.set(p, [...(children.get(p) ?? []), id]);
+  }
+  const memo = new Map<string, { lastUsedMs: number | null; inUse: boolean }>();
+  const visiting = new Set<string>();
+  const visit = (id: string): { lastUsedMs: number | null; inUse: boolean } => {
+    const known = memo.get(id);
+    if (known) return known;
+    const r = byId.get(id);
+    const own = r ? Date.parse(str(r.LastUsedAt)) : Number.NaN;
+    let lastUsedMs: number | null = Number.isFinite(own) ? own : null;
+    let inUse = r?.InUse === true;
+    if (!visiting.has(id)) {
+      visiting.add(id);
+      for (const c of children.get(id) ?? []) {
+        const k = visit(c);
+        if (k.lastUsedMs !== null && (lastUsedMs === null || k.lastUsedMs > lastUsedMs)) lastUsedMs = k.lastUsedMs;
+        inUse ||= k.inUse;
+      }
+      visiting.delete(id);
+    }
+    const out = { lastUsedMs, inUse };
+    memo.set(id, out);
+    return out;
+  };
+  for (const id of byId.keys()) visit(id);
+  return memo;
+}
+
 /** Calcule résumé et candidats au nettoyage à partir des réponses de Docker (fonction pure, testée). */
 export function buildDiskUsage(df: ParsedDf, networks: NetworkInfo[], opts: BuildOptions): DiskUsageMessage {
   const bySize = <T extends { sizeBytes: number | null }>(list: T[]): T[] => [...list].sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0));
   let truncated = false;
+  const capBuild = <T,>(list: T[]): T[] => {
+    if (list.length > MAX_BUILD_CACHE_CANDIDATES) truncated = true;
+    return list.slice(0, MAX_BUILD_CACHE_CANDIDATES);
+  };
   const cap = <T,>(list: T[]): T[] => {
     if (list.length > MAX_CANDIDATES) truncated = true;
     return list.slice(0, MAX_CANDIDATES);
@@ -117,8 +190,14 @@ export function buildDiskUsage(df: ParsedDf, networks: NetworkInfo[], opts: Buil
 
   const unusedNetworks = networks.filter((n) => !n.inUse && !PREDEFINED_NETWORKS.has(n.name) && !opts.protectedProjects.has(n.project));
 
-  const idle = df.buildCache.filter((b) => b.InUse !== true);
-  const buildCache = idle.map((b) => ({ id: str(b.ID), type: str(b.Type), ...(str(b.Description) ? { description: str(b.Description).slice(0, 200) } : {}), sizeBytes: Math.max(0, num(b.Size)), lastUsedAt: str(b.LastUsedAt) || null }));
+  const effective = effectiveBuildCache(df.buildCache);
+  // Inutilisées : ni elles ni aucun de leurs dérivés ne sont en cours d'utilisation.
+  const retained = opts.retainedBuildCacheIds ?? new Set<string>();
+  const idle = df.buildCache.filter((b) => effective.get(str(b.ID))?.inUse !== true && !retained.has(str(b.ID)));
+  const buildCache = idle.map((b) => {
+    const at = effective.get(str(b.ID))?.lastUsedMs ?? null;
+    return { id: str(b.ID), type: str(b.Type), ...(str(b.Description) ? { description: str(b.Description).slice(0, 120) } : {}), sizeBytes: Math.max(0, num(b.Size)), lastUsedAt: at === null ? null : new Date(at).toISOString() };
+  });
 
   const sum = (xs: number[]): number => xs.reduce((a, b) => a + b, 0);
   const summary = {
@@ -140,7 +219,10 @@ export function buildDiskUsage(df: ParsedDf, networks: NetworkInfo[], opts: Buil
     buildCache: {
       count: df.daemon.buildCache?.count ?? df.buildCache.length,
       sizeBytes: df.daemon.buildCache?.size ?? sum(df.buildCache.map((b) => num(b.Size))),
-      reclaimableBytes: df.daemon.buildCache?.reclaimable ?? sum(idle.map((b) => num(b.Size))),
+      // Total de Docker moins ce qu'il a déjà refusé de supprimer (retenu par des dépendances).
+      reclaimableBytes: df.daemon.buildCache
+        ? Math.max(0, df.daemon.buildCache.reclaimable - sum(df.buildCache.filter((b) => retained.has(str(b.ID))).map((b) => num(b.Size))))
+        : sum(idle.map((b) => num(b.Size))),
     },
   };
 
@@ -149,7 +231,7 @@ export function buildDiskUsage(df: ParsedDf, networks: NetworkInfo[], opts: Buil
     images: cap(bySize(images)),
     networks: cap(unusedNetworks.map((n) => ({ id: n.id, name: n.name, created: n.created }))),
     volumes: cap(bySize(volumes)),
-    buildCache: cap(bySize(buildCache)),
+    buildCache: capBuild(bySize(buildCache)),
   };
   return { type: "disk_usage", observedAt: new Date(opts.now ?? Date.now()).toISOString(), summary, candidates, truncated };
 }
@@ -177,6 +259,8 @@ export interface CollectDeps {
   /** Parmi ces projets, lesquels sont protégés ? (console, agent, PROTECTED_PROJECTS) */
   protectedAmong: (projects: string[]) => Promise<Set<string>>;
   protectedImageRefs: string[];
+  /** Mémoire des entrées de cache de build que Docker refuse de supprimer. */
+  retained?: RetainedBuildCache;
 }
 
 /** Équivalent de `docker system df` avec les candidats au nettoyage. */
@@ -186,5 +270,7 @@ export async function collectDiskUsage(deps: CollectDeps): Promise<DiskUsageMess
   const projects = new Set<string>();
   for (const x of [...df.containers, ...df.volumes]) if (project(x)) projects.add(project(x));
   for (const n of networks) if (n.project) projects.add(n.project);
-  return buildDiskUsage(df, networks, { protectedProjects: await deps.protectedAmong([...projects]), protectedImageRefs: deps.protectedImageRefs });
+  const retained = deps.retained ? await deps.retained.load() : undefined;
+  await deps.retained?.forgetMissing(new Set(df.buildCache.map((b) => str(b.ID))));
+  return buildDiskUsage(df, networks, { protectedProjects: await deps.protectedAmong([...projects]), protectedImageRefs: deps.protectedImageRefs, ...(retained ? { retainedBuildCacheIds: retained } : {}) });
 }

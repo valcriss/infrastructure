@@ -10,11 +10,12 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { AGENT_VERSION, TRIVY_CACHE_VOLUME, type AgentConfig } from "./config.js";
-import { collectInventory } from "./docker.js";
+import { collectInventory, dockerGet } from "./docker.js";
 import { Executor } from "./executor.js";
 import { ReplayGuard, SelfProtection } from "./guard.js";
 import { HostMetricsCollector } from "./host-metrics.js";
-import { collectDiskUsage } from "./disk-usage.js";
+import { collectDiskUsage, matchingBuildCache, parseDf } from "./disk-usage.js";
+import { RetainedBuildCache } from "./retained-cache.js";
 import { fitInventory } from "./inventory-fit.js";
 import { LogStreamer } from "./logs.js";
 import { MetricsCollector } from "./metrics.js";
@@ -75,6 +76,7 @@ export class AgentClient {
   private readonly guard = new ReplayGuard(() => Date.now() + this.clockOffsetMs);
   private readonly protection: SelfProtection;
   private readonly pruner: Pruner;
+  private readonly retained: RetainedBuildCache;
   /** Résultats terminés pendant une coupure : renvoyés à la reconnexion. */
   private unsent: AgentMessage[] = [];
 
@@ -87,7 +89,17 @@ export class AgentClient {
       dockerSocket: config.dockerSocket,
     });
     this.protection = new SelfProtection(config.dockerSocket, config.selfContainer, config.protectedProjects, { warn: (m) => this.log(m) });
-    this.pruner = new Pruner({ socket: config.dockerSocket, collect: () => this.collectDisk() });
+    this.retained = new RetainedBuildCache(join(config.stateDir, "build-cache-retained.json"));
+    this.pruner = new Pruner({
+      socket: config.dockerSocket,
+      collect: () => this.collectDisk(),
+      retainedAfterBuildPrune: async (criteria, startedAtMs) => {
+        const df = parseDf(await dockerGet(config.dockerSocket, "/system/df", 120_000));
+        const left = matchingBuildCache(df, criteria, startedAtMs);
+        await this.retained.add(left.map((x) => x.id));
+        return { count: left.length, bytes: left.reduce((s, x) => s + x.sizeBytes, 0) };
+      },
+    });
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
     this.scanner = new TrivyScanner({
       workspaceDir: config.workspaceDir,
@@ -106,6 +118,7 @@ export class AgentClient {
       socket: this.config.dockerSocket,
       protectedAmong: (projects) => this.protection.protectedAmong(projects),
       protectedImageRefs: [this.config.trivyImage],
+      retained: this.retained,
     });
   }
 

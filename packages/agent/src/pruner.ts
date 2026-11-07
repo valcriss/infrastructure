@@ -15,6 +15,11 @@ export interface PrunerDeps {
   request?: (method: "DELETE" | "POST", path: string, timeoutMs?: number) => Promise<DockerResponse>;
   get?: (path: string) => Promise<unknown>;
   now?: () => number;
+  /**
+   * Après un nettoyage du cache de build : entrées qui remplissaient encore les critères (donc que Docker a refusé de
+   * supprimer). Elles sont mémorisées pour ne plus être proposées ; le nombre et la taille sont rapportés.
+   */
+  retainedAfterBuildPrune?: (criteria: { mode: "all" | "older"; olderThanHours?: number }, startedAtMs: number) => Promise<{ count: number; bytes: number }>;
 }
 
 const message = (r: DockerResponse): string => {
@@ -192,11 +197,17 @@ export class Pruner {
         report("buildCache", 0, "cache de build", true);
         const filters: Record<string, string[]> = t.buildCache.mode === "older" && t.buildCache.olderThanHours ? { until: [`${t.buildCache.olderThanHours}h`] } : {};
         const q = new URLSearchParams({ all: "true", filters: JSON.stringify(filters), ...(t.buildCache.keepBytes ? { "keep-storage": String(Math.round(t.buildCache.keepBytes)) } : {}) });
+        const startedAt = this.now();
         const r = await this.request("POST", `/build/prune?${q}`, BUILD_PRUNE_TIMEOUT_MS);
         if (r.status === 200) {
           const body = r.body as { CachesDeleted?: unknown[]; SpaceReclaimed?: number } | null;
           removed.buildCache = body?.CachesDeleted?.length ?? 0;
           reclaimed += typeof body?.SpaceReclaimed === "number" ? body.SpaceReclaimed : 0;
+          // Docker conserve parfois des entrées qui remplissent les critères (dépendances, références) : on le dit et on s'en souvient.
+          const kept = await this.deps.retainedAfterBuildPrune?.({ mode: t.buildCache.mode, ...(t.buildCache.olderThanHours ? { olderThanHours: t.buildCache.olderThanHours } : {}) }, startedAt).catch(() => null);
+          if (kept && kept.count > 0) {
+            note(skipped, `cache de build : ${kept.count} entrée(s) (${(kept.bytes / 1e9).toFixed(1)} Go) conservée(s) par Docker (une entrée plus récente ou une image en dépend) ; elles ne seront plus proposées.`);
+          }
         } else note(errors, `cache de build : ${message(r)}`);
         overallDone++;
         report("buildCache", 1, undefined, true);

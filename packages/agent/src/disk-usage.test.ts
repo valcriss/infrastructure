@@ -1,6 +1,10 @@
 import type { DiskUsageMessage, PruneMessage, PruneProgress } from "@infra/shared";
 import { describe, expect, it } from "vitest";
-import { buildDiskUsage, parseDf, type NetworkInfo } from "./disk-usage.js";
+import { mkdtempSync, readFileSync as readFile, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildDiskUsage, effectiveBuildCache, matchingBuildCache, parseDf, type NetworkInfo } from "./disk-usage.js";
+import { RetainedBuildCache } from "./retained-cache.js";
 import { Pruner } from "./pruner.js";
 
 const sha = (c: string) => `sha256:${c.repeat(64)}`;
@@ -176,5 +180,79 @@ describe("Pruner", () => {
     const p = new Pruner({ socket: "s", collect: async () => Promise.reject(new Error("socket indisponible")), request: async () => ({ status: 204, body: null }) });
     const r = await p.run(msg({ containers: ["2".repeat(64)], images: [], networks: [], volumes: [] }));
     expect(r).toMatchObject({ status: "failed", error: "socket indisponible" });
+  });
+});
+
+describe("cache de build : entrées retenues par leurs dérivés", () => {
+  const DAY = 86_400_000;
+  const iso = (daysAgo: number) => new Date(NOW - daysAgo * DAY).toISOString();
+  // Chaîne A → B → C : A et B sont anciennes (30 j) mais C, qui en dépend, a été utilisée hier. D est ancienne et isolée.
+  // Docker écrit parfois la clé « " Parents" » avec une espace.
+  const records = [
+    { ID: "A", " Parents": [], Type: "regular", InUse: false, Size: 100, LastUsedAt: iso(30) },
+    { ID: "B", " Parents": ["A"], Type: "regular", InUse: false, Size: 200, LastUsedAt: iso(30) },
+    { ID: "C", Parents: ["B"], Type: "regular", InUse: false, Size: 300, LastUsedAt: iso(1) },
+    { ID: "D", Parents: [], Type: "regular", InUse: false, Size: 400, LastUsedAt: iso(30) },
+    { ID: "E", Parent: "D", Type: "regular", InUse: true, Size: 50, LastUsedAt: iso(30) }, // enfant en cours d'utilisation
+    { ID: "F", Parents: [], Type: "regular", InUse: false, Size: 10, LastUsedAt: iso(40) },
+  ];
+  const df = parseDf({ BuildCache: records });
+
+  it("calcule la date et l'utilisation effectives : celles du descendant le plus récent ou en cours d'utilisation", () => {
+    const e = effectiveBuildCache(records);
+    expect(e.get("A")).toEqual({ lastUsedMs: NOW - DAY, inUse: false }); // retenue par C, utilisée hier
+    expect(e.get("B")?.lastUsedMs).toBe(NOW - DAY);
+    expect(e.get("D")?.inUse).toBe(true); // un enfant est en cours d'utilisation
+    expect(e.get("F")).toEqual({ lastUsedMs: NOW - 40 * DAY, inUse: false });
+  });
+
+  it("ne propose pas, avec « plus de 7 jours », ce que Docker conserverait de toute façon (A, B, D)", () => {
+    const old = matchingBuildCache(df, { mode: "older", olderThanHours: 7 * 24 }, NOW).map((x) => x.id);
+    expect(old).toEqual(["F"]); // seule l'entrée ancienne, isolée et inutilisée
+    const all = matchingBuildCache(df, { mode: "all" }, NOW).map((x) => x.id).sort();
+    expect(all).toEqual(["A", "B", "C", "F"]); // « tout » : tout sauf ce qui est en cours d'utilisation (D, E)
+  });
+
+  it("expose les dates effectives dans les candidats, et exclut les entrées déjà refusées par Docker", () => {
+    const base = { protectedProjects: new Set<string>(), protectedImageRefs: [], now: NOW };
+    const d = buildDiskUsage(df, [], base);
+    expect(d.candidates.buildCache.map((b) => b.id).sort()).toEqual(["A", "B", "C", "F"]);
+    expect(d.candidates.buildCache.find((b) => b.id === "A")?.lastUsedAt).toBe(iso(1)); // date de C
+    const withRetained = buildDiskUsage(df, [], { ...base, retainedBuildCacheIds: new Set(["F"]) });
+    expect(withRetained.candidates.buildCache.map((b) => b.id)).not.toContain("F");
+    expect(withRetained.summary.buildCache.reclaimableBytes).toBe(d.summary.buildCache.reclaimableBytes - 10);
+  });
+
+  it("se souvient, dans un fichier, des entrées que Docker refuse de supprimer, et oublie celles qui n'existent plus", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "retained-"));
+    try {
+      const file = join(dir, "r.json");
+      const a = new RetainedBuildCache(file);
+      await a.add(["x1", "x2"]);
+      expect(JSON.parse(readFile(file, "utf8")).sort()).toEqual(["x1", "x2"]);
+      const b = new RetainedBuildCache(file); // nouvel agent : la mémoire est relue
+      expect([...(await b.load())].sort()).toEqual(["x1", "x2"]);
+      await b.forgetMissing(new Set(["x2"]));
+      expect(JSON.parse(readFile(file, "utf8"))).toEqual(["x2"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Pruner : entrées conservées par Docker", () => {
+  it("le dit dans les éléments ignorés, avec leur nombre et leur taille", async () => {
+    const p = new Pruner({
+      socket: "s",
+      collect: async () => build(),
+      request: async (_m, path) => ({ status: 200, body: path.startsWith("/build/prune") ? { CachesDeleted: ["b1"], SpaceReclaimed: 1000 } : null }),
+      retainedAfterBuildPrune: async (criteria) => {
+        expect(criteria).toEqual({ mode: "older", olderThanHours: 168 });
+        return { count: 7, bytes: 2.1e9 };
+      },
+    });
+    const r = await p.run({ type: "prune", operationId: "7b9b6a34-0f5c-4c2b-8f3e-111111111111", targets: { containers: [], images: [], networks: [], volumes: [], buildCache: { mode: "older", olderThanHours: 168 } } });
+    expect(r.skipped.join(" ")).toContain("7 entrée(s) (2.1 Go) conservée(s) par Docker");
+    expect(r.removed.buildCache).toBe(1);
   });
 });
