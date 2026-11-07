@@ -61,6 +61,8 @@ services:
       # Scans de vulnérabilités : Trivy tourne dans un conteneur éphémère lancé par l'agent.
       TRIVY_IMAGE: ${TRIVY_IMAGE:-ghcr.io/aquasecurity/trivy:0.76.1}
       TRIVY_MEMORY: ${TRIVY_MEMORY:-2g}
+      # Taille maximale d'une image scannée, en Gio (l'image est exportée dans WORKSPACE_DIR : prévoir la place).
+      TRIVY_MAX_IMAGE_GB: ${TRIVY_MAX_IMAGE_GB:-10}
       # Projets Compose que l'agent refuse d'arrêter ou redéployer (en plus du sien), séparés par des virgules.
       PROTECTED_PROJECTS: ${PROTECTED_PROJECTS:-}
     volumes:

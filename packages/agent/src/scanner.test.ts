@@ -1,7 +1,8 @@
 import { MAX_SCAN_VULNERABILITIES } from "@infra/shared";
 import { describe, expect, it } from "vitest";
 import { parseImage } from "./docker.js";
-import { normalizeReport, parseTrivyVersion, trivyRunArgs } from "./scanner.js";
+import { maxImageBytes } from "./config.js";
+import { normalizeReport, parseTrivyVersion, scanSizeError, trivyRunArgs } from "./scanner.js";
 
 const vuln = (id: string, severity: string, pkg = "openssl", extra: Record<string, unknown> = {}) => ({
   VulnerabilityID: id,
@@ -90,5 +91,36 @@ describe("trivyRunArgs", () => {
     const i = args.indexOf("-e");
     expect(args[i + 1]).toBe("TMPDIR=/scan/tmp");
     expect(args).toContain("/ws/.scan-1:/scan"); // le dossier du scan est monté et supprimé après le scan
+  });
+});
+
+describe("scanSizeError", () => {
+  const GIB = 1024 ** 3;
+
+  it("accepte une image de 5,4 Gio avec la limite par défaut de 10 Gio (le cas qui échouait avec 5 Gio)", () => {
+    expect(scanSizeError(5568 * 1e6, maxImageBytes({}), 100 * GIB)).toBeNull();
+  });
+
+  it("refuse une image trop grosse et indique comment relever la limite", () => {
+    const e = scanSizeError(12 * GIB, 10 * GIB, 100 * GIB);
+    expect(e).toContain("trop volumineuse");
+    expect(e).toContain("TRIVY_MAX_IMAGE_GB");
+  });
+
+  it("refuse tout de suite quand la partition n'a pas la place d'exporter l'image, au lieu d'échouer en plein scan", () => {
+    const e = scanSizeError(5 * GIB, 10 * GIB, 6 * GIB);
+    expect(e).toContain("Espace disque insuffisant");
+    expect(e).toContain("6,0 Gio libres");
+    expect(scanSizeError(5 * GIB, 10 * GIB, null)).toBeNull(); // espace indéterminé : on laisse faire
+  });
+});
+
+describe("maxImageBytes", () => {
+  it("lit TRIVY_MAX_IMAGE_GB, puis l'ancienne variable en octets, puis 10 Gio", () => {
+    expect(maxImageBytes({ TRIVY_MAX_IMAGE_GB: "20" })).toBe(20 * 1024 ** 3);
+    expect(maxImageBytes({ TRIVY_MAX_IMAGE_GB: "1.5" })).toBe(1.5 * 1024 ** 3);
+    expect(maxImageBytes({ TRIVY_MAX_IMAGE_BYTES: "123456" })).toBe(123456);
+    expect(maxImageBytes({ TRIVY_MAX_IMAGE_GB: "abc" })).toBe(10 * 1024 ** 3);
+    expect(maxImageBytes({})).toBe(10 * 1024 ** 3);
   });
 });

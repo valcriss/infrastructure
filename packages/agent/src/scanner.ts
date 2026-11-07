@@ -7,7 +7,7 @@ import {
   type SeverityCounts,
   type Vulnerability,
 } from "@infra/shared";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, statfs } from "node:fs/promises";
 import { join } from "node:path";
 import { dockerGet } from "./docker.js";
 import { dockerEnv, runCommand } from "./exec.js";
@@ -122,6 +122,27 @@ export function trivyRunArgs(cfg: Pick<ScannerConfig, "trivyImage" | "cacheVolum
   ];
 }
 
+/** Marge pour les fichiers temporaires de Trivy (base de vulnérabilités, base Java) en plus de l'archive de l'image. */
+const SCAN_HEADROOM_BYTES = 2.5 * 1024 ** 3;
+
+const gb = (n: number): string => (n / 1024 ** 3).toFixed(1).replace(".", ",");
+
+/**
+ * Refuse un scan avant de commencer s'il dépasse la taille maximale configurée, ou si la partition de l'espace de
+ * travail n'a pas la place d'exporter l'image : l'échec est alors immédiat et explicite plutôt qu'un « no space left
+ * on device » au milieu d'un scan.
+ */
+export function scanSizeError(imageBytes: number, maxBytes: number, freeBytes: number | null): string | null {
+  if (imageBytes > maxBytes) {
+    return `Image trop volumineuse pour être scannée (${gb(imageBytes)} Gio > ${gb(maxBytes)} Gio). Relevez la limite avec la variable TRIVY_MAX_IMAGE_GB de l'agent (par exemple 20).`;
+  }
+  const needed = imageBytes + SCAN_HEADROOM_BYTES;
+  if (freeBytes !== null && freeBytes < needed) {
+    return `Espace disque insuffisant pour scanner cette image : ${gb(freeBytes)} Gio libres dans le répertoire de travail de l'agent, ${gb(needed)} Gio nécessaires (archive de l'image + fichiers temporaires de Trivy).`;
+  }
+  return null;
+}
+
 /** Efface les chemins et jetons éventuels d'un message d'erreur avant de le remonter. */
 const brief = (msg: string): string => {
   const flat = msg.replace(/\s+/g, " ").trim();
@@ -173,9 +194,16 @@ export class TrivyScanner {
       } catch {
         return fail("Image introuvable sur cet hôte (supprimée depuis l'inventaire ?).");
       }
-      if (size > this.cfg.maxImageBytes) {
-        return fail(`Image trop volumineuse pour être scannée (${Math.round(size / 1e6)} Mo > ${Math.round(this.cfg.maxImageBytes / 1e6)} Mo).`);
+      // Espace libre sur la partition de l'espace de travail (où l'image est exportée) ; indéterminé = on laisse faire.
+      let free: number | null = null;
+      try {
+        const fs = await statfs(this.cfg.workspaceDir);
+        free = fs.bavail * fs.bsize;
+      } catch {
+        /* dossier pas encore créé ou système de fichiers sans statfs */
       }
+      const tooBig = scanSizeError(size, this.cfg.maxImageBytes, free);
+      if (tooBig) return fail(tooBig);
 
       // 2. Export de l'image dans un dossier temporaire privé.
       await mkdir(dir, { recursive: true, mode: 0o700 });
