@@ -3265,6 +3265,46 @@
                       "type": "string"
                     }
                   },
+                  "env": {
+                    "type": "string"
+                  },
+                  "extract": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "encrypted": {
+                          "type": "boolean"
+                        },
+                        "uses": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "service": {
+                                "type": "string"
+                              },
+                              "key": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "service",
+                              "key"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "encrypted",
+                        "uses"
+                      ]
+                    }
+                  },
                   "hostId": {
                     "type": "string"
                   },
@@ -3281,7 +3321,7 @@
         },
         "responses": {
           "200": {
-            "description": "Validité (erreurs avec ligne et colonne), services, variables référencées (obligatoires, valeurs par défaut, secrets probables), valeurs en clair et, avec hostId + project, écarts avec les conteneurs observés (services, ports publiés, montages)",
+            "description": "Validité (erreurs avec ligne et colonne), services, variables référencées (obligatoires, valeurs par défaut, secrets probables), valeurs en clair et, avec hostId + project, écarts avec les conteneurs observés (services, ports publiés, montages) ; avec env (contenu d'un fichier .env), valeurs lues, lignes ignorées, valeurs interpolées par Compose et variables du .env non utilisées par le Compose ; groups = valeurs écrites en clair dans environment, regroupées avec un nom de variable proposé ; avec extract, extracted = Compose qui résulterait du passage de ces valeurs en variables (ou error)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5163,6 +5203,52 @@
                   "composeSensitive": {
                     "default": false,
                     "type": "boolean"
+                  },
+                  "extract": {
+                    "maxItems": 300,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "encrypted": {
+                          "type": "boolean"
+                        },
+                        "uses": {
+                          "minItems": 1,
+                          "maxItems": 100,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "service": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              "key": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              }
+                            },
+                            "required": [
+                              "service",
+                              "key"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "encrypted",
+                        "uses"
+                      ]
+                    }
                   }
                 },
                 "required": [

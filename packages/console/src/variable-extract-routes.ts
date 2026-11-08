@@ -16,7 +16,7 @@ import { changeStack, getRevision } from "./stacks.js";
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type VariableMap = Record<string, { value: string; sensitive: boolean }>;
 
-const Group = z.object({
+export const Group = z.object({
   /** Nom de la variable de stack qui remplace la valeur. */
   name: z.string().min(1).max(128),
   /** Variable chiffrée (valeur masquée, chiffrée dans la sauvegarde Git). */
@@ -29,6 +29,15 @@ export const ExtractBody = z.object({
   message: z.string().max(200).optional(),
 });
 type Body = z.infer<typeof ExtractBody>;
+export type ExtractGroupInput = z.infer<typeof Group>;
+
+/**
+ * Extraction à la création : mêmes contrôles que sur une stack existante (valeurs identiques par variable, noms
+ * uniques, configuration résolue inchangée), appliqués au Compose et aux variables saisis avant l'enregistrement.
+ */
+export function planCreationExtraction(compose: string, variables: VariableMap, groups: ExtractGroupInput[]): Plan {
+  return planExtraction(compose, variables, { expectedRevision: 1, groups });
+}
 
 const IdParams = z.object({ id: z.uuid() });
 

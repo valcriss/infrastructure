@@ -13,6 +13,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
+import { Group as ExtractGroup, planCreationExtraction } from "./variable-extract-routes.js";
 import { serveLogStream } from "./log-sse.js";
 import type { LogStreams } from "./log-streams.js";
 import type { OperationsService } from "./operations.js";
@@ -43,6 +44,8 @@ export const CreateBody = z.object({
   adopt: z.boolean().default(false),
   /** Chiffre le Compose dans la sauvegarde Git. */
   composeSensitive: z.boolean().default(false),
+  /** Valeurs en clair du Compose à passer en variables dès la création (étape « variables » de l'assistant). */
+  extract: z.array(ExtractGroup).max(300).optional(),
 });
 export const ComposeBody = z.object({
   expectedRevision: Expected,
@@ -166,7 +169,12 @@ export function registerStackRoutes(
 
   app.post("/api/v1/stacks", { preHandler: auth }, async (request, reply) => {
     const body = CreateBody.parse(request.body);
-    const { id } = await createStack(pool, { ...body, author: request.actor });
+    let input = { ...body };
+    if (body.extract && body.extract.length > 0) {
+      const plan = planCreationExtraction(body.compose, applyVariableChanges({}, body.variables, undefined), body.extract);
+      input = { ...body, compose: plan.compose, variables: plan.variables };
+    }
+    const { id } = await createStack(pool, { ...input, author: request.actor });
     return reply.code(201).send({ id, revision: 1, backup: await backupInfo() });
   });
 

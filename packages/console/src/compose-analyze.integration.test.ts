@@ -92,6 +92,45 @@ describe.skipIf(!url)("analyse d'un Compose avant enregistrement (intégration)"
     expect((await call("POST", "/api/v1/compose/clean", { compose: "services: [" })).status).toBe(422);
   });
 
+  it("préremplit les variables depuis un fichier .env et signale les inutilisées", async () => {
+    const env = ["# prod", "PUBLIC_PORT=9090", 'API_TOKEN="abc def"', "AUTRE_CLE=xyz", "export SMTP_PASSWORD=pw", "ligne invalide", ""].join(NL);
+    const r = await call("POST", "/api/v1/compose/analyze", { compose: COMPOSE, env });
+    expect(r.json.env.values).toMatchObject({ PUBLIC_PORT: "9090", API_TOKEN: "abc def", AUTRE_CLE: "xyz" });
+    expect(r.json.env.issues).toHaveLength(1);
+    expect((r.json.env.unused as { name: string; secret: boolean }[]).map((u) => u.name).sort()).toEqual(["AUTRE_CLE", "SMTP_PASSWORD"]);
+    expect((r.json.env.unused as { name: string; secret: boolean }[]).find((u) => u.name === "SMTP_PASSWORD")?.secret).toBe(true);
+    const none = await call("POST", "/api/v1/compose/analyze", { compose: COMPOSE });
+    expect(none.json.env).toBeNull();
+  });
+
+  it("propose les valeurs en clair à extraire et calcule le Compose résultant", async () => {
+    const compose = ["services:", "  db:", "    image: postgres", "    environment:", "      POSTGRES_PASSWORD: s3cret-Value-1234567890", "      POSTGRES_DB: app", ""].join(NL);
+    const r = await call("POST", "/api/v1/compose/analyze", { compose });
+    const groups = r.json.groups as { id: string; name: string; secret: boolean; uses: { service: string; key: string }[] }[];
+    expect(groups.map((g) => g.name).sort()).toEqual(["POSTGRES_DB", "POSTGRES_PASSWORD"]);
+    const pw = groups.find((g) => g.name === "POSTGRES_PASSWORD");
+    expect(pw?.secret).toBe(true);
+    expect(r.json.extracted).toBeNull();
+    const x = await call("POST", "/api/v1/compose/analyze", { compose, extract: [{ name: "DB_PASSWORD", encrypted: true, uses: pw?.uses }] });
+    expect(x.json.extracted.compose).toContain("POSTGRES_PASSWORD: ${DB_PASSWORD}");
+    expect(x.json.extracted.compose).toContain("POSTGRES_DB: app");
+    expect(x.json.extracted.created).toEqual([{ name: "DB_PASSWORD", sensitive: true, reused: false, uses: 1 }]);
+    const bad = await call("POST", "/api/v1/compose/analyze", { compose, extract: [{ name: "X", encrypted: false, uses: [{ service: "db", key: "INCONNUE" }] }] });
+    expect(bad.json.extracted.error).toBeTruthy();
+  });
+
+  it("crée la stack avec les valeurs passées en variables (sensibles)", async () => {
+    const compose = ["services:", "  db:", "    image: postgres", "    environment:", "      POSTGRES_PASSWORD: s3cret-Value-1234567890", ""].join(NL);
+    const a = await call("POST", "/api/v1/compose/analyze", { compose });
+    const g = (a.json.groups as { uses: unknown[] }[])[0];
+    const created = await call("POST", "/api/v1/stacks", { name: "avecextract", hostId, compose, variables: {}, extract: [{ name: "DB_PASSWORD", encrypted: true, uses: g?.uses }] });
+    expect(created.status).toBe(201);
+    const rev = await call("GET", "/api/v1/stacks/" + created.json.id + "/revisions/1");
+    expect(rev.json.compose).toContain("${DB_PASSWORD}");
+    expect(rev.json.compose).not.toContain("s3cret-Value");
+    expect(rev.json.variables).toEqual([{ name: "DB_PASSWORD", value: null, sensitive: true }]);
+  });
+
   it("répond 404 pour un hôte inconnu", async () => {
     const r = await call("POST", "/api/v1/compose/analyze", { compose: COMPOSE, hostId: "00000000-0000-4000-8000-000000000000", project: "demo" });
     expect(r.status).toBe(404);
