@@ -173,6 +173,10 @@ export class AgentClient {
       let metricsTimer: NodeJS.Timeout | undefined;
       let diskTimer: NodeJS.Timeout | undefined;
       let diskBusy = false;
+      // Après une opération, l'état réel des conteneurs (démarrage, healthchecks) évolue pendant quelques
+      // secondes : on renvoie l'inventaire à intervalles rapprochés au lieu d'attendre la période normale.
+      const burstTimers = new Set<NodeJS.Timeout>();
+      const POST_OPERATION_INVENTORY_DELAYS_SEC = [0, 5, 15, 30, 60];
       const collector = new MetricsCollector(this.config.dockerSocket);
       const hostCollector = new HostMetricsCollector(this.config.workspaceDir);
 
@@ -199,6 +203,15 @@ export class AgentClient {
           this.log(`espace disque Docker indisponible : ${(err as Error).message}`);
         } finally {
           diskBusy = false;
+        }
+      };
+      const inventoryAfterOperation = (): void => {
+        for (const delay of POST_OPERATION_INVENTORY_DELAYS_SEC) {
+          const t = setTimeout(() => {
+            burstTimers.delete(t);
+            void sendInventory();
+          }, delay * 1000);
+          burstTimers.add(t);
         }
       };
       const sendInventory = async (): Promise<void> => {
@@ -300,7 +313,7 @@ export class AgentClient {
                 .then((isProtected) =>
                   isProtected
                     ? refuse(`La stack « ${msg.stack.project} » fait tourner la console ou son agent : elle ne peut pas être arrêtée ni redéployée depuis son propre interface.`)
-                    : this.executor.run(msg, (m) => this.emit(m)),
+                    : this.executor.run(msg, (m) => this.emit(m)).then(inventoryAfterOperation),
                 )
                 .catch((err: unknown) => this.log(`erreur d'exécution : ${(err as Error).message}`));
               break;
@@ -347,6 +360,8 @@ export class AgentClient {
         clearInterval(inventoryTimer);
         clearInterval(metricsTimer);
         clearInterval(diskTimer);
+        for (const t of burstTimers) clearTimeout(t);
+        burstTimers.clear();
         this.socket = null;
         resolve(Date.now() - startedAt);
       };

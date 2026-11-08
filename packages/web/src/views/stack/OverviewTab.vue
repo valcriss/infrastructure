@@ -34,6 +34,7 @@ function onHcSaved(revision: number) {
 
 async function run(action: "deploy" | "stop" | "start") {
   error.value = "";
+  hcInfo.value = "";
   if (action === "stop" && !confirm(`Arrêter la stack « ${props.stack.name} » ? Les conteneurs sont stoppés, les volumes et la configuration sont conservés.`)) return;
   busy.value = true;
   try {
