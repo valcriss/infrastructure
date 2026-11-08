@@ -54,6 +54,7 @@ export interface Container {
   composeService?: string;
   health?: "healthy" | "unhealthy" | "starting" | "none";
   restartCount?: number;
+  healthProbe?: { exitCode: number; output: string; at: string; command?: string; failingStreak?: number; retries?: number };
   startedAt?: string;
   exitCode?: number;
   ports?: { privatePort: number; publicPort?: number; type: string; ip?: string }[];

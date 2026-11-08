@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { api, describeError, type Container, type StackDetail } from "../../api";
+import { api, describeError, fmtDate, type Container, type StackDetail } from "../../api";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
 
@@ -14,6 +14,17 @@ const error = ref("");
 const busy = ref(false);
 const hcTarget = ref<Container | null>(null);
 const hcInfo = ref("");
+const probeOpen = ref<string | null>(null);
+
+/** Texte de l'infobulle : raison du dernier test, ou à défaut une indication générale. */
+function probeTitle(c: Container): string {
+  const p = c.healthProbe;
+  if (!p) return "Détail du test indisponible (inventaire pas encore rafraîchi).";
+  const out = p.output.replace(/s+/g, " ").trim().slice(0, 300);
+  return `Code de sortie ${p.exitCode}${p.at ? " · " + fmtDate(p.at) : ""}
+${out || "(aucune sortie)"}
+Cliquer pour le détail`;
+}
 
 function onHcSaved(revision: number) {
   hcTarget.value = null;
@@ -86,14 +97,22 @@ async function run(action: "deploy" | "stop" | "start") {
           <tr><th class="px-4 py-1">Service</th><th class="px-4 py-1">Image</th><th class="px-4 py-1">État</th><th class="px-4 py-1">Healthcheck</th><th class="px-4 py-1">Redémarrages</th></tr>
         </thead>
         <tbody>
-          <tr v-for="c in stack.containers" :key="c.id" class="border-t border-slate-100">
+          <template v-for="c in stack.containers" :key="c.id">
+          <tr class="border-t border-slate-100">
             <td class="px-4 py-2">{{ c.composeService ?? c.names[0] }}</td>
             <td class="px-4 py-2 font-mono text-xs">{{ c.image }}</td>
             <td class="px-4 py-2">{{ c.status }}</td>
             <td class="px-4 py-2">
               <span v-if="c.health === 'healthy'" class="rounded bg-green-100 px-1.5 text-xs text-green-800">sain</span>
-              <span v-else-if="c.health === 'unhealthy'" class="rounded bg-red-100 px-1.5 text-xs text-red-800">en échec</span>
-              <span v-else-if="c.health === 'starting'" class="rounded bg-blue-100 px-1.5 text-xs text-blue-800">démarrage</span>
+              <button
+                v-else-if="c.health === 'unhealthy' || c.health === 'starting'"
+                :class="['inline-flex items-center gap-1 rounded px-1.5 text-xs', c.health === 'unhealthy' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800']"
+                :title="probeTitle(c)"
+                :aria-expanded="probeOpen === c.id"
+                @click="probeOpen = probeOpen === c.id ? null : c.id"
+              >
+                {{ c.health === "unhealthy" ? "en échec" : "démarrage" }} <FaIcon :icon="['fas', 'circle-info']" />
+              </button>
               <button
                 v-else-if="c.health === 'none' && c.composeService"
                 class="inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-1.5 text-xs text-slate-500 hover:bg-slate-100"
@@ -107,6 +126,23 @@ async function run(action: "deploy" | "stop" | "start") {
             </td>
             <td class="px-4 py-2" :class="(c.restartCount ?? 0) >= 3 ? 'font-semibold text-amber-700' : ''">{{ c.restartCount ?? "—" }}</td>
           </tr>
+          <tr v-if="probeOpen === c.id && c.healthProbe" class="bg-slate-50">
+            <td colspan="5" class="px-4 py-3 text-xs">
+              <p class="font-medium text-slate-800">Dernier test du healthcheck de « {{ c.composeService ?? c.names[0] }} »</p>
+              <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+                <dt class="text-slate-500">Résultat</dt><dd>code de sortie {{ c.healthProbe.exitCode }}{{ c.healthProbe.exitCode === 0 ? " (réussi)" : " (échec)" }}</dd>
+                <template v-if="c.healthProbe.at"><dt class="text-slate-500">Date</dt><dd>{{ fmtDate(c.healthProbe.at) }}</dd></template>
+                <template v-if="c.healthProbe.failingStreak !== undefined"><dt class="text-slate-500">Échecs consécutifs</dt><dd>{{ c.healthProbe.failingStreak }}<template v-if="c.healthProbe.retries"> sur {{ c.healthProbe.retries }} tolérés</template></dd></template>
+                <template v-if="c.healthProbe.command"><dt class="text-slate-500">Commande</dt><dd class="break-all font-mono">{{ c.healthProbe.command }}</dd></template>
+              </dl>
+              <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-100 p-2 font-mono">{{ c.healthProbe.output || "(aucune sortie : la commande n'a rien affiché)" }}</pre>
+              <p v-if="/not found|no such file|executable file/i.test(c.healthProbe.output)" class="mt-2 text-amber-700">
+                L'outil du test semble absent de l'image : le service sera toujours « en échec ». Modifiez la commande du healthcheck dans le Compose.
+              </p>
+              <p class="mt-2 text-slate-500">Pour le contexte autour de l'échec, consultez l'onglet Logs.</p>
+            </td>
+          </tr>
+          </template>
         </tbody>
       </table>
     </section>

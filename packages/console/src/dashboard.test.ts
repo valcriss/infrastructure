@@ -148,6 +148,18 @@ describe("deriveAlerts", () => {
     expect(alerts.map((a) => a.id).sort()).toEqual(["container_unhealthy:h1:id-web", "restart_loop:h1:id-loop"]);
   });
 
+  it("reprend la raison du dernier test dans l'alerte de healthcheck", () => {
+    const alerts = deriveAlerts(
+      baseCtx({
+        containers: [
+          { hostId: "h1", stackId: "s1", container: { ...ctr({ svc: "web", health: "unhealthy" }), healthProbe: { exitCode: 1, output: "wget: can't connect", at: "2026-11-08T05:00:00Z" } } },
+        ],
+      }),
+    );
+    expect(alerts[0]?.message).toContain("« wget: can't connect »");
+    expect(alerts[0]?.message).toContain("code de sortie 1");
+  });
+
   it("signale l'échec ou le blocage de la sauvegarde Git, et l'absence de configuration", () => {
     const failed = deriveAlerts(baseCtx({ backup: { state: "error", configured: true, pendingRevisions: 3, lastError: { code: "git_unreachable", message: "Serveur Git injoignable.", at: fresh.toISOString() } } }));
     expect(failed[0]).toMatchObject({ kind: "backup_failed", severity: "warning" });

@@ -20,6 +20,16 @@ describe("parseInspect", () => {
     });
   });
 
+  it("extrait le dernier test du healthcheck (sortie, code, commande)", () => {
+    const probe = parseInspect({
+      State: { Health: { Status: "unhealthy", FailingStreak: 3, Log: [{ ExitCode: 0, Output: "ok", End: "t0" }, { ExitCode: 1, Output: "wget: can't connect\n", End: "2026-11-08T05:00:00Z" }] } },
+      Config: { Healthcheck: { Test: ["CMD-SHELL", "wget -q http://127.0.0.1/"], Retries: 5 } },
+    })?.healthProbe;
+    expect(probe).toEqual({ exitCode: 1, output: "wget: can't connect", at: "2026-11-08T05:00:00Z", command: "CMD-SHELL wget -q http://127.0.0.1/", failingStreak: 3, retries: 5 });
+    expect(parseInspect({ State: { Health: { Status: "starting", Log: [] } } })?.healthProbe).toBeUndefined();
+    expect(parseInspect({ State: {} })?.healthProbe).toBeUndefined();
+  });
+
   it("traite un conteneur jamais démarré et une réponse invalide", () => {
     expect(parseInspect({ State: { StartedAt: "0001-01-01T00:00:00Z" } })?.startedAt).toBe("");
     expect(parseInspect(null)).toBeNull();

@@ -158,6 +158,14 @@ const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, warning: 1, info
 const RESTART_LOOP_MIN = 3;
 const RESTART_LOOP_WINDOW_MS = 10 * 60 * 1000;
 
+/** Raison du dernier test de healthcheck, pour le message d'alerte. */
+function probeReason(c: Container): string {
+  const p = c.healthProbe;
+  if (!p) return "";
+  const out = p.output.replace(/\s+/g, " ").trim().slice(0, 160);
+  return ` : ${out ? `« ${out} » ` : ""}(code de sortie ${p.exitCode})`;
+}
+
 export function deriveAlerts(ctx: AlertContext): Alert[] {
   const alerts: Alert[] = [];
 
@@ -218,7 +226,7 @@ export function deriveAlerts(ctx: AlertContext): Alert[] {
         severity: "warning",
         kind: "container_unhealthy",
         title: `Healthcheck en échec : ${name}`,
-        message: `Le conteneur ${c.names[0] ?? c.id.slice(0, 12)} est en marche mais son healthcheck échoue.`,
+        message: `Le conteneur ${c.names[0] ?? c.id.slice(0, 12)} est en marche mais son healthcheck échoue${probeReason(c)}.`,
         target,
         since: c.startedAt || null,
       });

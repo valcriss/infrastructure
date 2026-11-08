@@ -164,6 +164,33 @@ export interface InspectExtras {
   restartCount: number;
   startedAt: string;
   exitCode: number;
+  healthProbe?: NonNullable<Container["healthProbe"]>;
+}
+
+interface RawHealth {
+  State?: { Health?: { Status?: unknown; Log?: unknown; FailingStreak?: unknown }; StartedAt?: unknown; ExitCode?: unknown };
+  Config?: { Healthcheck?: { Test?: unknown; Retries?: unknown } };
+  RestartCount?: unknown;
+}
+
+/** Dernier test du healthcheck d'après `State.Health.Log` (le plus récent est en dernier). */
+function parseProbe(raw: RawHealth): InspectExtras["healthProbe"] {
+  const log = raw.State?.Health?.Log;
+  if (!Array.isArray(log) || log.length === 0) return undefined;
+  const last = log[log.length - 1] as { ExitCode?: unknown; Output?: unknown; End?: unknown } | null;
+  if (!last || typeof last !== "object") return undefined;
+  const test = raw.Config?.Healthcheck?.Test;
+  const command = Array.isArray(test) ? test.filter((x): x is string => typeof x === "string").join(" ").slice(0, 500) : "";
+  const streak = raw.State?.Health?.FailingStreak;
+  const retries = raw.Config?.Healthcheck?.Retries;
+  return {
+    exitCode: typeof last.ExitCode === "number" ? Math.trunc(last.ExitCode) : -1,
+    output: (typeof last.Output === "string" ? last.Output : "").trim().slice(-600),
+    at: typeof last.End === "string" ? last.End.slice(0, 40) : "",
+    ...(command ? { command } : {}),
+    ...(typeof streak === "number" && streak >= 0 ? { failingStreak: Math.trunc(streak) } : {}),
+    ...(typeof retries === "number" && retries >= 0 ? { retries: Math.trunc(retries) } : {}),
+  };
 }
 
 /**
@@ -172,12 +199,14 @@ export interface InspectExtras {
  */
 export function parseInspect(raw: unknown): InspectExtras | null {
   if (!raw || typeof raw !== "object") return null;
-  const o = raw as { RestartCount?: unknown; State?: { Health?: { Status?: unknown }; StartedAt?: unknown; ExitCode?: unknown } };
+  const o = raw as RawHealth;
   const status = o.State?.Health?.Status;
   const health: Health = status === "healthy" || status === "unhealthy" || status === "starting" ? status : "none";
   const started = typeof o.State?.StartedAt === "string" ? o.State.StartedAt : "";
+  const probe = health === "none" ? undefined : parseProbe(o);
   return {
     health,
+    ...(probe ? { healthProbe: probe } : {}),
     restartCount: typeof o.RestartCount === "number" && o.RestartCount >= 0 ? Math.trunc(o.RestartCount) : 0,
     // Docker renvoie « 0001-01-01T00:00:00Z » pour un conteneur jamais démarré.
     startedAt: started.startsWith("0001-") ? "" : started.slice(0, 40),

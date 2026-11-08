@@ -32,6 +32,18 @@ export const ContainerSchema = z.object({
    */
   health: z.enum(["healthy", "unhealthy", "starting", "none"]).optional(),
   restartCount: z.number().int().min(0).optional(),
+  /** Dernier test du healthcheck (conteneurs avec healthcheck uniquement) : sert à expliquer un échec. */
+  healthProbe: z
+    .object({
+      exitCode: z.number().int(),
+      output: z.string().max(600),
+      at: z.string().max(40),
+      /** Commande configurée (ex. « CMD-SHELL wget … »). */
+      command: z.string().max(500).optional(),
+      failingStreak: z.number().int().min(0).optional(),
+      retries: z.number().int().min(0).optional(),
+    })
+    .optional(),
   /** Dernier démarrage du conteneur (ISO 8601), vide s'il n'a jamais démarré. */
   startedAt: z.string().max(40).optional(),
   exitCode: z.number().int().optional(),
