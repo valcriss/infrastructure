@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { findActiveOperation } from "../../active-operation";
+import { healthApplies } from "../../container-health";
 import { api, describeError, fmtDate, type Container, type OperationView, type StackDetail } from "../../api";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
 import DeployDialog from "../../components/DeployDialog.vue";
@@ -226,7 +227,8 @@ Arrêter
             <td class="px-4 py-2 font-mono text-xs">{{ c.image }}</td>
             <td class="px-4 py-2">{{ c.status }}</td>
             <td class="px-4 py-2">
-              <span v-if="c.health === 'healthy'" class="rounded bg-green-100 px-1.5 text-xs text-green-800">sain</span>
+              <span v-if="!healthApplies(c.state)" class="text-xs text-slate-400" title="Conteneur arrêté : le dernier état de santé n'est plus significatif">— arrêté</span>
+              <span v-else-if="c.health === 'healthy'" class="rounded bg-green-100 px-1.5 text-xs text-green-800">sain</span>
               <button
                 v-else-if="c.health === 'unhealthy' || c.health === 'starting'"
                 :class="['inline-flex items-center gap-1 rounded px-1.5 text-xs', c.health === 'unhealthy' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800']"
