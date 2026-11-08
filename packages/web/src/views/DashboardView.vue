@@ -339,6 +339,10 @@ const alertCounts = computed(() => {
       <section aria-label="Ressources" class="space-y-4">
         <h2 class="text-lg font-semibold">Ressources</h2>
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <PanelCard title="Réseau" icon="network-wired">
+            <template #actions><RangeToggle v-model="netRange" :options="RANGES" label="Période du réseau" /></template>
+            <AreaChart title="Réseau" unit="bps" :series="netSeries" />
+          </PanelCard>
           <PanelCard title="CPU des conteneurs" icon="microchip" subtitle="100 % = un cœur complet">
             <template #actions><RangeToggle v-model="cpuRange" :options="RANGES" label="Période du CPU" /></template>
             <AreaChart title="CPU des conteneurs" unit="percent" :series="cpuSeries" />
@@ -346,10 +350,6 @@ const alertCounts = computed(() => {
           <PanelCard title="Mémoire des conteneurs" icon="memory">
             <template #actions><RangeToggle v-model="memRange" :options="RANGES" label="Période de la mémoire" /></template>
             <AreaChart title="Mémoire des conteneurs" unit="bytes" :series="memSeries" />
-          </PanelCard>
-          <PanelCard title="Réseau" icon="network-wired">
-            <template #actions><RangeToggle v-model="netRange" :options="RANGES" label="Période du réseau" /></template>
-            <AreaChart title="Réseau" unit="bps" :series="netSeries" />
           </PanelCard>
           <PanelCard title="Évolution des CVE" icon="shield-halved" :subtitle="cveMode === 'filtered' ? 'Par gravité, selon le seuil des paramètres' : 'Par gravité, toutes les gravités'">
             <CveHistoryChart :host-id="hostId || undefined" :stack-id="stackId || undefined" @update:mode="cveMode = $event" />
