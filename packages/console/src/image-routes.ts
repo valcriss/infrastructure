@@ -265,7 +265,7 @@ export function registerImageRoutes(
   app.get("/api/v1/stacks/:id/images", { preHandler: apiAuth }, async (request) => {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     await stackOr404(id);
-    const [images, policies, checks] = await Promise.all([loadUsedImages(pool, { stackId: id }), watcher.policies(id), watcher.checks(id)]);
+    const [images, policies, checks, ignored] = await Promise.all([loadUsedImages(pool, { stackId: id }), watcher.policies(id), watcher.checks(id), watcher.ignoredTags(id)]);
     const byService = new Map(checks.map((c) => [c.service, c]));
     const components: unknown[] = [];
     const seen = new Set<string>();
@@ -282,6 +282,7 @@ export function registerImageRoutes(
           ref: u.ref,
           image: v,
           policy: policies[u.service] ?? { policy: "same_tag", pattern: null },
+          ignoredTags: (ignored[u.service] ?? []).map((i) => ({ tag: i.tag, reason: i.reason, createdBy: i.createdBy, createdAt: i.createdAt.toISOString() })),
           check: c
             ? {
                 checkedAt: c.checkedAt.toISOString(),
@@ -312,6 +313,20 @@ export function registerImageRoutes(
     const body = PolicyBody.parse(request.body);
     await watcher.setPolicy(id, service, body.policy as never, body.pattern ?? null, request.actor);
     return { service, policy: body.policy, pattern: body.policy === "pattern" ? (body.pattern ?? null) : null };
+  });
+
+  // Ne plus proposer une version d'image pour un composant (et la proposer de nouveau).
+  const IgnoreParams = z.object({ id: z.uuid(), service: z.string().min(1).max(128) });
+  app.post("/api/v1/stacks/:id/services/:service/ignored-tags", { preHandler: apiAuth }, async (request, reply) => {
+    const { id, service } = IgnoreParams.parse(request.params);
+    const body = z.object({ tag: z.string().min(1).max(128), reason: z.string().max(200).optional() }).parse(request.body);
+    await watcher.ignoreTag(id, service, body.tag, body.reason?.trim() || null, request.actor);
+    return reply.code(201).send({ service, tag: body.tag });
+  });
+  app.delete("/api/v1/stacks/:id/services/:service/ignored-tags/:tag", { preHandler: apiAuth }, async (request, reply) => {
+    const { id, service, tag } = IgnoreParams.extend({ tag: z.string().min(1).max(128) }).parse(request.params);
+    await watcher.unignoreTag(id, service, tag, request.actor);
+    return reply.code(204).send();
   });
 
   // --- Paramètres et registres ------------------------------------------------------------------

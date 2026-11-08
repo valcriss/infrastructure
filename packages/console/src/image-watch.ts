@@ -31,6 +31,8 @@ export interface CheckDetail {
   /** Même tag mais contenu différent côté registre : vrai / faux / null (indéterminable). */
   contentChanged: boolean | null;
   candidates: string[];
+  /** Versions proposées par la règle de suivi mais écartées par l'utilisateur (absent sur les anciens résultats). */
+  ignored?: string[];
   /** La décision repose sur une heuristique (tag non interprétable, expression libre). */
   uncertain: boolean;
   tagsTruncated: boolean;
@@ -50,6 +52,8 @@ export interface EvaluateInput {
   image: Pick<ImageInfo, "repoDigests" | "os" | "arch" | "variant" | "layers"> | null;
   policy: UpdatePolicy;
   pattern: string | null;
+  /** Versions à ne plus proposer pour ce composant. */
+  ignored?: string[];
 }
 
 const empty = (input: EvaluateInput): CheckDetail => ({
@@ -62,6 +66,7 @@ const empty = (input: EvaluateInput): CheckDetail => ({
   platform: "",
   contentChanged: null,
   candidates: [],
+  ignored: [],
   uncertain: false,
   tagsTruncated: false,
   policy: input.policy,
@@ -151,7 +156,9 @@ export async function evaluateImage(input: EvaluateInput, client: RegistryLike):
       const { tags, truncated } = await client.listTags(parsed);
       detail.tagsTruncated = truncated;
       const found = pickCandidates(parsed.tag as string, tags, input.policy, input.pattern);
-      detail.candidates = found.candidates;
+      const hidden = new Set(input.ignored ?? []);
+      detail.candidates = found.candidates.filter((t) => !hidden.has(t));
+      detail.ignored = found.candidates.filter((t) => hidden.has(t));
       detail.uncertain = found.uncertain;
       detail.notes.push(...found.notes);
       if (truncated) detail.notes.push("Liste de tags tronquée (dépôt très volumineux) : des candidats ont pu échapper à la recherche.");
@@ -211,6 +218,47 @@ export class ImageWatcher {
     return Object.fromEntries(rows.map((r) => [r.service, { policy: r.policy, pattern: r.pattern }]));
   }
 
+  /** Versions écartées par composant : { service: [{ tag, reason, createdBy, createdAt }] }. */
+  async ignoredTags(stackId: string): Promise<Record<string, { tag: string; reason: string | null; createdBy: string; createdAt: Date }[]>> {
+    const { rows } = await this.pool.query<{ service: string; tag: string; reason: string | null; created_by: string; created_at: Date }>(
+      "SELECT service, tag, reason, created_by, created_at FROM image_ignored_tags WHERE stack_id = $1 ORDER BY created_at",
+      [stackId],
+    );
+    const out: Record<string, { tag: string; reason: string | null; createdBy: string; createdAt: Date }[]> = {};
+    for (const r of rows) (out[r.service] ??= []).push({ tag: r.tag, reason: r.reason, createdBy: r.created_by, createdAt: r.created_at });
+    return out;
+  }
+
+  /**
+   * Ne plus proposer cette version pour ce composant. Le dernier résultat est corrigé tout de suite (sans interroger le
+   * registre) : la proposition et l'alerte disparaissent immédiatement.
+   */
+  async ignoreTag(stackId: string, service: string, tag: string, reason: string | null, actor: string): Promise<void> {
+    const stack = await this.pool.query("SELECT 1 FROM stacks WHERE id = $1", [stackId]);
+    if (stack.rowCount === 0) throw new HttpError(404, "stack_not_found", "Stack introuvable");
+    await this.pool.query(
+      `INSERT INTO image_ignored_tags (stack_id, service, tag, reason, created_by) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (stack_id, service, tag) DO UPDATE SET reason = $4`,
+      [stackId, service, tag, reason, actor],
+    );
+    const row = await this.pool.query<{ kind: CheckKind | null; detail: CheckDetail | null }>("SELECT kind, detail FROM image_checks WHERE stack_id = $1 AND service = $2", [stackId, service]);
+    const found = row.rows[0];
+    if (found?.detail && found.detail.candidates.includes(tag)) {
+      const detail: CheckDetail = { ...found.detail, candidates: found.detail.candidates.filter((t) => t !== tag), ignored: [...new Set([...(found.detail.ignored ?? []), tag])] };
+      const kind: CheckKind = found.kind === "update_available" && detail.contentChanged !== true && detail.candidates.length === 0 ? "up_to_date" : (found.kind ?? "up_to_date");
+      await this.pool.query("UPDATE image_checks SET kind = $3, detail = $4 WHERE stack_id = $1 AND service = $2", [stackId, service, kind, JSON.stringify(detail)]);
+    }
+    await audit(this.pool, actor, "image-tag.ignore", `${stackId}/${service}@${tag}`, "success");
+  }
+
+  /** Propose de nouveau la version : une vérification est relancée pour la retrouver. */
+  async unignoreTag(stackId: string, service: string, tag: string, actor: string): Promise<void> {
+    const r = await this.pool.query("DELETE FROM image_ignored_tags WHERE stack_id = $1 AND service = $2 AND tag = $3", [stackId, service, tag]);
+    if (r.rowCount === 0) throw new HttpError(404, "ignored_tag_not_found", "Cette version n'est pas ignorée.");
+    await audit(this.pool, actor, "image-tag.unignore", `${stackId}/${service}@${tag}`, "success");
+    void this.checkStack(stackId).catch(() => {});
+  }
+
   async setPolicy(stackId: string, service: string, policy: UpdatePolicy, pattern: string | null, actor: string): Promise<void> {
     if (!POLICIES.includes(policy)) throw new HttpError(400, "invalid_policy", "Politique inconnue.");
     if (policy === "pattern") {
@@ -267,6 +315,7 @@ export class ImageWatcher {
     this.checking.add(stackId);
     try {
       const policies = await this.policies(stackId);
+      const ignored = await this.ignoredTags(stackId);
       const images = await loadUsedImages(this.pool, { stackId });
       const done = new Set<string>();
       for (const img of images) {
@@ -275,7 +324,7 @@ export class ImageWatcher {
           done.add(user.service);
           const policy = policies[user.service] ?? { policy: "same_tag" as const, pattern: null };
           try {
-            const out = await evaluateImage({ ref: user.ref, imageId: img.imageId, image: img.info, policy: policy.policy, pattern: policy.pattern }, this.client);
+            const out = await evaluateImage({ ref: user.ref, imageId: img.imageId, image: img.info, policy: policy.policy, pattern: policy.pattern, ignored: (ignored[user.service] ?? []).map((i) => i.tag) }, this.client);
             await this.pool.query(
               `INSERT INTO image_checks (stack_id, service, checked_at, status, kind, detail, error, last_success_at)
                VALUES ($1, $2, now(), 'ok', $3, $4, NULL, now())

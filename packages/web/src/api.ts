@@ -123,6 +123,8 @@ export interface RevisionSummary {
   author: string;
   message: string | null;
   createdAt: string;
+  /** Révision écartée : conservée dans l'historique, plus proposée au déploiement. */
+  abandoned: { at: string; reason: string | null } | null;
 }
 
 export interface RevisionDetail extends RevisionSummary {
@@ -411,6 +413,8 @@ export interface CheckDetailView {
   platform: string;
   contentChanged: boolean | null;
   candidates: string[];
+  /** Versions proposées par la règle mais écartées par l'utilisateur. */
+  ignored?: string[];
   uncertain: boolean;
   tagsTruncated: boolean;
   notes: string[];
@@ -423,6 +427,7 @@ export interface StackImageComponent {
   ref: string;
   image: ImageView;
   policy: { policy: UpdatePolicyName; pattern: string | null };
+  ignoredTags: { tag: string; reason: string | null; createdBy: string; createdAt: string }[];
   check: {
     checkedAt: string;
     status: "ok" | "error";

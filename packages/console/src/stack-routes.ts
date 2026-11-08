@@ -17,11 +17,13 @@ import { serveLogStream } from "./log-sse.js";
 import type { LogStreams } from "./log-streams.js";
 import type { OperationsService } from "./operations.js";
 import {
+  abandonRevision,
   applyVariableChanges,
   changeStack,
   createStack,
   getRevision,
   maskVariables,
+  restoreRevision,
 } from "./stacks.js";
 
 const VariableInput = z.union([
@@ -357,8 +359,8 @@ export function registerStackRoutes(
   app.get("/api/v1/stacks/:id/revisions", { preHandler: auth }, async (request) => {
     const { id } = IdParams.parse(request.params);
     await loadStack(id);
-    const { rows } = await pool.query<{ revision: number; digest: string; author: string; message: string | null; created_at: Date }>(
-      `SELECT revision, digest, author, message, created_at FROM stack_revisions
+    const { rows } = await pool.query<{ revision: number; digest: string; author: string; message: string | null; created_at: Date; abandoned_at: Date | null; abandoned_reason: string | null }>(
+      `SELECT revision, digest, author, message, created_at, abandoned_at, abandoned_reason FROM stack_revisions
        WHERE stack_id = $1 ORDER BY revision DESC`,
       [id],
     );
@@ -369,6 +371,7 @@ export function registerStackRoutes(
         author: r.author,
         message: r.message,
         createdAt: r.created_at.toISOString(),
+        abandoned: r.abandoned_at ? { at: r.abandoned_at.toISOString(), reason: r.abandoned_reason } : null,
       })),
     };
   });
@@ -383,12 +386,26 @@ export function registerStackRoutes(
       author: rev.author,
       message: rev.message,
       createdAt: rev.createdAt.toISOString(),
+      abandoned: rev.abandonedAt ? { at: rev.abandonedAt.toISOString(), reason: rev.abandonedReason } : null,
       compose: rev.compose,
       variables: maskVariables(rev.variables),
       files: rev.files,
       sensitiveFiles: [...rev.sensitiveFiles].sort(),
       composeSensitive: rev.composeSensitive,
     };
+  });
+
+  // Abandon d'une révision (écartée du déploiement, conservée dans l'historique) et annulation de l'abandon.
+  app.post("/api/v1/stacks/:id/revisions/:revision/abandon", { preHandler: auth }, async (request) => {
+    const params = IdParams.extend({ revision: z.coerce.number().int().positive() }).parse(request.params);
+    const body = z.object({ reason: z.string().max(200).optional() }).parse(request.body ?? {});
+    return abandonRevision(pool, params.id, params.revision, request.actor, body.reason?.trim() || null);
+  });
+
+  app.post("/api/v1/stacks/:id/revisions/:revision/restore", { preHandler: auth }, async (request) => {
+    const params = IdParams.extend({ revision: z.coerce.number().int().positive() }).parse(request.params);
+    await restoreRevision(pool, params.id, params.revision, request.actor);
+    return { revision: params.revision, abandoned: null };
   });
 
   // --- Opérations --------------------------------------------------------------

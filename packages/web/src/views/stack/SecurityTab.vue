@@ -60,6 +60,34 @@ async function act(path: string, message: string) {
   }
 }
 
+async function ignoreTag(service: string, tag: string) {
+  const reason = window.prompt(`Ne plus proposer « ${tag} » pour « ${service} » ?
+Motif (facultatif, ex. incompatible avec les données) :`, "");
+  if (reason === null) return;
+  error.value = info.value = "";
+  try {
+    await api(`/api/v1/stacks/${props.stack.id}/services/${encodeURIComponent(service)}/ignored-tags`, {
+      method: "POST",
+      body: JSON.stringify({ tag, ...(reason.trim() ? { reason: reason.trim() } : {}) }),
+    });
+    info.value = `La version « ${tag} » n'est plus proposée pour « ${service} ».`;
+    await load();
+  } catch (err) {
+    error.value = describeError(err);
+  }
+}
+
+async function unignoreTag(service: string, tag: string) {
+  error.value = info.value = "";
+  try {
+    await api(`/api/v1/stacks/${props.stack.id}/services/${encodeURIComponent(service)}/ignored-tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
+    info.value = `La version « ${tag} » sera de nouveau proposée (vérification relancée).`;
+    await load();
+  } catch (err) {
+    error.value = describeError(err);
+  }
+}
+
 async function savePolicy(service: string) {
   error.value = info.value = "";
   const d = draft[service];
@@ -134,7 +162,12 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <p v-if="c.check.detail.contentChanged" class="text-amber-700">Le tag « {{ c.check.detail.tag }} » pointe vers un nouveau contenu dans le registre.</p>
               <div v-if="c.check.detail.candidates.length">
                 <p class="text-amber-700">Versions plus récentes{{ c.check.detail.uncertain ? " (candidats incertains)" : "" }} :</p>
-                <ul class="mt-1 flex flex-wrap gap-2"><li v-for="t in c.check.detail.candidates" :key="t" class="rounded bg-amber-100 px-2 py-0.5 font-mono text-xs text-amber-900">{{ t }}</li></ul>
+                <ul class="mt-1 flex flex-wrap gap-2">
+                  <li v-for="t in c.check.detail.candidates" :key="t" class="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 font-mono text-xs text-amber-900">
+                    {{ t }}
+                    <button v-if="session.canOperate" class="rounded px-1 font-sans text-[11px] underline hover:bg-amber-200" :title="`Ne plus proposer ${t}`" @click="ignoreTag(c.service, t)">ignorer</button>
+                  </li>
+                </ul>
               </div>
               <p class="text-xs text-slate-500">Rien n'est déployé automatiquement : modifiez le tag dans le Compose (onglet Configuration, section Compose) puis déployez.</p>
             </template>
@@ -145,6 +178,18 @@ onBeforeUnmount(() => window.clearInterval(timer));
             </p>
           </template>
         </template>
+
+        <div v-if="c.ignoredTags.length" class="border-t border-slate-100 pt-3 text-xs text-slate-600">
+          <p class="font-medium">Versions ignorées (plus proposées)</p>
+          <ul class="mt-1 space-y-1">
+            <li v-for="i in c.ignoredTags" :key="i.tag" class="flex flex-wrap items-center gap-2">
+              <span class="rounded bg-slate-100 px-2 py-0.5 font-mono">{{ i.tag }}</span>
+              <span v-if="i.reason">{{ i.reason }}</span>
+              <span class="text-slate-400">par {{ i.createdBy }}, {{ ago(i.createdAt) }}</span>
+              <button v-if="session.canOperate" class="underline" @click="unignoreTag(c.service, i.tag)">Proposer de nouveau</button>
+            </li>
+          </ul>
+        </div>
 
         <form class="flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3" @submit.prevent="savePolicy(c.service)">
           <label class="text-xs">

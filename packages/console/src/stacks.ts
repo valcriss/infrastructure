@@ -36,6 +36,9 @@ export interface RevisionRow extends RevisionContent {
   author: string;
   message: string | null;
   createdAt: Date;
+  /** Révision écartée par l'utilisateur : conservée dans l'historique, plus proposée au déploiement. */
+  abandonedAt: Date | null;
+  abandonedReason: string | null;
 }
 
 /** Entrée d'une modification de variable : valeur simple ou objet détaillé. */
@@ -154,6 +157,8 @@ interface RevisionDbRow {
   author: string;
   message: string | null;
   created_at: Date;
+  abandoned_at: Date | null;
+  abandoned_reason: string | null;
 }
 
 const toRevision = (r: RevisionDbRow): RevisionRow => ({
@@ -167,6 +172,8 @@ const toRevision = (r: RevisionDbRow): RevisionRow => ({
   author: r.author,
   message: r.message,
   createdAt: r.created_at,
+  abandonedAt: r.abandoned_at,
+  abandonedReason: r.abandoned_reason,
 });
 
 export async function getRevision(
@@ -175,7 +182,7 @@ export async function getRevision(
   revision: number,
 ): Promise<RevisionRow | null> {
   const { rows } = await db.query<RevisionDbRow>(
-    `SELECT revision, compose, variables, files, sensitive_files, compose_sensitive, digest, author, message, created_at
+    `SELECT revision, compose, variables, files, sensitive_files, compose_sensitive, digest, author, message, created_at, abandoned_at, abandoned_reason
      FROM stack_revisions WHERE stack_id = $1 AND revision = $2`,
     [stackId, revision],
   );
@@ -336,4 +343,77 @@ export function maskVariables(variables: VariableMap): { name: string; value: st
   return Object.entries(variables)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, v]) => ({ name, value: v.sensitive ? null : v.value, sensitive: v.sensitive }));
+}
+
+export interface AbandonResult {
+  abandoned: number;
+  /** Révision créée pour repartir d'une base saine (absente si la révision abandonnée n'était pas la courante). */
+  revision: number | null;
+  /** Révision dont le contenu a été repris. */
+  restoredFrom: number | null;
+}
+
+/**
+ * Écarte une révision : elle reste dans l'historique mais n'est plus proposée au déploiement. Si c'était la révision
+ * courante, une nouvelle révision reprend le contenu de la révision en service (à défaut, de la dernière révision non
+ * abandonnée) pour que les modifications suivantes partent d'une base saine. Une révision en service ne peut pas être
+ * abandonnée. Si la nouvelle révision a exactement le contenu de la révision en service, elle est considérée comme
+ * en service : rien n'est « à déployer ».
+ */
+export async function abandonRevision(pool: Pool, stackId: string, revision: number, author: string, reason: string | null): Promise<AbandonResult> {
+  return withTx(pool, async (c) => {
+    const stack = await c.query<{ current_revision: number; deployed_revision: number | null }>(
+      "SELECT current_revision, deployed_revision FROM stacks WHERE id = $1 FOR UPDATE",
+      [stackId],
+    );
+    const st = stack.rows[0];
+    if (!st) throw new HttpError(404, "stack_not_found", "Stack introuvable");
+    const target = await getRevision(c, stackId, revision);
+    if (!target) throw new HttpError(404, "revision_not_found", "Révision introuvable");
+    if (target.abandonedAt) throw new HttpError(409, "revision_already_abandoned", `La révision ${revision} est déjà abandonnée.`);
+    if (st.deployed_revision === revision) {
+      throw new HttpError(409, "revision_deployed", `La révision ${revision} est en service : déployez d'abord une autre révision.`);
+    }
+    let base: RevisionRow | null = null;
+    if (st.current_revision === revision) {
+      if (st.deployed_revision !== null) base = await getRevision(c, stackId, st.deployed_revision);
+      else {
+        const prev = await c.query<{ revision: number }>(
+          "SELECT revision FROM stack_revisions WHERE stack_id = $1 AND revision < $2 AND abandoned_at IS NULL ORDER BY revision DESC LIMIT 1",
+          [stackId, revision],
+        );
+        if (prev.rows[0]) base = await getRevision(c, stackId, prev.rows[0].revision);
+      }
+      if (!base) throw new HttpError(409, "no_base_revision", "Aucune révision saine sur laquelle repartir : la révision courante ne peut pas être abandonnée.");
+    }
+    await c.query(
+      "UPDATE stack_revisions SET abandoned_at = now(), abandoned_by = $3, abandoned_reason = $4 WHERE stack_id = $1 AND revision = $2",
+      [stackId, revision, author, reason],
+    );
+    let created: number | null = null;
+    if (base && base.digest !== target.digest) {
+      created = revision + 1;
+      const msg = `Retour à la révision ${base.revision} (révision ${revision} abandonnée${reason ? " : " + reason : ""})`.slice(0, 200);
+      await c.query(
+        `INSERT INTO stack_revisions (stack_id, revision, compose, variables, files, sensitive_files, compose_sensitive, digest, author, message)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [stackId, created, base.compose, JSON.stringify(base.variables), JSON.stringify(base.files), JSON.stringify(base.sensitiveFiles), base.composeSensitive, base.digest, author, msg],
+      );
+      await c.query("UPDATE stacks SET current_revision = $2, updated_at = now() WHERE id = $1", [stackId, created]);
+      // Contenu identique à ce qui tourne : la nouvelle révision est la révision en service.
+      if (st.deployed_revision === base.revision) await c.query("UPDATE stacks SET deployed_revision = $2 WHERE id = $1", [stackId, created]);
+    }
+    await bumpConfigRevision(c);
+    await audit(c, author, "stack.revision.abandon", `${stackId}@${revision}`, "success");
+    return { abandoned: revision, revision: created, restoredFrom: base?.revision ?? null };
+  });
+}
+
+/** Annule l'abandon : la révision peut de nouveau être déployée. */
+export async function restoreRevision(pool: Pool, stackId: string, revision: number, author: string): Promise<void> {
+  const r = await getRevision(pool, stackId, revision);
+  if (!r) throw new HttpError(404, "revision_not_found", "Révision introuvable");
+  if (!r.abandonedAt) throw new HttpError(409, "revision_not_abandoned", `La révision ${revision} n'est pas abandonnée.`);
+  await pool.query("UPDATE stack_revisions SET abandoned_at = NULL, abandoned_by = NULL, abandoned_reason = NULL WHERE stack_id = $1 AND revision = $2", [stackId, revision]);
+  await audit(pool, author, "stack.revision.restore", `${stackId}@${revision}`, "success");
 }

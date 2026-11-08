@@ -173,6 +173,9 @@ export class OperationsService {
       revisionNumber = input.revision ?? s.current_revision;
       const rev = await getRevision(this.pool, input.stackId, revisionNumber);
       if (!rev) throw new HttpError(404, "revision_not_found", "Révision introuvable");
+      if (rev.abandonedAt) {
+        throw new HttpError(409, "revision_abandoned", `La révision ${rev.revision} a été abandonnée${rev.abandonedReason ? " (" + rev.abandonedReason + ")" : ""} : rétablissez-la avant de la déployer.`);
+      }
       const variables: Record<string, string> = {};
       const sensitive: string[] = [];
       for (const [name, v] of Object.entries(rev.variables)) {
