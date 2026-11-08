@@ -124,7 +124,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <VariablesTab v-else-if="section === 'variables'" :stack="stack" @changed="load" />
         <FilesTab v-else :stack="stack" @changed="load" />
       </KeepAlive>
-      <SecurityTab v-else-if="tab === 'security'" :stack="stack" />
+      <SecurityTab v-else-if="tab === 'security'" :stack="stack" @changed="load" />
       <MetricsTab v-else-if="tab === 'metrics'" :stack="stack" />
       <template v-else-if="tab === 'logs'">
         <TerminalPanel v-if="section === 'terminal'" :host-id="stack.hostId" :containers="stack.containers" />

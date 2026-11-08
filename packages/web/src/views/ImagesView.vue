@@ -198,7 +198,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
               </td>
             </tr>
             <tr v-if="open[key(i)]" class="border-t border-slate-100 bg-slate-50">
-              <td colspan="5" class="px-4 py-4"><VulnerabilityTable :image-id="i.imageId" :platform="i.platform" /></td>
+              <td colspan="5" class="px-4 py-4"><VulnerabilityTable :image-id="i.imageId" :platform="i.platform" :image-ref="i.refs[0]" /></td>
             </tr>
           </template>
         </tbody>

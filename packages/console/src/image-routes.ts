@@ -11,6 +11,7 @@ import type { RegistryClient } from "./registry.js";
 import { RegistryError } from "./registry.js";
 import type { RegistryStore } from "./registries.js";
 import type { ScanRow, ScanService } from "./scans.js";
+import { repoKey, summarizeVulns } from "./vuln-summary.js";
 import { MIN_SEVERITIES, getSecuritySettings, isReported, reportedCounts, setSecuritySettings, type SecuritySettings } from "./settings.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -22,6 +23,10 @@ export const ScanDetailQuery = z.object({
   platform: z.string().max(60).optional(),
   severity: z.enum(SEVERITIES).optional(),
   q: z.string().max(100).optional(),
+  /** Risques acceptés : exclus (défaut), inclus (avec leur justification) ou seuls. */
+  accepted: z.enum(["exclude", "include", "only"]).default("exclude"),
+  /** Avec ou sans correctif connu. */
+  fixable: z.enum(["yes", "no"]).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -181,10 +186,28 @@ export function registerImageRoutes(
     const sev = q.severity as Severity | undefined;
     const needle = q.q?.toLowerCase();
     const settings = await getSecuritySettings(pool);
-    const all = (await scans.vulnerabilities(scan.id)).filter(
-      (v) => isReported(v.severity, settings) && (!sev || v.severity === sev) && (!needle || v.id.toLowerCase().includes(needle) || v.pkg.toLowerCase().includes(needle)),
+    const acceptances = await scans.activeAcceptances();
+    const repo = repoKey(scan.imageRef);
+    const reported = (await scans.vulnerabilities(scan.id))
+      .filter((v) => isReported(v.severity, settings))
+      .map((v) => {
+        const a = acceptances.find((x) => x.cve.toUpperCase() === v.id.toUpperCase() && (x.repository === null || x.repository === repo));
+        return { ...v, accepted: a ? { id: a.id, justification: a.justification, expiresAt: a.expiresAt.toISOString(), createdBy: a.createdBy } : null };
+      });
+    const all = reported.filter(
+      (v) =>
+        (q.accepted === "include" || (q.accepted === "only" ? v.accepted !== null : v.accepted === null)) &&
+        (!sev || v.severity === sev) &&
+        (!q.fixable || (q.fixable === "yes") === Boolean(v.fixed)) &&
+        (!needle || v.id.toLowerCase().includes(needle) || v.pkg.toLowerCase().includes(needle)),
     );
-    return { scan: scanSummary(scan, settings), total: all.length, vulnerabilities: all.slice(q.offset, q.offset + q.limit) };
+    return {
+      scan: scanSummary(scan, settings),
+      total: all.length,
+      vulnerabilities: all.slice(q.offset, q.offset + q.limit),
+      // Synthèse sur tout ce qui est signalé et non accepté, quel que soit le filtre d'affichage.
+      summary: { ...summarizeVulns(reported.filter((v) => v.accepted === null)), accepted: reported.filter((v) => v.accepted !== null).length },
+    };
   });
 
   const requestScan = async (img: UsedImage, hostId: string | undefined, actor: string) => {

@@ -15,7 +15,7 @@ const ADMIN_ANY = [
   /^\/api\/v1\/terminal-recordings(\/|$)/,
 ];
 // Réservées aux administrateurs pour toute écriture (la lecture reste ouverte : état, seuils affichés).
-const ADMIN_WRITE = [/^\/api\/v1\/settings(\/|$)/, /^\/api\/v1\/backup(\/|$)/, /^\/api\/v1\/hosts\/:id$/, /^\/api\/v1\/hosts\/:id\/prune/];
+const ADMIN_WRITE = [/^\/api\/v1\/vulnerability-acceptances(\/|$)/, /^\/api\/v1\/settings(\/|$)/, /^\/api\/v1\/backup(\/|$)/, /^\/api\/v1\/hosts\/:id$/, /^\/api\/v1\/hosts\/:id\/prune/];
 // Actions sur son propre compte : tout utilisateur connecté.
 const SELF = [/^\/api\/v1\/admin\/credentials$/, /^\/api\/v1\/me(\/|$)/];
 

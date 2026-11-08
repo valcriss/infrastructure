@@ -19,6 +19,7 @@ import { RetainedBuildCache } from "./retained-cache.js";
 import { fitInventory } from "./inventory-fit.js";
 import { LogStreamer } from "./logs.js";
 import { TerminalManager } from "./terminal.js";
+import { Prober } from "./probe.js";
 import { MetricsCollector } from "./metrics.js";
 import { Pruner } from "./pruner.js";
 import { TrivyScanner } from "./scanner.js";
@@ -72,6 +73,7 @@ export class AgentClient {
   private readonly executor: Executor;
   private readonly logs: LogStreamer;
   private readonly terminals: TerminalManager;
+  private readonly prober: Prober;
   private readonly scanner: TrivyScanner;
   /** Écart entre l'horloge de la console et celle de l'hôte (mesuré à la connexion), pour l'échéance des demandes. */
   private clockOffsetMs = 0;
@@ -102,6 +104,7 @@ export class AgentClient {
         return { count: left.length, bytes: left.reduce((s, x) => s + x.sizeBytes, 0) };
       },
     });
+    this.prober = new Prober(config.dockerSocket, (project) => this.protection.isProtected(project));
     this.terminals = new TerminalManager(config.dockerSocket, (project) => this.protection.isProtected(project));
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
     this.scanner = new TrivyScanner({
@@ -235,7 +238,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "metrics", "scan.trivy"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy"],
           auth: auth,
         });
       });
@@ -314,6 +317,24 @@ export class AgentClient {
               break;
             case "terminal_close":
               this.terminals.close(msg.sessionId);
+              break;
+            case "tools_probe":
+              void this.prober
+                .tools(msg.probeId, msg.containerId, (m) => this.emit(m))
+                .catch((err: unknown) => this.emit({ type: "tools_result", probeId: msg.probeId, error: `Erreur de l'agent : ${(err as Error).message}`.slice(0, 300), tools: [], user: "", shell: false }));
+              break;
+            case "image_pull": {
+              const verdict = this.guard.check(msg.pullId, msg.expiresAt);
+              if (verdict === "replayed") break;
+              if (verdict === "expired") {
+                this.emit({ type: "image_pull_result", pullId: msg.pullId, status: "failed", error: "Demande expirée avant exécution." });
+                break;
+              }
+              void this.prober.pull(msg, (m) => this.emit(m));
+              break;
+            }
+            case "image_remove":
+              void this.prober.remove(msg.imageId);
               break;
             case "run": {
               const verdict = this.guard.check(msg.operationId, msg.expiresAt);

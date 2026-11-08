@@ -9,7 +9,7 @@ const pool = createPool(config.databaseUrl);
 
 await migrate(pool, (m) => console.log(m));
 const masterKey = await loadOrCreateMasterKey(config.dataDir);
-const { app, setup, ops, backup, metrics, scans, pruning, watcher } = await buildApp({ config, pool, logger: true, masterKey });
+const { app, setup, ops, backup, metrics, scans, candidates, pruning, watcher } = await buildApp({ config, pool, logger: true, masterKey });
 // Une opération active avant le redémarrage a un résultat inconnu : jamais rejouée.
 await ops.markInterruptedUnknown();
 await ensureBootstrapToken(pool, config.sharedDir);
@@ -23,6 +23,7 @@ metrics.start();
 await scans.markInterrupted();
 await pruning.markInterrupted();
 scans.start();
+candidates.start();
 watcher.start();
 
 if (setup.token) {

@@ -3,6 +3,7 @@ import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { loadUsedImages, type ImageUser } from "./images.js";
 import { getSecuritySettings } from "./settings.js";
+import { repoKey } from "./vuln-summary.js";
 
 /** Un seul scan à la fois, tous hôtes confondus : la file est strictement séquentielle (et l'usage disque borné). */
 const MAX_RUNNING_TOTAL = 1;
@@ -37,9 +38,24 @@ export interface ScanRow {
   dbUpdatedAt: Date | null;
   dbDownloadedAt: Date | null;
   os: { family: string; name: string; eosl: boolean | null } | null;
+  /** Compteurs sans les risques acceptés (voir `accepted`). */
   counts: SeverityCounts | null;
   total: number | null;
   truncated: boolean;
+  /** Vulnérabilités retirées des compteurs car acceptées (justification et expiration) ; null s'il n'y en a aucune. */
+  accepted: SeverityCounts | null;
+}
+
+/** Risque accepté : ne compte plus tant qu'il n'est pas expiré ni révoqué. */
+export interface Acceptance {
+  id: string;
+  cve: string;
+  /** Dépôt concerné (`docker.io/library/ghost`) ; null = toutes les images. */
+  repository: string | null;
+  justification: string;
+  expiresAt: Date;
+  createdBy: string;
+  createdAt: Date;
 }
 
 interface DbRow {
@@ -92,6 +108,7 @@ const toRow = (r: DbRow): ScanRow => ({
   counts: r.counts,
   total: r.total,
   truncated: r.truncated,
+  accepted: null,
 });
 
 export interface ScanRequest {
@@ -101,6 +118,8 @@ export interface ScanRequest {
   imageRef: string;
   trigger: "manual" | "scheduled";
   requestedBy: string;
+  /** Image téléchargée pour comparaison : absente de l'inventaire, mais à scanner quand même. */
+  candidate?: boolean;
 }
 
 /**
@@ -138,7 +157,57 @@ export class ScanService {
 
   async get(id: string): Promise<ScanRow | null> {
     const { rows } = await this.pool.query<DbRow>(`SELECT ${COLUMNS} FROM image_scans WHERE id = $1`, [id]);
-    return rows[0] ? toRow(rows[0]) : null;
+    return rows[0] ? ((await this.adjust([toRow(rows[0])]))[0] ?? null) : null;
+  }
+
+  /** Risques acceptés encore valables (ni expirés ni révoqués). */
+  async activeAcceptances(): Promise<Acceptance[]> {
+    const { rows } = await this.pool.query<{ id: string; cve: string; repository: string | null; justification: string; expires_at: Date; created_by: string; created_at: Date }>(
+      "SELECT id, cve, repository, justification, expires_at, created_by, created_at FROM vulnerability_acceptances WHERE revoked_at IS NULL AND expires_at > now() ORDER BY created_at DESC",
+    );
+    return rows.map((r) => ({ id: r.id, cve: r.cve, repository: r.repository, justification: r.justification, expiresAt: r.expires_at, createdBy: r.created_by, createdAt: r.created_at }));
+  }
+
+  /**
+   * Retire des compteurs les vulnérabilités acceptées (une seule requête pour tous les scans) : tous les écrans,
+   * alertes comprises, comptent ainsi la même chose. Le détail complet du scan reste stocké.
+   */
+  private async adjust(rows: ScanRow[]): Promise<ScanRow[]> {
+    const candidates = rows.filter((r) => r.status === "succeeded" && r.counts);
+    if (candidates.length === 0) return rows;
+    const acceptances = await this.activeAcceptances();
+    if (acceptances.length === 0) return rows;
+    const found = await this.pool.query<{ id: string; sev: string; cve: string; n: number }>(
+      `SELECT s.id, lower(v->>'severity') AS sev, upper(v->>'id') AS cve, count(*)::int AS n
+         FROM image_scans s,
+              jsonb_array_elements(CASE WHEN jsonb_typeof(s.vulnerabilities) = 'array' THEN s.vulnerabilities ELSE '[]'::jsonb END) v
+        WHERE s.id = ANY($1::uuid[]) AND upper(v->>'id') = ANY($2::text[])
+        GROUP BY 1, 2, 3`,
+      [candidates.map((r) => r.id), [...new Set(acceptances.map((a) => a.cve.toUpperCase()))]],
+    );
+    const byScan = new Map<string, { sev: string; cve: string; n: number }[]>();
+    for (const f of found.rows) byScan.set(f.id, [...(byScan.get(f.id) ?? []), f]);
+    return rows.map((r) => {
+      const hits = byScan.get(r.id);
+      if (!hits || !r.counts) return r;
+      const repo = repoKey(r.imageRef);
+      const accepted: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+      for (const h of hits) {
+        if (!acceptances.some((a) => a.cve.toUpperCase() === h.cve && (a.repository === null || a.repository === repo))) continue;
+        const key = (["critical", "high", "medium", "low"] as const).find((k) => k === h.sev) ?? "unknown";
+        accepted[key] += h.n;
+      }
+      const removed = accepted.critical + accepted.high + accepted.medium + accepted.low + accepted.unknown;
+      if (removed === 0) return r;
+      const counts: SeverityCounts = {
+        critical: Math.max(0, r.counts.critical - accepted.critical),
+        high: Math.max(0, r.counts.high - accepted.high),
+        medium: Math.max(0, r.counts.medium - accepted.medium),
+        low: Math.max(0, r.counts.low - accepted.low),
+        unknown: Math.max(0, r.counts.unknown - accepted.unknown),
+      };
+      return { ...r, counts, total: r.total === null ? null : Math.max(0, r.total - removed), accepted };
+    });
   }
 
   /** Scan le plus récent d'un contenu d'image (actif, sinon terminé). */
@@ -147,7 +216,7 @@ export class ScanService {
       `SELECT ${COLUMNS} FROM image_scans WHERE image_id = $1 AND platform = $2 ORDER BY created_at DESC LIMIT 1`,
       [imageId, platform],
     );
-    return rows[0] ? toRow(rows[0]) : null;
+    return rows[0] ? ((await this.adjust([toRow(rows[0])]))[0] ?? null) : null;
   }
 
   /** Dernière tentative et dernier succès de chaque contenu d'image, en deux requêtes. */
@@ -156,8 +225,11 @@ export class ScanService {
       this.pool.query<DbRow>(`SELECT DISTINCT ON (image_id, platform) ${COLUMNS} FROM image_scans ORDER BY image_id, platform, created_at DESC`),
       this.pool.query<DbRow>(`SELECT DISTINCT ON (image_id, platform) ${COLUMNS} FROM image_scans WHERE status = 'succeeded' ORDER BY image_id, platform, finished_at DESC`),
     ]);
-    const ok = new Map(successes.rows.map((r) => [`${r.image_id}|${r.platform}`, toRow(r)]));
-    return new Map(attempts.rows.map((r) => [`${r.image_id}|${r.platform}`, { attempt: toRow(r), ok: ok.get(`${r.image_id}|${r.platform}`) ?? null }]));
+    // Un seul ajustement pour toutes les lignes (tentatives et derniers succès), puis rattachement par identifiant.
+    const all = await this.adjust([...attempts.rows.map(toRow), ...successes.rows.map(toRow)]);
+    const adjusted = new Map(all.map((r) => [`${r.id}`, r]));
+    const okRows = new Map(successes.rows.map((r) => [`${r.image_id}|${r.platform}`, adjusted.get(r.id) ?? toRow(r)]));
+    return new Map(attempts.rows.map((r) => [`${r.image_id}|${r.platform}`, { attempt: adjusted.get(r.id) ?? toRow(r), ok: okRows.get(`${r.image_id}|${r.platform}`) ?? null }]));
   }
 
   async vulnerabilities(scanId: string): Promise<Vulnerability[]> {
@@ -175,7 +247,7 @@ export class ScanService {
        ORDER BY finished_at DESC LIMIT 1`,
       [imageId, platform],
     );
-    return rows[0] ? toRow(rows[0]) : null;
+    return rows[0] ? ((await this.adjust([toRow(rows[0])]))[0] ?? null) : null;
   }
 
   async request(input: ScanRequest): Promise<{ scan: ScanRow; created: boolean }> {
@@ -200,9 +272,9 @@ export class ScanService {
     try {
       row = (
         await this.pool.query<DbRow>(
-          `INSERT INTO image_scans (image_id, platform, host_id, image_ref, status, trigger, requested_by)
-           VALUES ($1, $2, $3, $4, 'pending', $5, $6) RETURNING ${COLUMNS}`,
-          [input.imageId, input.platform, input.hostId, input.imageRef.slice(0, 300), input.trigger, input.requestedBy],
+          `INSERT INTO image_scans (image_id, platform, host_id, image_ref, status, trigger, requested_by, candidate)
+           VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7) RETURNING ${COLUMNS}`,
+          [input.imageId, input.platform, input.hostId, input.imageRef.slice(0, 300), input.trigger, input.requestedBy, input.candidate ?? false],
         )
       ).rows[0];
     } catch (err) {
@@ -226,13 +298,13 @@ export class ScanService {
   /** Démarre le prochain scan en attente d'un hôte, s'il n'en exécute pas déjà un. */
   async pump(hostId: string): Promise<boolean> {
     if (!this.transport.isOnline(hostId)) return false;
-    let next: { id: string; image_id: string; image_ref: string } | undefined;
+    let next: { id: string; image_id: string; image_ref: string; candidate: boolean } | undefined;
     // Les scans en attente dont l'image n'existe plus sur l'hôte (stack mise à jour entre-temps) sont abandonnés :
     // on passe aussitôt au suivant au lieu de bloquer la file ou de scanner une image qui n'est plus utilisée.
     for (let attempt = 0; attempt < 200; attempt++) {
       next = await this.startNext(hostId);
       if (!next) return false;
-      if (!(await this.imageGone(hostId, next.image_id))) break;
+      if (next.candidate || !(await this.imageGone(hostId, next.image_id))) break;
       await this.pool.query(
         "UPDATE image_scans SET status = 'failed', finished_at = now(), error = 'Image retirée de l''hôte (application mise à jour ?) : scan abandonné.' WHERE id = $1",
         [next.id],
@@ -251,18 +323,18 @@ export class ScanService {
   }
 
   /** Passe le plus ancien scan en attente de l'hôte à « en cours », sous verrou (un seul à la fois, hôtes confondus). */
-  private async startNext(hostId: string): Promise<{ id: string; image_id: string; image_ref: string } | undefined> {
+  private async startNext(hostId: string): Promise<{ id: string; image_id: string; image_ref: string; candidate: boolean } | undefined> {
     // Sans verrou, deux appels simultanés voient tous deux « aucun scan en cours » et en démarrent chacun un.
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock($1)", [PUMP_LOCK]);
-      const { rows } = await client.query<{ id: string; image_id: string; image_ref: string }>(
+      const { rows } = await client.query<{ id: string; image_id: string; image_ref: string; candidate: boolean }>(
         `UPDATE image_scans SET status = 'running', started_at = now()
           WHERE id = (SELECT id FROM image_scans WHERE host_id = $1 AND status = 'pending' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
             AND NOT EXISTS (SELECT 1 FROM image_scans WHERE host_id = $1 AND status = 'running')
             AND (SELECT count(*) FROM image_scans WHERE status = 'running') < $2
-          RETURNING id, image_id, image_ref`,
+          RETURNING id, image_id, image_ref, candidate`,
         [hostId, MAX_RUNNING_TOTAL],
       );
       await client.query("COMMIT");

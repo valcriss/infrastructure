@@ -202,7 +202,7 @@ async function scan(imageId: string, platform: string, ref: string) {
                   </button>
                 </div>
               </div>
-              <div v-if="open[i.imageId]" class="mt-3"><VulnerabilityTable :image-id="i.imageId" :platform="i.platform" /></div>
+              <div v-if="open[i.imageId]" class="mt-3"><VulnerabilityTable :image-id="i.imageId" :platform="i.platform" :image-ref="i.ref" /></div>
             </li>
           </ul>
         </PanelCard>

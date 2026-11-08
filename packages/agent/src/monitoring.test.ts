@@ -87,3 +87,12 @@ describe("mapLimit", () => {
     expect(peak).toBeLessThanOrEqual(2);
   });
 });
+
+describe("parseProbe", () => {
+  it("lit les outils et le gestionnaire de paquets ; sans ligne finale, pas de shell utilisable", async () => {
+    const { parseProbe } = await import("./probe.js");
+    expect(parseProbe("tool:wget\ntool:busybox\npm:apk\nprobe-done\n")).toEqual({ tools: ["wget", "busybox"], packageManager: "apk", shell: true });
+    expect(parseProbe("tool:node\nprobe-done")).toEqual({ tools: ["node"], shell: true });
+    expect(parseProbe("OCI runtime exec failed: exec: \"sh\": executable file not found")).toEqual({ tools: [], shell: false });
+  });
+});

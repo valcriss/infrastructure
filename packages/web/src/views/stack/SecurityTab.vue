@@ -1,10 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ago, api, describeError, fmtDate, shortId, type StackDetail, type StackImageComponent, type UpdatePolicyName } from "../../api";
+import CandidateCompare from "../../components/CandidateCompare.vue";
+import CustomImageDialog from "../../components/CustomImageDialog.vue";
+import { useSession } from "../../stores/session";
 import ScanBadge from "../../components/ScanBadge.vue";
 import VulnerabilityTable from "../../components/VulnerabilityTable.vue";
 
 const props = defineProps<{ stack: StackDetail }>();
+const emit = defineEmits<{ changed: [] }>();
+const session = useSession();
+const imageTarget = ref<string | null>(null);
+const imageContainer = computed(() => props.stack.containers.find((c) => c.composeService === imageTarget.value && c.state === "running") ?? null);
+function onImageSaved(revision: number) {
+  imageTarget.value = null;
+  info.value = `Révision ${revision} enregistrée avec l'image personnalisée. Elle n'est pas déployée : utilisez « Déployer » (vue d'ensemble) pour construire et appliquer l'image.`;
+  emit("changed");
+}
 
 const components = ref<StackImageComponent[]>([]);
 const checking = ref(false);
@@ -96,7 +108,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <button class="underline" :aria-expanded="!!open[c.service]" @click="open[c.service] = !open[c.service]">
           {{ open[c.service] ? "Masquer" : "Voir" }} les vulnérabilités
         </button>
-        <div v-if="open[c.service]" class="mt-3"><VulnerabilityTable :image-id="c.image.imageId" :platform="c.image.platform" /></div>
+        <div v-if="open[c.service]" class="mt-3"><VulnerabilityTable :image-id="c.image.imageId" :platform="c.image.platform" :image-ref="c.ref" /></div>
       </div>
 
       <section class="space-y-2 border-t border-slate-100 pt-3 text-sm" aria-label="Versions disponibles">
@@ -143,7 +155,22 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <span class="text-xs text-slate-400">{{ policies.find((p) => p.key === draft[c.service]?.policy)?.help }}</span>
         </form>
       </section>
+      <CandidateCompare :stack-id="stack.id" :service="c.service" />
+      <div v-if="session.canOperate" class="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3 text-sm">
+        <button class="rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-100 disabled:opacity-50" :disabled="!stack.containers.some((x) => x.composeService === c.service && x.state === 'running')" @click="imageTarget = c.service">Créer une image personnalisée…</button>
+        <span class="text-xs text-slate-500">Ajoute des outils ou applique les mises à jour du système (corrige les CVE du système qui ont un correctif).</span>
+      </div>
       <p class="text-[11px] text-slate-400">Dernière tentative : {{ c.image.scan.lastAttempt ? fmtDate(c.image.scan.lastAttempt.finishedAt ?? c.image.scan.lastAttempt.createdAt) : "aucune" }}</p>
     </article>
+    <CustomImageDialog
+      v-if="imageTarget && imageContainer"
+      :stack-id="stack.id"
+      :host-id="stack.hostId"
+      :revision="stack.currentRevision"
+      :service="imageTarget"
+      :container="imageContainer"
+      @close="imageTarget = null"
+      @saved="onImageSaved"
+    />
   </div>
 </template>

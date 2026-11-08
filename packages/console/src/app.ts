@@ -53,6 +53,11 @@ import { registerTokenRoutes } from "./token-routes.js";
 import { consumeRecoveryCode, consumeTotp } from "./mfa.js";
 import { registerUserRoutes, sessionInfo } from "./user-routes.js";
 import { TerminalService, registerTerminalRoutes } from "./terminal-routes.js";
+import { ToolProbeService, registerToolRoutes } from "./tools-routes.js";
+import { registerAcceptanceRoutes } from "./acceptance-routes.js";
+import { registerCustomImageRoutes } from "./custom-image-routes.js";
+import { CandidateScans } from "./candidates.js";
+import { registerCandidateRoutes } from "./candidate-routes.js";
 
 export interface AppDeps {
   config: Config;
@@ -77,6 +82,7 @@ export interface BuiltApp {
   backup: BackupService;
   metrics: MetricsStore;
   scans: ScanService;
+  candidates: CandidateScans;
   pruning: PruneService;
   watcher: ImageWatcher;
   /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
@@ -412,8 +418,10 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile) });
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
+  const candidates = new CandidateScans(pool, scans, gateway);
   const logStreams = new LogStreams(gateway);
   const terminals = new TerminalService(pool, gateway);
+  const toolProbes = new ToolProbeService(gateway);
   app.addHook("onClose", async () => terminals.closeAll());
   const pruning = new PruneService(pool, gateway);
   gateway.setHandlers({
@@ -422,12 +430,15 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     onDisconnect: async (hostId) => {
       logStreams.onHostDisconnect(hostId);
       terminals.onHostDisconnect(hostId);
+      toolProbes.onHostDisconnect(hostId);
       await ops.onDisconnect(hostId);
       await scans.onDisconnect(hostId);
       await pruning.onDisconnect(hostId);
     },
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
+    onToolsResult: (hostId, msg) => toolProbes.onResult(hostId, msg),
+    onImagePullResult: (hostId, msg) => void candidates.onPullResult(hostId, msg).catch((err: unknown) => app.log.error({ err }, "résultat de téléchargement d'image")),
     onTerminalData: (hostId, sessionId, data) => terminals.onData(hostId, sessionId, data),
     onTerminalEnd: (hostId, sessionId, reason, exitCode) => terminals.onEnd(hostId, sessionId, reason, exitCode),
     onMetrics: async (hostId, samples, host) => {
@@ -455,6 +466,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     backup.close();
     metrics.close();
     scans.close();
+    candidates.close();
     watcher.close();
   });
   const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, isOnline: (id) => gateway.isOnline(id) });
@@ -465,6 +477,10 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
   registerUserRoutes(app, { pool, config, box, auth, limiter });
+  registerToolRoutes(app, { pool, auth, service: toolProbes });
+  registerAcceptanceRoutes(app, { pool, auth });
+  registerCustomImageRoutes(app, { pool, auth });
+  registerCandidateRoutes(app, { pool, auth, candidates, scans, watcher, registryClient });
   registerTerminalRoutes(app, { pool, auth, service: terminals, hasFactor: async (id) => ((await pool.query("SELECT 1 FROM passkeys WHERE user_id = $1", [id])).rowCount ?? 0) > 0 });
   registerBackupRoutes(app, { backup, session: auth, apiAuth });
 
@@ -482,5 +498,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, scans, pruning, watcher, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, candidates, pruning, watcher, routes };
 }

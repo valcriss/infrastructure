@@ -185,6 +185,32 @@ export const TerminalEndSchema = z.object({
   exitCode: z.number().int().optional(),
 });
 
+// --- Sonde d'outils d'un conteneur, téléchargement d'images candidates ---------------------------------
+
+/** Résultat de la sonde : quels outils (curl, wget, node…) existent dans le conteneur, pour proposer un healthcheck réalisable. */
+export const ToolsResultSchema = z.object({
+  type: z.literal("tools_result"),
+  probeId: z.uuid(),
+  /** Présent seulement en cas d'échec (conteneur introuvable, protégé, sans shell…). */
+  error: z.string().max(300).optional(),
+  tools: z.array(z.string().max(40)).max(40).default([]),
+  /** Gestionnaire de paquets trouvé (apk, apt-get, dnf, yum…), pour un Dockerfile adapté. */
+  packageManager: z.string().max(20).optional(),
+  /** Utilisateur du conteneur (`Config.User`) ; vide = root. */
+  user: z.string().max(100).default(""),
+  shell: z.boolean().default(false),
+});
+
+/** Téléchargement d'une image (pour comparer ses vulnérabilités avant de l'adopter). */
+export const ImagePullResultSchema = z.object({
+  type: z.literal("image_pull_result"),
+  pullId: z.uuid(),
+  status: z.enum(["succeeded", "failed"]),
+  error: z.string().max(500).optional(),
+  imageId: z.string().max(100).optional(),
+  platform: z.string().max(60).optional(),
+});
+
 /** Échantillon de métriques d'un conteneur en cours d'exécution. */
 export const MetricSampleSchema = z.object({
   containerId: z.string().min(1).max(80),
@@ -352,6 +378,8 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   LogEndSchema,
   TerminalDataSchema,
   TerminalEndSchema,
+  ToolsResultSchema,
+  ImagePullResultSchema,
 ]);
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
 
@@ -459,6 +487,25 @@ export const TerminalResizeSchema = z.object({ type: z.literal("terminal_resize"
 export const TerminalCloseSchema = z.object({ type: z.literal("terminal_close"), sessionId: z.uuid() });
 export type TerminalOpenMessage = z.infer<typeof TerminalOpenSchema>;
 
+/** Quels outils existent dans ce conteneur ? (lecture seule : simples tests de présence, rien n'est modifié) */
+export const ToolsProbeSchema = z.object({
+  type: z.literal("tools_probe"),
+  probeId: z.uuid(),
+  containerId: z.string().regex(/^[0-9a-f]{12,64}$/),
+});
+
+/** Télécharge une image du registre sur l'hôte (`docker pull`) ; l'agent répond par `image_pull_result`. */
+export const ImagePullSchema = z.object({
+  type: z.literal("image_pull"),
+  pullId: z.uuid(),
+  expiresAt: z.iso.datetime().optional(),
+  ref: z.string().min(1).max(300).regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/),
+});
+export type ImagePullMessage = z.infer<typeof ImagePullSchema>;
+
+/** Supprime une image téléchargée pour comparaison (sans forcer : refusée si un conteneur l'utilise). */
+export const ImageRemoveSchema = z.object({ type: z.literal("image_remove"), imageId: z.string().min(8).max(100).regex(/^(sha256:)?[0-9a-f]{12,64}$/) });
+
 /** Demande de scan d'une image locale (par identifiant) avec Trivy. */
 export const ScanSchema = z.object({
   type: z.literal("scan"),
@@ -484,6 +531,9 @@ export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   TerminalInputSchema,
   TerminalResizeSchema,
   TerminalCloseSchema,
+  ToolsProbeSchema,
+  ImagePullSchema,
+  ImageRemoveSchema,
 ]);
 export type ConsoleMessage = z.infer<typeof ConsoleMessageSchema>;
 

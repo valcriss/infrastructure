@@ -101,3 +101,20 @@ describe("protocole de supervision", () => {
     expect(ConsoleMessageSchema.safeParse({ ...welcome, metricsIntervalSec: DEFAULT_METRICS_INTERVAL_SEC }).success).toBe(true);
   });
 });
+
+describe("validateCompose : images personnalisées", () => {
+  it("accepte le build généré par la console (sous-dossier de build/ + image locale)", () => {
+    expect(validateCompose("services:\n  web:\n    build: ./build/web\n    image: app-web-custom:local\n").ok).toBe(true);
+    expect(validateCompose("services:\n  web:\n    build:\n      context: ./build/web\n      dockerfile: Dockerfile\n      args:\n        A: b\n    image: x:local\n").ok).toBe(true);
+  });
+
+  it("refuse les contextes hors de build/, les options risquées et l'absence de nom d'image", () => {
+    for (const build of ["build: ..", "build: /", "build: ./build/../..", "build: https://github.com/x/y.git", "build:\n      context: ./build/web\n      secrets: [s]", "build:\n      dockerfile: Dockerfile"]) {
+      const r = validateCompose(`services:\n  web:\n    ${build}\n    image: x:local\n`);
+      expect(r.ok, build).toBe(false);
+    }
+    const noImage = validateCompose("services:\n  web:\n    build: ./build/web\n");
+    expect(noImage.ok).toBe(false);
+    if (!noImage.ok) expect(noImage.issues[0]?.message).toContain("image");
+  });
+});

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { api, describeError, fmtDate, type Container, type StackDetail } from "../../api";
+import CustomImageDialog from "../../components/CustomImageDialog.vue";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
 import { useSession } from "../../stores/session";
@@ -15,6 +16,7 @@ const operationId = ref("");
 const error = ref("");
 const busy = ref(false);
 const hcTarget = ref<Container | null>(null);
+const imageTarget = ref<Container | null>(null);
 const hcInfo = ref("");
 const probeOpen = ref<string | null>(null);
 
@@ -31,6 +33,12 @@ Cliquer pour le détail`;
 function onHcSaved(revision: number) {
   hcTarget.value = null;
   hcInfo.value = `Révision ${revision} enregistrée avec le healthcheck. Elle n'est pas déployée : utilisez « Déployer » pour l'appliquer.`;
+  emit("changed");
+}
+
+function onImageSaved(revision: number) {
+  imageTarget.value = null;
+  hcInfo.value = `Révision ${revision} enregistrée avec l'image personnalisée. Elle n'est pas déployée : utilisez « Déployer » pour construire et appliquer l'image.`;
   emit("changed");
 }
 
@@ -83,11 +91,23 @@ async function run(action: "deploy" | "stop" | "start") {
     <HealthcheckDialog
       v-if="hcTarget && hcTarget.composeService"
       :stack-id="stack.id"
+      :host-id="stack.hostId"
       :revision="stack.currentRevision"
       :service="hcTarget.composeService"
       :container="hcTarget"
       @close="hcTarget = null"
       @saved="onHcSaved"
+      @custom-image="imageTarget = hcTarget; hcTarget = null"
+    />
+    <CustomImageDialog
+      v-if="imageTarget && imageTarget.composeService"
+      :stack-id="stack.id"
+      :host-id="stack.hostId"
+      :revision="stack.currentRevision"
+      :service="imageTarget.composeService"
+      :container="imageTarget"
+      @close="imageTarget = null"
+      @saved="onImageSaved"
     />
 
     <OperationLog v-if="operationId" :operation-id="operationId" @finished="emit('changed')" />

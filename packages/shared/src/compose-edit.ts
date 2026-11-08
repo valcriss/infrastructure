@@ -200,3 +200,43 @@ export function editServiceHealthcheck(text: string, service: string, spec: Heal
     lineWidth: 0,
   });
 }
+
+export interface BuildSpec {
+  /** Dossier de construction relatif au Compose (`./build/ghost`). */
+  context: string;
+  /** Nom local de l'image construite. */
+  image: string;
+}
+
+/**
+ * Remplace l'image d'un service par une image construite localement (`build:` + `image:`), en conservant le reste du
+ * document. Renvoie le Compose modifié et l'image d'origine (base du Dockerfile).
+ * Refuse un service déjà construit, une image paramétrée (variables) et les structures ambiguës (alias, `<<`).
+ */
+export function editServiceBuild(text: string, service: string, spec: BuildSpec): { compose: string; baseImage: string } {
+  const doc = parseDocument(text, { uniqueKeys: true });
+  if (doc.errors.length > 0) throw new ComposeEditError("unsupported_structure", "Le Compose actuel n'est pas un YAML valide.");
+  const services = doc.get("services", true);
+  if (!isMap(services)) throw new ComposeEditError("unsupported_structure", "Section « services » introuvable.");
+  const svc = services.get(service, true);
+  if (!isMap(svc)) throw new ComposeEditError("service_not_found", `Service « ${service} » introuvable.`);
+  if (svc.has("<<")) throw new ComposeEditError("unsupported_structure", "Le service utilise une clé de fusion « << » : modification refusée.");
+  if (svc.has("build")) throw new ComposeEditError("unsupported_structure", "Ce service est déjà construit localement (« build »). Modifiez son Dockerfile.");
+  const image = svc.get("image", true);
+  if (isAlias(image) || !isScalar(image) || typeof image.value !== "string") {
+    throw new ComposeEditError("unsupported_structure", "Le service n'a pas d'« image » simple à partir de laquelle construire.");
+  }
+  const baseImage = image.value;
+  svc.set("build", spec.context);
+  svc.set("image", spec.image);
+  const style = detectStyle(text);
+  return {
+    baseImage,
+    compose: doc.toString({
+      indent: style.indent,
+      indentSeq: style.indentSeq,
+      ...(style.singleQuote !== null ? { singleQuote: style.singleQuote } : {}),
+      lineWidth: 0,
+    }),
+  };
+}

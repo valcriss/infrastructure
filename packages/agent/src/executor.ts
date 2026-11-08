@@ -161,9 +161,16 @@ export class Executor {
 
     // 2. Matérialisation dans le dossier stable, puis application.
     await syncStackDir(dir, content);
+    // Image personnalisée (« build: » dans le Compose) : construite sur l'hôte à chaque déploiement, avec le cache de couches.
+    const hasBuild = /^\s*build\s*:/m.test(revision.compose);
     if (options.pullImages) {
       log("Téléchargement des images…");
-      await this.docker([...this.composeArgs(project, dir), "pull"], onOutput);
+      // Les images construites localement n'existent pas dans un registre : on ne tente pas de les télécharger.
+      await this.docker([...this.composeArgs(project, dir), "pull", ...(hasBuild ? ["--ignore-buildable"] : [])], onOutput);
+    }
+    if (hasBuild) {
+      log("Construction des images personnalisées…");
+      await this.docker([...this.composeArgs(project, dir), "build", ...(options.pullImages ? ["--pull"] : [])], onOutput);
     }
     if (adopting) {
       // Information seulement : montre ce que la reprise va recréer. Un échec n'est pas bloquant.

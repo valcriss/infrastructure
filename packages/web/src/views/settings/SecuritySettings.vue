@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { api, describeError, type MinSeverity, type RegistryEntry, type SecuritySettings } from "../../api";
+import AcceptedRisks from "../../components/AcceptedRisks.vue";
 import PanelCard from "../../components/PanelCard.vue";
 
 // Réglages de l'application pour la sécurité des images : périodicité des scans et registres.
@@ -109,6 +110,8 @@ onMounted(() => void load());
           <button class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Enregistrer</button>
         </form>
       </PanelCard>
+
+      <AcceptedRisks />
 
       <PanelCard title="Registres d'images" icon="server">
         <p class="text-sm text-slate-600">

@@ -15,7 +15,7 @@ Contrat complet : [docs/openapi.json](docs/openapi.json), généré depuis le co
 Authentification : jeton API (`Authorization: Bearer cdt_…`) ou cookie de session (`POST /api/v1/session`). Les jetons se gèrent depuis une session (`POST /api/v1/api-tokens`, `GET`, `DELETE /{id}`) : ils sont affichés une seule fois, stockés par empreinte, révocables, avec expiration facultative et une portée `read` (GET uniquement) ou `write`. Un jeton ne peut ni gérer les jetons ni modifier le compte administrateur. Toute modification de stack exige `expectedRevision` (409 en cas de conflit).
 
 ```bash
-# Créer une stack (révision 1) : le Compose doit référencer une image, pas de « build »
+# Créer une stack (révision 1) : le Compose doit référencer une image (« build » seulement pour une image personnalisée générée par la console)
 POST /api/v1/stacks                        {"name","hostId","compose","variables":{"PORT":"8080","PWD":{"value":"…","sensitive":true}},"adopt":false}
 PUT  /api/v1/stacks/{id}/compose           {"expectedRevision":1,"compose":"…"}
 PATCH /api/v1/stacks/{id}/variables        {"expectedRevision":2,"set":{"IMAGE_TAG":"1.4.2"},"unset":["OLD"]}
@@ -105,6 +105,11 @@ Page « Images » (`GET /api/v1/images`) et onglet « Sécurité et versions » 
 - **Planification** (`GET/PUT /api/v1/settings/security`) : re-scan des résultats plus anciens que l'intervalle (24 h par défaut, 0 = désactivé), échecs retentés après une heure au plus. Les images hors stack gérée ne sont scannées qu'à la demande. **Un résultat de scan ne bloque jamais un déploiement et rien n'est redéployé automatiquement.**
 - **Suivi des images** : pour chaque service, la console compare le contenu déployé avec celui du registre (même tag, contenu différent) et cherche de nouveaux tags selon une politique (`même tag`, `patch`, `mineure`, `majeure` ou expression régulière validée), enregistrée dans la sauvegarde Git. Les tags non interprétables donnent des candidats signalés comme incertains. Le contenu est comparé par digest, puis par couches (`diff_ids`) pour ne pas signaler de faux changement quand le moteur d'images (containerd) ou un push a seulement réempaqueté l'image. Une erreur du registre conserve la dernière observation, datée.
 - **Registres** : Docker Hub, GHCR et registres privés (HTTP Basic ou jeton Bearer). Les identifiants sont chiffrés (AES-256-GCM, clé maître locale), jamais renvoyés par l'API ni sauvegardés dans Git, et uniquement envoyés au registre ou à son serveur d'authentification légitime. Le HTTP en clair exige l'option « HTTP non sécurisé » du registre ; pour une autorité interne, monter le certificat et renseigner `REGISTRY_CA_FILE`.
+- **Corrigeables ou non** : le détail d'une image sépare les vulnérabilités **avec correctif** de celles **sans correctif connu**, et liste les paquets à mettre à jour (version corrigée, gravité maximale). Filtre « avec / sans correctif ».
+- **Risques acceptés** (administrateurs) : une vulnérabilité peut être acceptée avec une **justification obligatoire** et une **expiration** (7 jours à 1 an), pour une image (dépôt) ou toutes. Elle ne compte plus (images, alertes, tableaux de bord) tant que l'acceptation est valable ; le scan reste complet, l'acceptation est tracée dans l'audit et se révoque à tout moment (`/api/v1/vulnerability-acceptances`).
+- **Comparer une autre version** : depuis l'onglet « Sécurité et versions », l'agent télécharge une autre étiquette de l'image (plus récente, ou variante `alpine`/`slim`), la scanne puis la **retire de l'hôte** ; rien n'est déployé. Les compteurs de la version actuelle et de la version testée sont comparés. Au plus 2 comparaisons à la fois ; un résultat de moins de 6 heures est réutilisé.
+- **Image personnalisée** (opérateurs) : ajoute des outils (curl…) ou applique les mises à jour du système à l'image d'un service. La console génère un `Dockerfile` (modifiable) dans `build/<service>/` et passe le service en `build:` + `image:` locale, dans une nouvelle révision (non déployée). L'agent construit l'image sur l'hôte à chaque déploiement (cache de couches ; `--pull` avec « Télécharger les images »). Seul ce `build:` est accepté (dossier `build/…`, sans contexte externe ni secrets). Elle n'est plus suivie par la vérification des versions.
+- **Healthchecks adaptés** : avant de proposer un healthcheck, l'agent détecte (lecture seule, `command -v`) les outils présents dans le conteneur (curl, wget, node, python, bash, nc) ; le modèle utilise l'un d'eux, et la console propose l'image personnalisée si aucun ne convient.
 - **Variables** : `TRIVY_IMAGE` (image de Trivy, version épinglée par défaut), `TRIVY_MEMORY` (2g), `TRIVY_MAX_IMAGE_GB` (taille maximale d'une image scannée, 10 Gio par défaut), `REGISTRY_CA_FILE`.
 - **Limites** : les registres doivent être joignables depuis la console ; la détection de nouveaux tags est heuristique (tags non sémantiques) ; les mises à jour sont signalées, pas appliquées.
 
@@ -141,7 +146,7 @@ Revue du §14 de [project.md](project.md) (6 novembre 2026) :
 
 ## Publication des images
 
-Pousser un tag de version déclenche le workflow [release.yml](.github/workflows/release.yml), qui construit la console et l'agent (linux/amd64 et linux/arm64) et les publie sur le registre GitHub :
+Pousser un tag de version déclenche le workflow [release.yml](.github/workflows/release.yml), qui construit la console et l'agent (linux/amd64) et les publie sur le registre GitHub :
 
 ```bash
 git tag 1.1.1 && git push origin 1.1.1
@@ -149,7 +154,7 @@ git tag 1.1.1 && git push origin 1.1.1
 # → ghcr.io/valcriss/infrastructure-agent:1.1.1   (+ 1.1, 1, latest)
 ```
 
-Une préversion (`1.2.0-rc.1`) ne reçoit que son propre tag, jamais `latest`. En production, épingler `IMAGE_TAG=1.1.1` dans `.env`. Au premier envoi, GitHub crée les paquets en privé : les rendre publics (Paramètres du paquet → visibilité) ou faire `docker login ghcr.io` sur chaque hôte. Pour construire localement : `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
+L'architecture **arm64** s'ajoute à la demande : lancer le workflow manuel [release-arm.yml](.github/workflows/release-arm.yml) (« Release ARM ») avec la version publiée ; il construit l'arm64 puis rend les tags de cette version multi-architecture (`<version>-amd64` + `<version>-arm64`). Une préversion (`1.2.0-rc.1`) ne reçoit que son propre tag, jamais `latest`. En production, épingler `IMAGE_TAG=1.1.1` dans `.env`. Au premier envoi, GitHub crée les paquets en privé : les rendre publics (Paramètres du paquet → visibilité) ou faire `docker login ghcr.io` sur chaque hôte. Pour construire localement : `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
 
 ## Développement
 

@@ -14,7 +14,7 @@ interface DockerReply {
   body: unknown;
 }
 
-function dockerJson(socketPath: string, method: "GET" | "POST", path: string, payload?: unknown): Promise<DockerReply> {
+export function dockerJson(socketPath: string, method: "GET" | "POST", path: string, payload?: unknown): Promise<DockerReply> {
   return new Promise((resolve, reject) => {
     const body = payload === undefined ? undefined : JSON.stringify(payload);
     const req = request(
@@ -164,4 +164,52 @@ export class TerminalManager {
   closeAll(): void {
     for (const id of [...this.sessions.keys()]) this.close(id);
   }
+}
+
+/**
+ * Exécute une commande courte dans un conteneur et en renvoie la sortie (terminal sans interaction, durée bornée).
+ * Sert aux sondes en lecture seule ; jamais à une commande fournie par un utilisateur.
+ */
+export async function execCapture(socketPath: string, containerId: string, cmd: string[], timeoutMs = 8000): Promise<{ output: string; exitCode: number | undefined }> {
+  const created = await dockerJson(socketPath, "POST", `/containers/${containerId}/exec`, { AttachStdout: true, AttachStderr: true, Tty: true, Cmd: cmd });
+  const execId = (created.body as { Id?: string } | null)?.Id;
+  if (created.status !== 201 || !execId) throw new Error(`Docker a refusé l'exécution (${created.status})`);
+  const socket = await new Promise<Duplex>((resolve, reject) => {
+    const body = JSON.stringify({ Detach: false, Tty: true });
+    const req = request({
+      socketPath,
+      path: `/exec/${execId}/start`,
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), Connection: "Upgrade", Upgrade: "tcp" },
+    });
+    req.on("upgrade", (_res, sock) => resolve(sock));
+    req.on("response", (res) => {
+      res.resume();
+      reject(new Error(`Docker a répondu ${res.statusCode}`));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve();
+    }, timeoutMs);
+    socket.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size <= 64 * 1024) chunks.push(c);
+    });
+    const done = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    socket.on("end", done);
+    socket.on("close", done);
+    socket.on("error", done);
+  });
+  const info = await dockerJson(socketPath, "GET", `/exec/${execId}/json`).catch(() => null);
+  const code = (info?.body as { ExitCode?: number } | null)?.ExitCode;
+  return { output: Buffer.concat(chunks).toString("utf8").replaceAll("\r", ""), exitCode: typeof code === "number" ? code : undefined };
 }

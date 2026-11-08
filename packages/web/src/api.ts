@@ -387,6 +387,8 @@ export interface Vulnerability {
   title: string;
   url: string | null;
   status?: string;
+  /** Risque accepté pour cette vulnérabilité (justification, expiration) ; absent si elle compte. */
+  accepted?: VulnAcceptance | null;
 }
 
 export interface CheckDetailView {
@@ -577,4 +579,71 @@ export interface PasskeyView {
 export interface SecurityInfo extends SessionInfo {
   recoveryCodesRemaining: number;
   passkeys: PasskeyView[];
+}
+
+// --- Aide à la décision sur les CVE ---------------------------------------------------------------------
+
+export interface VulnAcceptance {
+  id: string;
+  justification: string;
+  expiresAt: string;
+  createdBy: string;
+}
+
+export interface PackageToUpdate {
+  pkg: string;
+  installed: string;
+  fixableCount: number;
+  worst: VulnSeverity;
+  fixedIn: string;
+}
+
+export interface VulnScanSummary {
+  total: number;
+  fixable: number;
+  unfixable: number;
+  willNotFix: number;
+  packages: PackageToUpdate[];
+  packagesTruncated: boolean;
+  accepted: number;
+}
+
+export interface AcceptedRisk {
+  id: string;
+  cve: string;
+  repository: string | null;
+  justification: string;
+  expiresAt: string;
+  expired: boolean;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CandidateResult {
+  counts: { critical: number; high: number; medium: number; low: number; unknown: number };
+  total: number;
+  fixable: number;
+  unfixable: number;
+  os: { family: string; name: string; eosl: boolean | null } | null;
+  finishedAt: string | null;
+}
+
+export interface CandidateView {
+  id: string;
+  service: string;
+  ref: string;
+  tag: string;
+  status: "pulling" | "scanning" | "succeeded" | "failed";
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+  result: CandidateResult | null;
+  current: CandidateResult | null;
+}
+
+export interface TagSuggestions {
+  current: string | null;
+  newer: string[];
+  variants: string[];
+  note?: string | null;
 }

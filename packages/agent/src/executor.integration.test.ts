@@ -11,6 +11,7 @@ import { Executor } from "./executor.js";
 import { LogStreamer } from "./logs.js";
 import { DEFAULT_TRIVY_IMAGE } from "./config.js";
 import { MetricsCollector } from "./metrics.js";
+import { Prober } from "./probe.js";
 import { Pruner } from "./pruner.js";
 import { TrivyScanner } from "./scanner.js";
 
@@ -98,6 +99,38 @@ describe.skipIf(!enabled)("exécuteur avec un vrai Docker", () => {
     // Les valeurs sensibles ne sont pas dans le journal d'opération renvoyé à la console.
     expect(log).not.toContain("motdepasse-secret-123");
   }, 240_000);
+
+  it("construit une image personnalisée au déploiement, la reconstruit quand le Dockerfile change et sonde ses outils", async () => {
+    const project = "it-" + randomBytes(4).toString("hex");
+    projects.push(project);
+    const stackId = randomUUID();
+    const compose = ["services:", "  app:", "    build: ./build/app", `    image: ${project}-app-custom:local`, '    command: ["sh", "-c", "cat /marker; sleep 120"]', ""].join("\n");
+    const dockerfile = (v: string) => `FROM alpine:3.20\nRUN echo ${v} > /marker\n`;
+
+    const first = await runAction(deployMsg(project, stackId, compose, {}, { "build/app/Dockerfile": dockerfile("version-un") }));
+    expect(first.result.status, first.result.error ?? first.log).toBe("succeeded");
+    expect(first.log).toContain("Construction des images personnalisées");
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(dockerOut("compose", "--project-name", project, "logs", "--no-log-prefix", "app")).toContain("version-un");
+
+    // Sonde des outils du conteneur obtenu (alpine : wget et busybox, pas curl ; apk).
+    const containerId = dockerOut("compose", "--project-name", project, "ps", "-q", "app").trim();
+    const probe = new Prober(socket, async () => false);
+    const probed: AgentMessage[] = [];
+    await probe.tools(randomUUID(), containerId, (m) => probed.push(m));
+    const tools = probed[0] as Extract<AgentMessage, { type: "tools_result" }>;
+    expect(tools.error).toBeUndefined();
+    expect(tools).toMatchObject({ shell: true, packageManager: "apk" });
+    expect(tools.tools).toContain("wget");
+    expect(tools.tools).not.toContain("curl");
+
+    // Un nouveau Dockerfile est reconstruit et appliqué sans « forcer la recréation ».
+    const second = await runAction(deployMsg(project, stackId, compose, {}, { "build/app/Dockerfile": dockerfile("version-deux") }));
+    expect(second.result.status, second.result.error ?? second.log).toBe("succeeded");
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(dockerOut("compose", "--project-name", project, "logs", "--no-log-prefix", "app")).toContain("version-deux");
+    dockerOut("rmi", "-f", `${project}-app-custom:local`);
+  }, 300_000);
 
   it("suit les logs d'une stack en direct puis arrête le flux", async () => {
     const project = "it-" + randomBytes(4).toString("hex");

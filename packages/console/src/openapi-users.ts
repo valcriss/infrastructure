@@ -41,3 +41,24 @@ export const TERMINAL_ROUTE_DOCS: RouteDoc[] = [
   { method: "get", path: "/api/v1/terminal-recordings/{id}", summary: "Enregistrement d'une session (asciinema)", tag: "Terminal", access: "session", success: { status: 200, description: "Fichier asciicast v2 (NDJSON)", contentType: "application/x-asciicast" }, errors: [401, 403, 404], description: "Peut contenir des secrets affichés à l'écran. L'accès est tracé dans l'audit." },
   { method: "delete", path: "/api/v1/terminal-recordings/{id}", summary: "Supprimer un enregistrement", tag: "Terminal", access: "session", success: { status: 204, description: "Enregistrement supprimé" }, errors: [401, 403, 404] },
 ];
+
+/** Outils d'un conteneur (healthcheck adapté), comparaison de versions d'images, risques acceptés, images personnalisées. */
+export const IMAGE_ROUTE_DOCS: RouteDoc[] = [
+  { method: "post", path: "/api/v1/hosts/{hostId}/containers/{containerId}/tools", summary: "Détecter les outils d'un conteneur", tag: "Stacks", access: "session", success: { status: 200, description: "Outils présents (curl, wget, node, python3, bash, nc…), gestionnaire de paquets, utilisateur" }, errors: [401, 403, 404, 409, 422, 504], description: "Lecture seule : l'agent teste la présence des outils dans le conteneur. Refusé pour les conteneurs de la console et de l'agent." },
+];
+
+const candidateBody = z.object({ tag: z.string() });
+const customImageBody = z.object({ expectedRevision: z.number().int(), packageManager: z.string(), packages: z.array(z.string()), upgrade: z.boolean(), user: z.string(), dockerfile: z.string().optional(), message: z.string().optional() });
+const acceptBody = z.object({ cve: z.string(), imageRef: z.string().optional(), justification: z.string(), days: z.number().int() });
+
+/** Comparaison de versions d'image et risques acceptés. */
+export const SECURITY_ROUTE_DOCS: RouteDoc[] = [
+  { method: "post", path: "/api/v1/stacks/{id}/services/{service}/candidate-scans", summary: "Comparer les vulnérabilités d'une autre version d'image", tag: "Images", access: "any", body: candidateBody, success: { status: 202, description: "Comparaison lancée (téléchargement, scan, retrait de l'image)" }, errors: [400, 401, 403, 404, 409, 422, 429], description: "Rien n'est déployé : l'image est téléchargée sur l'hôte, scannée puis retirée. Un résultat de moins de 6 heures est réutilisé (réponse 200)." },
+  { method: "get", path: "/api/v1/stacks/{id}/candidate-scans", summary: "Résultats des comparaisons de versions", tag: "Images", access: "any", success: { status: 200, description: "Comparaisons récentes avec les compteurs de la version actuelle et de la version testée" }, errors: [401, 404] },
+  { method: "get", path: "/api/v1/stacks/{id}/services/{service}/tag-suggestions", summary: "Versions à comparer", tag: "Images", access: "any", success: { status: 200, description: "Étiquette actuelle, versions plus récentes et variantes plus légères (alpine, slim)" }, errors: [401, 404] },
+  { method: "post", path: "/api/v1/stacks/{id}/services/{service}/custom-image/preview", summary: "Aperçu d'une image personnalisée", tag: "Stacks", access: "any", body: customImageBody, success: { status: 200, description: "Dockerfile généré et Compose modifié (rien n'est enregistré)" }, errors: [400, 401, 403, 404, 409, 422] },
+  { method: "patch", path: "/api/v1/stacks/{id}/services/{service}/custom-image", summary: "Remplacer l'image d'un service par une image personnalisée", tag: "Stacks", access: "any", body: customImageBody, success: { status: 200, description: "Nouvelle révision : Dockerfile dans build/<service>/ et Compose avec build + image locale", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 422], description: "Ajoute des outils (curl…) ou applique les mises à jour du système. L'image est construite sur l'hôte au déploiement ; elle n'est pas suivie par la vérification des versions. Rien n'est déployé." },
+  { method: "get", path: "/api/v1/vulnerability-acceptances", summary: "Lister les risques acceptés", tag: "Images", access: "any", success: { status: 200, description: "Vulnérabilités acceptées, justification, expiration" }, errors: [401] },
+  { method: "post", path: "/api/v1/vulnerability-acceptances", summary: "Accepter un risque", tag: "Images", access: "session", body: acceptBody, success: { status: 201, description: "Risque accepté jusqu'à la date limite" }, errors: [400, 401, 403, 409], description: "Administrateurs uniquement. La vulnérabilité n'est plus comptée (alertes, tableaux de bord) ; le scan reste complet. Durée : 7, 30, 90, 180 ou 365 jours ; justification obligatoire." },
+  { method: "delete", path: "/api/v1/vulnerability-acceptances/{id}", summary: "Révoquer un risque accepté", tag: "Images", access: "session", success: { status: 204, description: "La vulnérabilité est de nouveau comptée" }, errors: [401, 403, 404] },
+];

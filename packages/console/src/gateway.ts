@@ -13,6 +13,8 @@ import {
   type PruneResult,
   type ScanResult,
   type OperationResultSchema,
+  type ToolsResultSchema,
+  type ImagePullResultSchema,
 } from "@infra/shared";
 import type { z } from "zod";
 import type { FastifyBaseLogger } from "fastify";
@@ -30,6 +32,8 @@ export interface GatewayHandlers {
   onDisconnect(hostId: string): Promise<void>;
   onLogChunk(hostId: string, streamId: string, lines: string[]): void;
   onLogEnd(hostId: string, streamId: string, reason: string): void;
+  onToolsResult(hostId: string, msg: z.infer<typeof ToolsResultSchema>): void;
+  onImagePullResult(hostId: string, msg: z.infer<typeof ImagePullResultSchema>): void;
   onTerminalData(hostId: string, sessionId: string, data: string): void;
   onTerminalEnd(hostId: string, sessionId: string, reason: string, exitCode?: number): void;
   onMetrics(hostId: string, samples: MetricSample[], host?: HostMetrics): Promise<void>;
@@ -204,6 +208,12 @@ export class AgentGateway {
             break;
           case "log_end":
             this.handlers?.onLogEnd(hostId, msg.streamId, msg.reason);
+            break;
+          case "tools_result":
+            this.handlers?.onToolsResult(hostId, msg);
+            break;
+          case "image_pull_result":
+            this.handlers?.onImagePullResult(hostId, msg);
             break;
           case "terminal_data":
             this.handlers?.onTerminalData(hostId, msg.sessionId, msg.data);
