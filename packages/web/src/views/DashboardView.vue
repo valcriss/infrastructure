@@ -22,6 +22,7 @@ import MeterBar from "../components/MeterBar.vue";
 import RangeToggle from "../components/RangeToggle.vue";
 import PanelCard from "../components/PanelCard.vue";
 import StatCard from "../components/StatCard.vue";
+import { criticalReopen, readJson, usePersistedFlag, writeJson } from "../persist";
 
 const data = ref<Dashboard | null>(null);
 const ovCpu = ref<OverviewResult | null>(null);
@@ -243,10 +244,21 @@ function actionFor(a: DashboardAlert): AlertAction | null {
 
 // « À traiter » : les alertes graves d'abord (le serveur les trie déjà), les informations seulement à la demande.
 const TODO_LIMIT = 6;
+// Zone repliable, état mémorisé dans le navigateur. Une nouvelle alerte critique la rouvre (une fois par alerte).
+const todoCollapsed = usePersistedFlag("dashboard.todo.collapsed", false);
+const SEEN_KEY = "dashboard.todo.criticalSeen";
 const showInfo = ref(false);
 const showAllTodo = ref(false);
 const todo = computed(() => (data.value?.alerts ?? []).filter((a) => showInfo.value || a.severity !== "info"));
 const todoShown = computed(() => (showAllTodo.value ? todo.value : todo.value.slice(0, TODO_LIMIT)));
+
+const criticalIds = computed(() => (data.value?.alerts ?? []).filter((a) => a.severity === "critical").map((a) => a.id));
+watch(criticalIds, (ids) => {
+  if (!data.value) return;
+  const r = criticalReopen(ids, readJson<string[]>(SEEN_KEY, []));
+  writeJson(SEEN_KEY, r.seen);
+  if (r.reopen) todoCollapsed.value = false;
+});
 
 const alertCounts = computed(() => {
   const c = { critical: 0, warning: 0, info: 0 };
@@ -302,9 +314,10 @@ const alertCounts = computed(() => {
         <StatCard label="Mises à jour" icon="arrows-rotate" :value="data.security.updates.available" hint="d'images disponibles" :tone="data.security.updates.available ? 'warn' : 'ok'" to="/images" />
       </section>
 
-      <PanelCard title="À traiter" icon="triangle-exclamation" :subtitle="todo.length ? `${alertCounts.critical} critique(s) · ${alertCounts.warning} attention` : undefined">
-        <template #actions>
-          <label v-if="alertCounts.info" class="flex items-center gap-1.5 text-xs text-slate-600"><input v-model="showInfo" type="checkbox" /> Afficher les informations ({{ alertCounts.info }})</label>
+      <PanelCard v-model:collapsed="todoCollapsed" title="À traiter" icon="triangle-exclamation" :collapsible="todo.length > 0" :subtitle="todo.length ? `${alertCounts.critical} critique(s) · ${alertCounts.warning} attention` : undefined">
+        <template #actions="{ collapsed }">
+          <span v-if="collapsed && alertCounts.critical" class="inline-flex items-center gap-1 rounded bg-red-600 px-2 py-0.5 text-xs text-white" role="status"><FaIcon :icon="['fas', 'circle-xmark']" />{{ alertCounts.critical }} critique(s)</span>
+          <label v-else-if="alertCounts.info" class="flex items-center gap-1.5 text-xs text-slate-600"><input v-model="showInfo" type="checkbox" /> Afficher les informations ({{ alertCounts.info }})</label>
         </template>
         <p v-if="todo.length === 0" class="flex items-center gap-2 text-sm text-green-700"><FaIcon :icon="['fas', 'circle-check']" /> Rien à traiter : aucune alerte active.</p>
         <ul v-else class="divide-y divide-slate-200">
