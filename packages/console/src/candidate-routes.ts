@@ -9,6 +9,8 @@ import type { RegistryClient } from "./registry.js";
 import type { ScanRow, ScanService } from "./scans.js";
 import { getSecuritySettings, isReported, reportedCounts, type SecuritySettings } from "./settings.js";
 import { compareVersions, repoKey, summarizeVulns } from "./vuln-summary.js";
+import { composeServiceImage } from "@infra/shared";
+import { getRevision } from "./stacks.js";
 import type { Pool } from "./db.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -76,7 +78,7 @@ export function registerCandidateRoutes(
     };
   };
 
-  const view = async (c: CandidateRow, current: Map<string, Awaited<ReturnType<typeof describe>>>, settings: SecuritySettings) => ({
+  const view = async (c: CandidateRow, current: Map<string, Awaited<ReturnType<typeof describe>>>, settings: SecuritySettings, adopted: boolean) => ({
     id: c.id,
     service: c.service,
     ref: c.ref,
@@ -87,6 +89,8 @@ export function registerCandidateRoutes(
     finishedAt: c.finishedAt?.toISOString() ?? null,
     result: c.status === "succeeded" && c.scanId ? await describe(await scans.get(c.scanId), settings) : null,
     current: current.get(c.service) ?? null,
+    /** Cette version est déjà dans la révision enregistrée (pas encore déployée) : plus rien à proposer. */
+    adopted,
   });
 
   /** Image actuellement déployée de chaque service : base de la comparaison. */
@@ -112,8 +116,14 @@ export function registerCandidateRoutes(
     const { id } = StackParams.parse(request.params);
     const settings = await getSecuritySettings(pool);
     const current = await currentByService(id, settings);
-    const list = await candidates.list(id);
-    return { candidates: await Promise.all(list.map((c) => view(c, current, settings))) };
+    // Une comparaison n'est plus utile quand sa version est déjà celle qui tourne, ou après une semaine.
+    const deployed = new Map<string, string>();
+    for (const img of await loadUsedImages(pool, { stackId: id })) for (const u of img.usedBy) if (u.service && !deployed.has(u.service)) deployed.set(u.service, u.ref);
+    const stack = await pool.query<{ current_revision: number }>("SELECT current_revision FROM stacks WHERE id = $1", [id]);
+    const rev = stack.rows[0] ? await getRevision(pool, id, stack.rows[0].current_revision) : null;
+    const weekAgo = Date.now() - 7 * 24 * 3600_000;
+    const list = (await candidates.list(id)).filter((c) => c.ref !== deployed.get(c.service) && c.createdAt.getTime() > weekAgo);
+    return { candidates: await Promise.all(list.map((c) => view(c, current, settings, rev ? composeServiceImage(rev.compose, c.service) === c.ref : false))) };
   });
 
   // Versions à comparer : plus récentes (suivi des versions) et variantes plus légères du même dépôt.

@@ -39,3 +39,19 @@ export function editServiceImageTag(text: string, service: string, tag: string):
     }),
   };
 }
+
+/** Image (texte) d'un service dans un Compose ; null si le service ou son image est absent ou illisible. */
+export function composeServiceImage(text: string, service: string): string | null {
+  try {
+    const doc = parseDocument(text, { uniqueKeys: true });
+    if (doc.errors.length > 0) return null;
+    const services = doc.get("services", true);
+    if (!isMap(services)) return null;
+    const svc = services.get(service, true);
+    if (!isMap(svc)) return null;
+    const image = svc.get("image", true);
+    return isScalar(image) && typeof image.value === "string" ? image.value : null;
+  } catch {
+    return null;
+  }
+}

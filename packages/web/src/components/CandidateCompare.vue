@@ -157,7 +157,8 @@ const chips = computed(() => [
             <span class="text-slate-500">dont {{ c.current.fixable }} avec correctif</span>
           </p>
           <p v-if="verdict(c)" class="font-medium" :class="verdict(c)!.cls">{{ verdict(c)!.text }}</p>
-          <p v-if="session.canOperate" class="pt-1">
+          <p v-if="c.adopted" class="pt-1 font-medium text-blue-700">Déjà dans la révision enregistrée : il reste à la déployer (vue d'ensemble).</p>
+          <p v-else-if="session.canOperate" class="pt-1">
             <button class="rounded border border-blue-300 px-2.5 py-1 text-blue-700 hover:bg-blue-50 disabled:opacity-50" :disabled="adoptBusy" @click="startAdopt(c)">Utiliser cette version…</button>
             <span class="ml-2 text-slate-500">enregistre une révision avec {{ c.tag }} ; rien n'est déployé</span>
           </p>

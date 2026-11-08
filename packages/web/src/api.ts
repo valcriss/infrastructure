@@ -547,6 +547,8 @@ export interface SessionInfo {
   terminalAllowed: boolean;
   mustChangePassword: boolean;
   totpEnabled: boolean;
+  /** Le compte a un mot de passe (sinon : clé d'accès seule). */
+  hasPassword: boolean;
   passkeysAvailable: boolean;
   /** Un deuxième facteur a été présenté récemment (nécessaire pour ouvrir un terminal). */
   mfaRecent: boolean;
@@ -639,6 +641,8 @@ export interface CandidateView {
   finishedAt: string | null;
   result: CandidateResult | null;
   current: CandidateResult | null;
+  /** Déjà dans la révision enregistrée (à déployer) : plus de bouton « Utiliser cette version ». */
+  adopted: boolean;
 }
 
 export interface TagSuggestions {

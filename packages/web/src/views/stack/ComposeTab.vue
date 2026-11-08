@@ -2,6 +2,8 @@
 import { computed, ref, watch } from "vue";
 import { api, describeError, type ChangeResult, type StackDetail } from "../../api";
 import DiffView from "../../components/DiffView.vue";
+import ExtractVariablesDialog from "../../components/ExtractVariablesDialog.vue";
+import { useSession } from "../../stores/session";
 import YamlEditor from "../../components/YamlEditor.vue";
 
 const props = defineProps<{ stack: StackDetail }>();
@@ -12,6 +14,14 @@ const baseRevision = ref(props.stack.currentRevision);
 const saved = ref(props.stack.compose);
 const draft = ref(props.stack.compose);
 const message = ref("");
+const session = useSession();
+const extracting = ref(false);
+
+function onExtracted(revision: number, count: number) {
+  extracting.value = false;
+  info.value = `Révision ${revision} enregistrée : ${count} valeur(s) extraite(s) en variables. Elle n'est pas déployée : utilisez « Déployer » dans la vue d'ensemble.`;
+  emit("changed");
+}
 const showDiff = ref(false);
 const error = ref("");
 const info = ref("");
@@ -84,11 +94,13 @@ function reset() {
         {{ showDiff ? "Masquer les différences" : "Voir les différences" }}
       </button>
       <button :disabled="!dirty" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" @click="reset">Annuler les modifications</button>
+      <button v-if="session.canOperate" :disabled="dirty" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" :title="dirty ? 'Enregistrez ou annulez vos modifications avant' : 'Transformer les valeurs de environment en variables de stack'" @click="extracting = true">Extraire les variables…</button>
       <span v-if="dirty" class="text-xs text-amber-700">modifications non enregistrées</span>
     </div>
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
     <DiffView v-if="showDiff" :before="saved" :after="draft" />
+    <ExtractVariablesDialog v-if="extracting" :stack-id="stack.id" @close="extracting = false" @saved="onExtracted" />
     <label class="flex items-center gap-2 text-sm">
       <input v-model="sensitive" type="checkbox" />
       Chiffrer le Compose dans la sauvegarde Git (il contient des secrets)

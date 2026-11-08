@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { api, describeError, type ChangeResult, type StackDetail, type VariableView } from "../../api";
+import ExtractVariablesDialog from "../../components/ExtractVariablesDialog.vue";
+import { useSession } from "../../stores/session";
 
 const props = defineProps<{ stack: StackDetail }>();
 const emit = defineEmits<{ changed: [] }>();
 
+const session = useSession();
+const extracting = ref(false);
 const name = ref("");
 const value = ref("");
 const sensitive = ref(false);
@@ -58,9 +62,13 @@ async function remove(v: VariableView) {
 
 <template>
   <div class="space-y-6">
-    <p class="text-sm text-slate-600">
-      Variables d'interpolation de la stack (<code>${NOM}</code> dans le Compose). Une valeur sensible n'est plus jamais affichée après son enregistrement.
-    </p>
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <p class="max-w-3xl text-sm text-slate-600">
+        Variables d'interpolation de la stack (<code>${NOM}</code> dans le Compose). Une valeur sensible n'est plus jamais affichée après son enregistrement.
+      </p>
+      <button v-if="session.canOperate" class="rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100" title="Transformer les valeurs de « environment » en variables de stack" @click="extracting = true">Extraire les variables du Compose…</button>
+    </div>
+    <ExtractVariablesDialog v-if="extracting" :stack-id="stack.id" @close="extracting = false" @saved="extracting = false; info = `Révision enregistrée : valeurs extraites en variables. Elle n'est pas déployée.`; emit('changed')" />
 
     <div class="overflow-x-auto rounded-lg border border-slate-200 bg-white">
       <table class="w-full text-left text-sm">

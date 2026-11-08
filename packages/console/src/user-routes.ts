@@ -86,6 +86,7 @@ export function sessionInfo(user: AuthUser, config: Config) {
     terminalAllowed: user.terminalAllowed,
     mustChangePassword: user.mustChangePassword,
     totpEnabled: user.totpEnabled,
+    hasPassword: user.hasPassword,
     passkeysAvailable: Boolean(config.webauthnRpId && config.webauthnOrigin),
     mfaRecent: user.mfaAt !== null && Date.now() - user.mfaAt.getTime() <= STEP_UP_MAX_AGE_MS,
   };

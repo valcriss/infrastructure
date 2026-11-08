@@ -292,6 +292,24 @@ describe.skipIf(!url)("CVE : corrigeables, risques acceptés, comparaison de ver
     const detail = (await call("GET", `/api/v1/stacks/${fresh}`)).json;
     expect(detail.compose).toContain("image: myreg.invalid/team/app:2.0-alpine");
     expect(detail.deployedRevision).toBeNull();
+
+    // Les comparaisons qui n'ont plus d'intérêt disparaissent : version déjà adoptée (signalée), déjà déployée, trop ancienne.
+    const insert = (stack: string, ref: string, age = "0 days") =>
+      pool.query(
+        `INSERT INTO candidate_scans (stack_id, service, host_id, ref, base_ref, status, requested_by, created_at)
+         VALUES ($1, 'web', $2, $3, $4, 'succeeded', 'test', now() - $5::interval)`,
+        [stack, hostId, ref, REF, age],
+      );
+    await insert(fresh, "myreg.invalid/team/app:2.0-alpine");
+    await insert(fresh, "myreg.invalid/team/app:3.0");
+    await insert(fresh, "myreg.invalid/team/app:4.0", "8 days");
+    const listed = ((await call("GET", `/api/v1/stacks/${fresh}/candidate-scans`)).json.candidates as any[]).map((c) => [c.tag, c.adopted]);
+    expect(listed).toEqual(expect.arrayContaining([["2.0-alpine", true], ["3.0", false]]));
+    expect(listed.map(([t]) => t)).not.toContain("4.0");
+
+    // Version déjà déployée (celle des conteneurs observés) : plus affichée.
+    await insert(stackId, REF);
+    expect(((await call("GET", `/api/v1/stacks/${stackId}/candidate-scans`)).json.candidates as any[]).map((c) => c.ref)).not.toContain(REF);
   });
 
   it("signale l'échec d'un téléchargement refusé par le registre", async () => {

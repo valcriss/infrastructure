@@ -18,6 +18,9 @@ const ADMIN_ANY = [
 const ADMIN_WRITE = [/^\/api\/v1\/vulnerability-acceptances(\/|$)/, /^\/api\/v1\/settings(\/|$)/, /^\/api\/v1\/backup(\/|$)/, /^\/api\/v1\/hosts\/:id$/, /^\/api\/v1\/hosts\/:id\/prune/];
 // Actions sur son propre compte : tout utilisateur connecté.
 const SELF = [/^\/api\/v1\/admin\/credentials$/, /^\/api\/v1\/me(\/|$)/];
+// Export d'une stack (POST car il porte une confirmation) : tout utilisateur connecté pour l'export sans secrets ;
+// l'inclusion des valeurs sensibles est réservée aux administrateurs par la route elle-même.
+const VIEWER_POST = [/^\/api\/v1\/stacks\/:id\/export$/];
 
 /**
  * Rôle minimal pour une route, d'après son motif (`/api/v1/stacks/:id/deploy`) et sa méthode.
@@ -25,6 +28,7 @@ const SELF = [/^\/api\/v1\/admin\/credentials$/, /^\/api\/v1\/me(\/|$)/];
  */
 export function requiredRole(method: string, routeUrl: string): Role {
   if (SELF.some((r) => r.test(routeUrl))) return "viewer";
+  if (method === "POST" && VIEWER_POST.some((r) => r.test(routeUrl))) return "viewer";
   if (ADMIN_ANY.some((r) => r.test(routeUrl))) return "admin";
   const read = method === "GET" || method === "HEAD";
   if (!read && ADMIN_WRITE.some((r) => r.test(routeUrl))) return "admin";

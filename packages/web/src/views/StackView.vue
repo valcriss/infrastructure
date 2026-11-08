@@ -7,6 +7,7 @@ import FilesTab from "./stack/FilesTab.vue";
 import HistoryTab from "./stack/HistoryTab.vue";
 import LogsTab from "./stack/LogsTab.vue";
 import MetricsTab from "./stack/MetricsTab.vue";
+import ExportDialog from "../components/ExportDialog.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import { useSession } from "../stores/session";
 import OperationsTab from "./stack/OperationsTab.vue";
@@ -17,6 +18,7 @@ import VariablesTab from "./stack/VariablesTab.vue";
 const route = useRoute();
 const router = useRouter();
 const session = useSession();
+const exporting = ref(false);
 const id = computed(() => String(route.params.id));
 const stack = ref<StackDetail | null>(null);
 const error = ref("");
@@ -104,18 +106,24 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </button>
       </div>
 
-      <div v-if="sections.length" role="tablist" :aria-label="`Sections de ${tab}`" class="flex flex-wrap gap-2">
-        <button
-          v-for="s in sections"
-          :key="s.key"
-          role="tab"
-          :aria-selected="section === s.key"
-          :class="['inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm', section === s.key ? 'border-blue-600 bg-blue-50 font-medium text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100']"
-          @click="go(tab, s.key)"
-        >
-          <FaIcon :icon="['fas', s.icon]" /> {{ s.label }}
+      <div v-if="sections.length" class="flex flex-wrap items-center justify-between gap-2">
+        <div role="tablist" :aria-label="`Sections de ${tab}`" class="flex flex-wrap gap-2">
+          <button
+            v-for="s in sections"
+            :key="s.key"
+            role="tab"
+            :aria-selected="section === s.key"
+            :class="['inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm', section === s.key ? 'border-blue-600 bg-blue-50 font-medium text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100']"
+            @click="go(tab, s.key)"
+          >
+            <FaIcon :icon="['fas', s.icon]" /> {{ s.label }}
+          </button>
+        </div>
+        <button v-if="tab === 'config'" class="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100" title="Télécharger le Compose, le .env et les fichiers de la révision active" @click="exporting = true">
+          <FaIcon :icon="['fas', 'download']" /> Exporter
         </button>
       </div>
+      <ExportDialog v-if="exporting" :stack="stack" @close="exporting = false" />
 
       <OverviewTab v-if="tab === 'overview'" :stack="stack" @changed="load" />
       <!-- KeepAlive : un brouillon de Compose n'est pas perdu en passant à une autre section. -->
