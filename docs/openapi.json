@@ -30,6 +30,9 @@
       "name": "Images"
     },
     {
+      "name": "Paramètres"
+    },
+    {
       "name": "Système"
     },
     {
@@ -2735,6 +2738,119 @@
           },
           "422": {
             "description": "Requête comprise mais refusée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/display": {
+      "get": {
+        "summary": "Réglage d'affichage des éléments de la console",
+        "tags": [
+          "Paramètres"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "showConsole et projets Compose concernés (selfProjects)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Afficher ou masquer les éléments de la console",
+        "description": "Administrateurs uniquement. Masque les conteneurs et images de la console et de son agent des tableaux de bord, applications, images et métriques ; ils restent scannés. Les projets concernés sont les noms réservés plus la variable SELF_PROJECTS.",
+        "tags": [
+          "Paramètres"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "showConsole": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "showConsole"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Réglage enregistré",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
             "content": {
               "application/json": {
                 "schema": {

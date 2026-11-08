@@ -50,3 +50,19 @@ jobs:
       - uses: actions/checkout@v7
       - run: docker build --target console -t console-docker/console:ci .
       - run: docker build --target agent -t console-docker/agent:ci .
+      # Aucune vulnérabilité corrigeable (tous niveaux de gravité) dans les images générées : le contrôle échoue dès
+      # qu'un correctif existe (paquet système, runtime Node ou dépendance). Les vulnérabilités sans correctif
+      # connu ne bloquent pas. Même version de Trivy que celle utilisée par l'agent pour scanner les images.
+      - name: Vulnérabilités corrigeables dans les images
+        run: |
+          trivy_image="$(grep -oE 'ghcr\.io/aquasecurity/trivy:[0-9.]+' packages/agent/src/config.ts | head -1)"
+          echo "Trivy : $trivy_image"
+          status=0
+          for target in console agent; do
+            echo "::group::Scan de console-docker/$target:ci"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$trivy_image" image \
+              --no-progress --ignore-unfixed --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+              --exit-code 1 "console-docker/$target:ci" || status=1
+            echo "::endgroup::"
+          done
+          exit $status

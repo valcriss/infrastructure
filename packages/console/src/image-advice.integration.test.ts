@@ -303,4 +303,49 @@ describe.skipIf(!url)("CVE : corrigeables, risques acceptés, comparaison de ver
     const failed = ((await call("GET", `/api/v1/stacks/${stackId}/candidate-scans`)).json.candidates as any[]).find((c) => c.id === started.json.id);
     expect(failed).toMatchObject({ status: "failed", error: expect.stringContaining("manifest unknown"), result: null });
   });
+
+  it("masque les éléments de la console (conteneurs, images, applications, métriques) selon le réglage d'affichage", async () => {
+    const IMG_SELF = sha("9");
+    const ctr = (id: string, name: string, project: string, image: string, imageId: string) => ({ id: id.repeat(64).slice(0, 64), names: [name], image, imageId, state: "running", status: "Up", created: 1, composeProject: project, composeService: name });
+    send({
+      type: "inventory",
+      inventory: {
+        observedAt: new Date().toISOString(),
+        dockerVersion: "29",
+        containers: [ctr("c", "app-web-1", "app", REF, IMG_CUR), ctr("d", "console-1", "console-docker", "ghcr.io/x/infrastructure-console:1", IMG_SELF)],
+        images: [
+          { id: IMG_CUR, repoTags: [REF], repoDigests: [], size: 5_000_000, os: "linux", arch: "amd64" },
+          { id: IMG_SELF, repoTags: ["ghcr.io/x/infrastructure-console:1"], repoDigests: [], size: 5_000_000, os: "linux", arch: "amd64" },
+        ],
+      },
+    });
+    await waitFor(async () => ((await pool.query("SELECT jsonb_array_length(images) AS n FROM hosts WHERE id = $1", [hostId])).rows[0]?.n ?? 0) === 2);
+    const snapshot = async () => ({
+      images: ((await call("GET", "/api/v1/images")).json.images as any[]).map((i) => i.imageId),
+      containers: (await call("GET", "/api/v1/dashboard")).json.containers.total as number,
+      apps: ((await call("GET", "/api/v1/applications")).json.applications as any[]).map((a) => a.name),
+    });
+
+    // Par défaut : tout est affiché.
+    expect((await call("GET", "/api/v1/settings/display")).json).toMatchObject({ showConsole: true, selfProjects: expect.arrayContaining(["console-docker"]) });
+    const shown = await snapshot();
+    expect(shown.images).toContain(IMG_SELF);
+    expect(shown.apps).toContain("console-docker");
+
+    // Masqué : ni l'image, ni le conteneur, ni l'application de la console ; les autres restent.
+    expect((await call("PUT", "/api/v1/settings/display", { showConsole: false })).json.showConsole).toBe(false);
+    const hidden = await snapshot();
+    expect(hidden.images).not.toContain(IMG_SELF);
+    expect(hidden.images).toContain(IMG_CUR);
+    expect(hidden.containers).toBe(shown.containers - 1);
+    expect(hidden.apps).not.toContain("console-docker");
+    expect(hidden.apps).toContain("app");
+    // Le scan de l'image de la console reste possible (la planification ne dépend pas de l'affichage).
+    expect((await call("POST", `/api/v1/images/${IMG_SELF}/scans`, {})).status).toBe(202);
+
+    // Réaffiché : tout revient.
+    expect((await call("PUT", "/api/v1/settings/display", { showConsole: true })).status).toBe(200);
+    expect(await snapshot()).toEqual(shown);
+    expect((await call("PUT", "/api/v1/settings/display", { showConsole: "oui" })).status).toBe(400);
+  });
 });

@@ -12,6 +12,7 @@ import { RegistryError } from "./registry.js";
 import type { RegistryStore } from "./registries.js";
 import type { ScanRow, ScanService } from "./scans.js";
 import { repoKey, summarizeVulns } from "./vuln-summary.js";
+import { hiddenProjects } from "./display.js";
 import { MIN_SEVERITIES, getSecuritySettings, isReported, reportedCounts, setSecuritySettings, type SecuritySettings } from "./settings.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -120,7 +121,7 @@ export function registerImageRoutes(
 
   app.get("/api/v1/images", { preHandler: apiAuth }, async (request) => {
     const q = ImageListQuery.parse(request.query);
-    const images = await loadUsedImages(pool, q);
+    const images = await loadUsedImages(pool, { ...q, excludeProjects: await hiddenProjects(pool) });
     const queue = await scans.queue();
     const position = new Map(queue.pending.map((p, i) => [`${p.imageId}|${p.platform}`, i + 1]));
     return {

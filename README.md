@@ -110,6 +110,7 @@ Page « Images » (`GET /api/v1/images`) et onglet « Sécurité et versions » 
 - **Comparer une autre version** : depuis l'onglet « Sécurité et versions », l'agent télécharge une autre étiquette de l'image (plus récente, ou variante `alpine`/`slim`), la scanne puis la **retire de l'hôte** ; rien n'est déployé. Les compteurs de la version actuelle et de la version testée sont comparés. Au plus 2 comparaisons à la fois ; un résultat de moins de 6 heures est réutilisé.
 - **Image personnalisée** (opérateurs) : ajoute des outils (curl…) ou applique les mises à jour du système à l'image d'un service. La console génère un `Dockerfile` (modifiable) dans `build/<service>/` et passe le service en `build:` + `image:` locale, dans une nouvelle révision (non déployée). L'agent construit l'image sur l'hôte à chaque déploiement (cache de couches ; `--pull` avec « Télécharger les images »). Seul ce `build:` est accepté (dossier `build/…`, sans contexte externe ni secrets). Elle n'est plus suivie par la vérification des versions.
 - **Healthchecks adaptés** : avant de proposer un healthcheck, l'agent détecte (lecture seule, `command -v`) les outils présents dans le conteneur (curl, wget, node, python, bash, nc) ; le modèle utilise l'un d'eux, et la console propose l'image personnalisée si aucun ne convient.
+- **Affichage** (Paramètres → Affichage, administrateurs) : une case permet de masquer les éléments de la console elle-même (conteneurs et images de son projet Compose et de celui de son agent) des tableaux de bord, applications, images, alertes et métriques. Ils restent surveillés et scannés en arrière-plan ; la page Hôtes montre toujours tous les conteneurs. Les projets concernés sont `console-docker` et `console-docker-agent`, plus ceux listés dans la variable `SELF_PROJECTS`.
 - **Variables** : `TRIVY_IMAGE` (image de Trivy, version épinglée par défaut), `TRIVY_MEMORY` (2g), `TRIVY_MAX_IMAGE_GB` (taille maximale d'une image scannée, 10 Gio par défaut), `REGISTRY_CA_FILE`.
 - **Limites** : les registres doivent être joignables depuis la console ; la détection de nouveaux tags est heuristique (tags non sémantiques) ; les mises à jour sont signalées, pas appliquées.
 
@@ -155,6 +156,12 @@ git tag 1.1.1 && git push origin 1.1.1
 ```
 
 L'architecture **arm64** s'ajoute à la demande : lancer le workflow manuel [release-arm.yml](.github/workflows/release-arm.yml) (« Release ARM ») avec la version publiée ; il construit l'arm64 puis rend les tags de cette version multi-architecture (`<version>-amd64` + `<version>-arm64`). Une préversion (`1.2.0-rc.1`) ne reçoit que son propre tag, jamais `latest`. En production, épingler `IMAGE_TAG=1.1.1` dans `.env`. Au premier envoi, GitHub crée les paquets en privé : les rendre publics (Paramètres du paquet → visibilité) ou faire `docker login ghcr.io` sur chaque hôte. Pour construire localement : `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
+
+## Sécurité des images publiées
+
+Les images de la console et de l'agent sont construites sans outil superflu : les paquets système sont mis à jour à la construction (`apk upgrade`) et `npm`, `npx`, `corepack` et `yarn` sont retirés des images finales (ils embarquent leurs propres dépendances et ne servent pas à l'exécution). La CI (job `images`) scanne ensuite chaque image avec Trivy (même version que celle de l'agent) et **échoue dès qu'une vulnérabilité a un correctif disponible, quel que soit son niveau** ; les vulnérabilités sans correctif connu ne bloquent pas. `npm run audit:prod` contrôle en plus les dépendances de production.
+
+Pour reproduire en local : `docker build --target console -t console-docker/console:ci .` puis `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/aquasecurity/trivy:0.76.1 image --ignore-unfixed --exit-code 1 console-docker/console:ci`.
 
 ## Développement
 

@@ -33,6 +33,8 @@ services:
       DATABASE_URL: postgres://infra:${POSTGRES_PASSWORD}@postgres:5432/infra
       # Passer à true dès que la console est servie en HTTPS.
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      # Noms de projets Compose de la console et de son agent, s'ils diffèrent de console-docker (réglage « Affichage »).
+      SELF_PROJECTS: ${SELF_PROJECTS:-}
       # Clés d'accès (WebAuthn) : domaine et origine exacte de la console ; désactivées si vides.
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
       WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}

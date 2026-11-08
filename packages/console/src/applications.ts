@@ -2,6 +2,7 @@ import { RESERVED_STACK_NAMES, listComposeServices, type Container, type Severit
 import { deriveStackStatus, type StackHealth } from "./dashboard.js";
 import type { Pool } from "./db.js";
 import type { ImageWatcher } from "./image-watch.js";
+import { hiddenProjects } from "./display.js";
 import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
 import type { MetricsStore } from "./metrics-store.js";
 import type { ScanService } from "./scans.js";
@@ -69,6 +70,7 @@ function observedStatus(online: boolean, observedAt: Date | null, containers: Co
  */
 export async function listApplications(deps: Deps, now = Date.now()): Promise<Application[]> {
   const { pool } = deps;
+  const hidden = await hiddenProjects(pool);
   const [hostRows, stackRows, deploys, usedImages, scanMap, checks, settings] = await Promise.all([
     pool.query<{ id: string; name: string; inventory: Container[] | null; inventory_observed_at: Date | null }>(
       "SELECT id, name, inventory, inventory_observed_at FROM hosts WHERE revoked_at IS NULL ORDER BY created_at",
@@ -81,7 +83,7 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
       `SELECT DISTINCT ON (stack_id) stack_id, finished_at FROM operations
         WHERE type = 'deploy' AND status = 'succeeded' AND finished_at IS NOT NULL ORDER BY stack_id, finished_at DESC`,
     ),
-    loadUsedImages(pool),
+    loadUsedImages(pool, { excludeProjects: hidden }),
     deps.scans.latestAll(),
     deps.watcher.allChecks(),
     getSecuritySettings(pool),
@@ -146,7 +148,7 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
   for (const h of hostRows.rows) {
     const online = deps.isOnline(h.id);
     const projects = new Map<string, Container[]>();
-    for (const c of h.inventory ?? []) if (c.composeProject) projects.set(c.composeProject, [...(projects.get(c.composeProject) ?? []), c]);
+    for (const c of h.inventory ?? []) if (c.composeProject && !hidden.includes(c.composeProject)) projects.set(c.composeProject, [...(projects.get(c.composeProject) ?? []), c]);
 
     // Stacks gérées de cet hôte (même sans conteneur : « jamais déployée », arrêtée…).
     for (const s of stackRows.rows.filter((x) => x.host_id === h.id)) {

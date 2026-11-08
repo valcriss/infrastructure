@@ -22,13 +22,17 @@ ENV NODE_ENV=production \
     SHARED_DIR=/shared \
     DATA_DIR=/data
 # git : sauvegarde de la configuration dans un dépôt Git (HTTPS + jeton).
-RUN apk add --no-cache git ca-certificates
+# Paquets système à jour (correctifs de sécurité publiés depuis la construction de l'image de base).
+RUN apk upgrade --no-cache && apk add --no-cache git ca-certificates
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/console/package.json packages/console/
 COPY packages/agent/package.json packages/agent/
 COPY packages/web/package.json packages/web/
-RUN npm ci --omit=dev -w @infra/console && npm cache clean --force
+# npm, npx, corepack et yarn sont retirés après l'installation : inutiles à l'exécution, ils embarquent leurs
+# propres dépendances (surface d'attaque et CVE) et le noyau de l'image reste Node seul.
+RUN npm ci --omit=dev -w @infra/console && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg /root/.npm
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/console/dist packages/console/dist
 COPY packages/console/migrations packages/console/migrations
@@ -49,13 +53,16 @@ WORKDIR /app
 ENV NODE_ENV=production \
     STATE_DIR=/data
 # CLI Docker et plugin Compose : l'agent pilote `docker compose` par arguments structurés.
-RUN apk add --no-cache docker-cli docker-cli-compose
+RUN apk upgrade --no-cache && apk add --no-cache docker-cli docker-cli-compose
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/console/package.json packages/console/
 COPY packages/agent/package.json packages/agent/
 COPY packages/web/package.json packages/web/
-RUN npm ci --omit=dev -w @infra/agent && npm cache clean --force
+# npm, npx, corepack et yarn sont retirés après l'installation : inutiles à l'exécution, ils embarquent leurs
+# propres dépendances (surface d'attaque et CVE) et le noyau de l'image reste Node seul.
+RUN npm ci --omit=dev -w @infra/agent && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg /root/.npm
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/agent/dist packages/agent/dist
 RUN mkdir -p /data

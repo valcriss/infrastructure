@@ -2,6 +2,7 @@ import { INVENTORY_INTERVAL_SEC, listComposeServices, type ComposeService, type 
 import type { SeverityCounts } from "@infra/shared";
 import type { BackupService, BackupStatus } from "./backup.js";
 import type { CheckDetail, ImageWatcher } from "./image-watch.js";
+import { hiddenProjects } from "./display.js";
 import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
 import type { ScanService } from "./scans.js";
 import { getSecuritySettings, reportedCounts } from "./settings.js";
@@ -435,12 +436,15 @@ export class Dashboard {
       return { s, host, online, health };
     });
 
+    // Éléments de la console elle-même : masqués des vues si le réglage « Affichage » le demande (ils restent scannés).
+    const hidden = await hiddenProjects(pool);
     const managedProjects = new Set(stackRows.rows.map((s) => `${s.host_id}:${s.name}`));
     const containerRows: { hostId: string; stackId: string | null; container: Container }[] = [];
     let unmanagedProjects = 0;
     for (const h of hosts) {
       const projects = new Set<string>();
       for (const c of h.inventory ?? []) {
+        if (c.composeProject && hidden.includes(c.composeProject)) continue;
         const stack = c.composeProject ? stackRows.rows.find((s) => s.host_id === h.id && s.name === c.composeProject) : undefined;
         if (filter.stackId && stack?.id !== filter.stackId) continue;
         containerRows.push({ hostId: h.id, stackId: stack?.id ?? null, container: c });
@@ -451,7 +455,7 @@ export class Dashboard {
 
     // Sécurité : seules les images de stacks gérées alimentent les alertes (les autres restent consultables).
     const settings = await getSecuritySettings(pool);
-    const [usedImages, scanMap, allChecks] = await Promise.all([loadUsedImages(pool, filter), this.deps.scans.latestAll(), this.deps.watcher.allChecks()]);
+    const [usedImages, scanMap, allChecks] = await Promise.all([loadUsedImages(pool, { ...filter, excludeProjects: hidden }), this.deps.scans.latestAll(), this.deps.watcher.allChecks()]);
     const securityImages: SecurityAlertInput["images"] = [];
     const sec = { images: 0, never: 0, failed: 0, clean: 0, vulnerable: 0, critical: 0, high: 0, withCritical: 0, withHigh: 0, noSevere: 0 };
     // Répartition des vulnérabilités par gravité : « filtered » applique le seuil des paramètres, « all » l'ignore.
@@ -540,6 +544,7 @@ export class Dashboard {
       if (!this.deps.isOnline(h.id)) continue;
       for (const m of await this.deps.metrics.latest(h.id)) {
         if (filter.stackId && m.project !== stackViews[0]?.s.name) continue;
+        if (m.project && hidden.includes(m.project)) continue;
         top.push({ ...m, hostId: h.id, hostName: h.name });
       }
     }

@@ -55,6 +55,7 @@ import { registerUserRoutes, sessionInfo } from "./user-routes.js";
 import { TerminalService, registerTerminalRoutes } from "./terminal-routes.js";
 import { ToolProbeService, registerToolRoutes } from "./tools-routes.js";
 import { registerAcceptanceRoutes } from "./acceptance-routes.js";
+import { registerDisplayRoutes } from "./display.js";
 import { registerCustomImageRoutes } from "./custom-image-routes.js";
 import { CandidateScans } from "./candidates.js";
 import { registerCandidateRoutes } from "./candidate-routes.js";
@@ -479,6 +480,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerUserRoutes(app, { pool, config, box, auth, limiter });
   registerToolRoutes(app, { pool, auth, service: toolProbes });
   registerAcceptanceRoutes(app, { pool, auth });
+  registerDisplayRoutes(app, { pool, auth });
   registerCustomImageRoutes(app, { pool, auth });
   registerCandidateRoutes(app, { pool, auth, candidates, scans, watcher, registryClient });
   registerTerminalRoutes(app, { pool, auth, service: terminals, hasFactor: async (id) => ((await pool.query("SELECT 1 FROM passkeys WHERE user_id = $1", [id])).rowCount ?? 0) > 0 });

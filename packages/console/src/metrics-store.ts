@@ -205,7 +205,8 @@ export class MetricsStore {
    * Vue d'ensemble de tous les hôtes : totaux CPU / mémoire / réseau des conteneurs, applications
    * les plus gourmandes et utilisation de chaque machine, sur une période (≤ 240 points par série).
    */
-  async overview(rangeSec: number): Promise<OverviewResult> {
+  async overview(rangeSec: number, excludeProjects: string[] = []): Promise<OverviewResult> {
+    const excluded = new Set(excludeProjects);
     const stepSec = Math.max(this.intervalSec, Math.ceil(rangeSec / MAX_POINTS / this.intervalSec) * this.intervalSec);
     const [containers, hostRows, hostSeries, hostInfo] = await Promise.all([
       this.pool.query<{ host_id: string; container_id: string; app: string; bucket: Date; cpu: number | null; mem: string; rx: string; tx: string }>(
@@ -243,7 +244,7 @@ export class MetricsStore {
     const apps = new Map<string, { app: string; host: string; byBucket: Map<number, { cpu: number; mem: number }> }>();
     const prev = new Map<string, { t: number; rx: number; tx: number }>();
     for (const r of containers.rows) {
-      if (!hostNames.has(r.host_id)) continue;
+      if (!hostNames.has(r.host_id) || excluded.has(r.app)) continue;
       const t = r.bucket.getTime();
       const slot = totals.get(t) ?? { cpu: null, mem: 0, rx: null, tx: null };
       totals.set(t, slot);

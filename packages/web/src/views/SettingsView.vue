@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitle from "../components/PageTitle.vue";
+import DisplaySettings from "./settings/DisplaySettings.vue";
 import GitSettings from "./settings/GitSettings.vue";
 import SecuritySettings from "./settings/SecuritySettings.vue";
 import TerminalSettings from "./settings/TerminalSettings.vue";
@@ -12,6 +13,7 @@ import { useSession } from "../stores/session";
 const ALL_TABS = [
   { key: "git", label: "Sauvegarde Git", icon: "cloud-arrow-up", adminOnly: false },
   { key: "security", label: "Sécurité des images", icon: "shield-halved", adminOnly: false },
+  { key: "display", label: "Affichage", icon: "eye", adminOnly: false },
   { key: "users", label: "Utilisateurs", icon: "users", adminOnly: true },
   { key: "terminal", label: "Terminal", icon: "terminal", adminOnly: true },
 ] as const;
@@ -45,6 +47,7 @@ const select = (key: string) => router.replace({ path: "/settings", query: { tab
 
     <GitSettings v-if="tab === 'git'" />
     <SecuritySettings v-else-if="tab === 'security'" />
+    <DisplaySettings v-else-if="tab === 'display'" />
     <UsersSettings v-else-if="tab === 'users'" />
     <TerminalSettings v-else />
   </div>

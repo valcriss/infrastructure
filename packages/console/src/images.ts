@@ -34,6 +34,8 @@ interface HostRow {
 export interface ImageFilter {
   hostId?: string;
   stackId?: string;
+  /** Projets Compose à ignorer (les éléments de la console elle-même, quand ils sont masqués dans les vues). */
+  excludeProjects?: string[];
 }
 
 /**
@@ -55,6 +57,7 @@ export async function loadUsedImages(pool: Pick<Pool, "query">, filter: ImageFil
     const infoById = new Map((h.images ?? []).map((i) => [i.id, i]));
     for (const c of h.inventory ?? []) {
       if (!c.imageId) continue;
+      if (c.composeProject && filter.excludeProjects?.includes(c.composeProject)) continue;
       const stack = c.composeProject ? stackOf.get(`${h.id}:${c.composeProject}`) : undefined;
       if (filter.stackId && (!filterStack || stack?.id !== filterStack.id)) continue;
       const info = infoById.get(c.imageId) ?? null;

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Application } from "./applications.js";
 import type { Dashboard } from "./dashboard.js";
 import type { Pool } from "./db.js";
+import { hiddenProjects } from "./display.js";
 import { HttpError } from "./http-error.js";
 import { RANGES, type MetricsStore } from "./metrics-store.js";
 
@@ -36,7 +37,7 @@ export function registerDashboardRoutes(
   // Totaux CPU / mémoire / réseau, applications les plus gourmandes et utilisation de chaque hôte.
   app.get("/api/v1/dashboard/overview", { preHandler: auth }, async (request) => {
     const q = MetricsQuery.pick({ range: true }).parse(request.query);
-    return metrics.overview(RANGES[q.range] as number);
+    return metrics.overview(RANGES[q.range] as number, await hiddenProjects(pool));
   });
 
   // Métriques d'une stack : CPU, mémoire, réseau par conteneur, rétention bornée.
