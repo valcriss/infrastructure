@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 # Images de la console et de l'agent. Cibles : `console`, `agent`.
 
-FROM node:24-alpine AS build
+# Compilation sur la plateforme du runner (TypeScript et Vite produisent du JavaScript indépendant
+# de l'architecture) : évite de la faire sous émulation lors d'un build arm64.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
