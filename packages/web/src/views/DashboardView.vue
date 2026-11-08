@@ -159,13 +159,58 @@ const sev: Record<Severity, { text: string; cls: string; icon: string }> = {
   info: { text: "info", cls: "bg-slate-400 text-white", icon: "circle-info" },
 };
 
-function link(a: DashboardAlert): string | null {
-  if (a.target.type === "stack") return `/stacks/${a.target.id}`;
-  if (a.target.type === "host") return "/hosts";
-  if (a.target.type === "backup") return "/settings?tab=git";
-  if (a.target.type === "image") return "/images";
-  return null;
+interface AlertAction {
+  label: string;
+  to: string;
 }
+
+/** Action explicite pour traiter une alerte : ouvre la bonne page avec l'hôte, l'application et l'onglet présélectionnés. */
+function actionFor(a: DashboardAlert): AlertAction | null {
+  const t = a.target;
+  const stackIdByName = (name: string | undefined): string | undefined => data.value?.stacks.items.find((s) => s.name === name)?.id;
+  const stack = (id: string, query = ""): string => `/stacks/${id}${query}`;
+  const observed = (query = ""): string => `/hosts/${t.hostId}/projects/${encodeURIComponent(t.project ?? "")}${query}`;
+  switch (a.kind) {
+    case "agent_offline":
+    case "inventory_stale":
+      return { label: "Voir l'hôte", to: "/hosts" };
+    case "stack_degraded":
+      return { label: "Voir les conteneurs", to: stack(t.id) };
+    case "stack_stopped":
+      return { label: "Ouvrir l'application", to: stack(t.id) };
+    case "container_unhealthy":
+      if (t.stackId) return { label: "Voir la raison de l'échec", to: stack(t.stackId) };
+      return t.hostId && t.project ? { label: "Voir la raison de l'échec", to: observed() } : null;
+    case "restart_loop":
+      if (t.stackId) return { label: "Voir les logs", to: stack(t.stackId, `?tab=logs${t.service ? `&service=${encodeURIComponent(t.service)}` : ""}`) };
+      return t.hostId && t.project ? { label: "Voir les logs", to: observed(`?tab=logs&container=${t.id}`) } : null;
+    case "backup_failed":
+    case "backup_not_configured":
+      return { label: "Ouvrir la sauvegarde", to: "/settings?tab=git" };
+    case "vulnerabilities_critical":
+    case "scan_failed":
+    case "scan_stale": {
+      const only = t.stacks?.length === 1 ? stackIdByName(t.stacks[0]) : undefined;
+      return only ? { label: "Voir les vulnérabilités", to: stack(only, "?tab=security") } : { label: "Voir les images", to: "/images" };
+    }
+    case "image_update":
+    case "image_check_failed":
+      return { label: "Voir les versions", to: stack(t.id, "?tab=security") };
+    case "operation_unknown": {
+      const id = stackIdByName(t.stackName);
+      return id ? { label: "Voir l'opération", to: stack(id, `?tab=history&section=operations&operation=${t.id}`) } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+// « À traiter » : les alertes graves d'abord (le serveur les trie déjà), les informations seulement à la demande.
+const TODO_LIMIT = 6;
+const showInfo = ref(false);
+const showAllTodo = ref(false);
+const todo = computed(() => (data.value?.alerts ?? []).filter((a) => showInfo.value || a.severity !== "info"));
+const todoShown = computed(() => (showAllTodo.value ? todo.value : todo.value.slice(0, TODO_LIMIT)));
 
 const alertCounts = computed(() => {
   const c = { critical: 0, warning: 0, info: 0 };
@@ -220,6 +265,25 @@ const alertCounts = computed(() => {
         />
         <StatCard label="Mises à jour" icon="arrows-rotate" :value="data.security.updates.available" hint="d'images disponibles" :tone="data.security.updates.available ? 'warn' : 'ok'" to="/images" />
       </section>
+
+      <PanelCard title="À traiter" icon="triangle-exclamation" :subtitle="todo.length ? `${alertCounts.critical} critique(s) · ${alertCounts.warning} attention` : undefined">
+        <template #actions>
+          <label v-if="alertCounts.info" class="flex items-center gap-1.5 text-xs text-slate-600"><input v-model="showInfo" type="checkbox" /> Afficher les informations ({{ alertCounts.info }})</label>
+        </template>
+        <p v-if="todo.length === 0" class="flex items-center gap-2 text-sm text-green-700"><FaIcon :icon="['fas', 'circle-check']" /> Rien à traiter : aucune alerte active.</p>
+        <ul v-else class="divide-y divide-slate-200">
+          <li v-for="a in todoShown" :key="a.id" class="flex flex-wrap items-start gap-3 py-3 text-sm first:pt-0 last:pb-0">
+            <span class="mt-0.5 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs" :class="sev[a.severity].cls"><FaIcon :icon="['fas', sev[a.severity].icon]" />{{ sev[a.severity].text }}</span>
+            <div class="min-w-0 flex-1">
+              <p class="font-medium">{{ a.title }}</p>
+              <p class="text-slate-600">{{ a.message }}</p>
+              <p v-if="a.since" class="mt-0.5 text-xs text-slate-500" :title="fmtDate(a.since)">depuis {{ ago(a.since, now).replace("il y a ", "") }}</p>
+            </div>
+            <RouterLink v-if="actionFor(a)" :to="(actionFor(a) as AlertAction).to" class="shrink-0 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-100">{{ (actionFor(a) as AlertAction).label }}</RouterLink>
+          </li>
+        </ul>
+        <button v-if="todo.length > TODO_LIMIT" class="mt-3 text-sm underline" @click="showAllTodo = !showAllTodo">{{ showAllTodo ? "Réduire la liste" : `Voir les ${todo.length - TODO_LIMIT} autre(s)` }}</button>
+      </PanelCard>
 
       <section aria-label="Répartition" class="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
         <PanelCard title="Applications" icon="boxes-stacked" subtitle="Gérées et observées"><DonutChart title="Applications" center-label="applications" :items="stackItems" /></PanelCard>
@@ -293,23 +357,6 @@ const alertCounts = computed(() => {
           </PanelCard>
         </div>
       </section>
-
-      <PanelCard title="Alertes" icon="triangle-exclamation">
-        <p v-if="data.alerts.length === 0" class="flex items-center gap-2 text-sm text-green-700"><FaIcon :icon="['fas', 'circle-check']" /> Aucune alerte active.</p>
-        <ul v-else class="divide-y divide-slate-200">
-          <li v-for="a in data.alerts" :key="a.id" class="flex flex-wrap items-start gap-3 py-3 text-sm first:pt-0 last:pb-0">
-            <span class="mt-0.5 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs" :class="sev[a.severity].cls"><FaIcon :icon="['fas', sev[a.severity].icon]" />{{ sev[a.severity].text }}</span>
-            <div class="min-w-0 flex-1">
-              <p class="font-medium">
-                <RouterLink v-if="link(a)" :to="link(a) as string" class="underline">{{ a.title }}</RouterLink>
-                <template v-else>{{ a.title }}</template>
-              </p>
-              <p class="text-slate-600">{{ a.message }}</p>
-            </div>
-            <span v-if="a.since" class="text-xs text-slate-500" :title="fmtDate(a.since)">depuis {{ ago(a.since, now).replace("il y a ", "") }}</span>
-          </li>
-        </ul>
-      </PanelCard>
     </template>
   </div>
 </template>

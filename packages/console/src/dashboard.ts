@@ -103,7 +103,20 @@ export interface Alert {
   kind: string;
   title: string;
   message: string;
-  target: { type: "host" | "stack" | "container" | "backup" | "operation" | "image"; id: string; name: string };
+  target: {
+    type: "host" | "stack" | "container" | "backup" | "operation" | "image";
+    id: string;
+    name: string;
+    /** Pour ouvrir le bon diagnostic : hôte, projet Compose, application gérée et service concernés, si connus. */
+    hostId?: string;
+    project?: string | null;
+    stackId?: string | null;
+    service?: string | null;
+    /** Applications gérées qui utilisent l'image (alerte d'image). */
+    stacks?: string[];
+    /** Application d'une opération. */
+    stackName?: string;
+  };
   since: string | null;
 }
 
@@ -220,7 +233,7 @@ export function deriveAlerts(ctx: AlertContext): Alert[] {
 
   for (const { container: c, hostId, stackId } of ctx.containers) {
     const name = c.composeService ?? c.names[0] ?? c.id.slice(0, 12);
-    const target = { type: "container" as const, id: c.id, name };
+    const target = { type: "container" as const, id: c.id, name, hostId, project: c.composeProject ?? null, stackId, service: c.composeService ?? null };
     if (c.health === "unhealthy" && c.state === "running") {
       alerts.push({
         id: `container_unhealthy:${hostId}:${c.id}`,
@@ -272,7 +285,7 @@ export function deriveAlerts(ctx: AlertContext): Alert[] {
   }
 
   for (const img of ctx.security?.images ?? []) {
-    const target = { type: "image" as const, id: img.imageId, name: img.label };
+    const target = { type: "image" as const, id: img.imageId, name: img.label, stacks: img.stacks };
     if (img.counts && img.counts.critical > 0) {
       alerts.push({
         id: `vulnerabilities_critical:${img.imageId}`,
@@ -339,7 +352,7 @@ export function deriveAlerts(ctx: AlertContext): Alert[] {
       kind: "operation_unknown",
       title: `Résultat d'opération inconnu : ${o.stackName}`,
       message: `L'opération « ${o.type} » a perdu la connexion à l'agent : vérifiez l'état réel avant de relancer. Rien n'a été rejoué.`,
-      target: { type: "operation", id: o.id, name: `${o.type} ${o.stackName}` },
+      target: { type: "operation", id: o.id, name: `${o.type} ${o.stackName}`, stackName: o.stackName },
       since: o.finishedAt?.toISOString() ?? null,
     });
   }

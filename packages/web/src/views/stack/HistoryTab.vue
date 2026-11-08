@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { api, describeError, fmtDate, type RevisionDetail, type RevisionSummary, type StackDetail, type VariableView } from "../../api";
+import { api, fmtDate, type RevisionDetail, type RevisionSummary, type StackDetail, type VariableView } from "../../api";
+import DeployDialog from "../../components/DeployDialog.vue";
 import DiffView from "../../components/DiffView.vue";
 import OperationLog from "../../components/OperationLog.vue";
 
@@ -33,18 +34,10 @@ const changedFiles = computed(() => {
   return [...names].sort().filter((n) => (selected.value?.files[n] ?? null) !== (previous.value?.files[n] ?? null));
 });
 
-async function deploy(n: number) {
-  if (!confirm(`Déployer la révision ${n} ? C'est la configuration de cette révision qui sera appliquée (les données ne sont pas restaurées).`)) return;
-  try {
-    const r = await api<{ operationId: string }>(`/api/v1/stacks/${props.stack.id}/deploy`, {
-      method: "POST",
-      body: JSON.stringify({ revision: n }),
-      headers: { "Idempotency-Key": crypto.randomUUID() },
-    });
-    operationId.value = r.operationId;
-  } catch (err) {
-    error.value = describeError(err);
-  }
+const deployTarget = ref<number | null>(null);
+function onStarted(id: string) {
+  deployTarget.value = null;
+  operationId.value = id;
 }
 
 onMounted(load);
@@ -72,7 +65,7 @@ onMounted(load);
       <template v-if="selected">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-semibold">Révision {{ selected.revision }} — différences avec {{ previous ? "r" + previous.revision : "le début" }}</h2>
-          <button :disabled="stack.hostPresence === 'offline'" class="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50" @click="deploy(selected.revision)">
+          <button :disabled="stack.hostPresence === 'offline'" class="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50" @click="deployTarget = selected.revision">
             Déployer cette révision
           </button>
         </div>
@@ -90,7 +83,8 @@ onMounted(load);
         </div>
       </template>
       <p v-else class="text-sm text-slate-500">Sélectionnez une révision pour voir ce qu'elle a changé.</p>
-      <OperationLog v-if="operationId" :operation-id="operationId" @finished="emit('changed')" />
+      <DeployDialog v-if="deployTarget !== null" :stack="stack" :target="deployTarget" @close="deployTarget = null" @started="onStarted" />
+      <OperationLog v-if="operationId" :operation-id="operationId" :stack-id="stack.id" @finished="emit('changed')" />
     </section>
   </div>
 </template>

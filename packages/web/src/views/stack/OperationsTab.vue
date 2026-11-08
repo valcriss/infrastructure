@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
 import { api, fmtDate, type OperationView, type StackDetail } from "../../api";
 import OperationLog from "../../components/OperationLog.vue";
 
 const props = defineProps<{ stack: StackDetail }>();
 const operations = ref<Omit<OperationView, "log">[]>([]);
-const selected = ref("");
+// ?operation=<id> présélectionne une opération (lien depuis la liste des applications ou le tableau de bord).
+const selected = ref(String(useRoute().query.operation ?? ""));
 let timer: number | undefined;
 
 const labels: Record<string, string> = { pending: "en attente", running: "en cours", succeeded: "réussie", failed: "échouée", unknown: "résultat inconnu" };

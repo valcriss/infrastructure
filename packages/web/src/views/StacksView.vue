@@ -10,6 +10,7 @@ const apps = ref<Application[]>([]);
 const loading = ref(true);
 const error = ref("");
 const notice = ref("");
+const noticeLink = ref("");
 const busy = ref<string | null>(null);
 const now = ref(Date.now());
 let timer: number | undefined;
@@ -60,13 +61,20 @@ const STATUS: Record<StackStatus, { text: string; cls: string; dot: string; icon
 async function act(a: Application, action: "start" | "stop" | "deploy") {
   if (!a.stackId) return;
   const label = { start: "démarrer", stop: "arrêter", deploy: "déployer" }[action];
-  if (!window.confirm(`Voulez-vous ${label} « ${a.name} » sur ${a.hostName} ?`)) return;
+  const rev = action === "deploy" ? ` (révision ${a.currentRevision}${a.deployedRevision !== null ? `, en service : ${a.deployedRevision}` : ", jamais déployée"})` : "";
+  if (!window.confirm(`Voulez-vous ${label} « ${a.name} » sur ${a.hostName}${rev} ?`)) return;
   busy.value = a.stackId + action;
   notice.value = "";
+  noticeLink.value = "";
   try {
     const body = action === "deploy" ? { revision: a.currentRevision, pullImages: false } : undefined;
-    await api(`/api/v1/stacks/${a.stackId}/${action}`, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
-    notice.value = `Opération « ${label} » lancée pour ${a.name} : suivez-la dans l'onglet Historique de l'application (section Opérations).`;
+    const r = await api<{ operationId?: string }>(`/api/v1/stacks/${a.stackId}/${action}`, {
+      method: "POST",
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    });
+    notice.value = `Opération « ${label} » lancée pour ${a.name}.`;
+    if (r?.operationId) noticeLink.value = `/stacks/${a.stackId}?tab=history&section=operations&operation=${r.operationId}`;
     window.setTimeout(() => void load(), 2500);
   } catch (err) {
     error.value = describeError(err);
@@ -144,7 +152,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
     </div>
 
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
-    <p v-if="notice" role="status" class="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">{{ notice }}</p>
+    <p v-if="notice" role="status" class="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">{{ notice }} <RouterLink v-if="noticeLink" :to="noticeLink" class="font-medium underline">Suivre l'opération</RouterLink></p>
     <p v-if="loading" class="text-slate-500">Chargement…</p>
     <p v-else-if="apps.length === 0" class="text-slate-500">Aucune application. Créez-en une depuis un fichier Compose.</p>
     <p v-else-if="visible.length === 0" class="text-slate-500">Aucune application ne correspond à ces filtres.</p>

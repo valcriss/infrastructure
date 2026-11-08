@@ -57,6 +57,7 @@ import { ToolProbeService, registerToolRoutes } from "./tools-routes.js";
 import { registerAcceptanceRoutes } from "./acceptance-routes.js";
 import { registerDisplayRoutes } from "./display.js";
 import { registerExportRoutes } from "./export-routes.js";
+import { registerComposeAnalyzeRoutes } from "./compose-analyze-routes.js";
 import { registerVariableExtractRoutes } from "./variable-extract-routes.js";
 import { registerCustomImageRoutes } from "./custom-image-routes.js";
 import { CandidateScans } from "./candidates.js";
@@ -485,6 +486,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerDisplayRoutes(app, { pool, auth });
   registerExportRoutes(app, { pool, auth, limiter, config });
   registerVariableExtractRoutes(app, { pool, auth });
+  registerComposeAnalyzeRoutes(app, { pool, auth });
   registerCustomImageRoutes(app, { pool, auth });
   registerCandidateRoutes(app, { pool, auth, candidates, scans, watcher, registryClient });
   registerTerminalRoutes(app, { pool, auth, service: terminals, hasFactor: async (id) => ((await pool.query("SELECT 1 FROM passkeys WHERE user_id = $1", [id])).rowCount ?? 0) > 0 });

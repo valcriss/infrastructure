@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
+import { useRoute } from "vue-router";
 import type { Container, ProjectRef } from "../../api";
 
 // `project` : projet observé (non géré) ; on choisit alors un conteneur précis au lieu de « tous les services ».
 const props = defineProps<{ stack: { id: string; containers: Container[] }; project?: ProjectRef }>();
 
 const MAX_LINES = 5000;
-const service = ref("");
+// Un lien d'alerte peut présélectionner le service (?service=…) ou, pour un projet observé, le conteneur (?container=…).
+const route = useRoute();
+const service = ref(String(props.project ? (route.query.container ?? "") : (route.query.service ?? "")));
 const tail = ref(100);
 const filter = ref("");
 const follow = ref(true);
@@ -22,7 +25,7 @@ const choices = computed(() =>
     ? props.stack.containers.map((c) => ({ value: c.id, label: c.composeService ? `${c.composeService} (${c.names[0] ?? c.id.slice(0, 12)})` : (c.names[0] ?? c.id.slice(0, 12)) }))
     : services.value.map((s) => ({ value: s, label: s })),
 );
-if (props.project) service.value = props.stack.containers[0]?.id ?? "";
+if (props.project && !service.value) service.value = props.stack.containers[0]?.id ?? "";
 const shown = computed(() => {
   const f = filter.value.trim().toLowerCase();
   return f ? lines.value.filter((l) => l.toLowerCase().includes(f)) : lines.value;

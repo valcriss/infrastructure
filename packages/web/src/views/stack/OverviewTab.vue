@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { api, describeError, fmtDate, type Container, type StackDetail } from "../../api";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
+import DeployDialog from "../../components/DeployDialog.vue";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
+import RevisionDiff from "../../components/RevisionDiff.vue";
 import { useSession } from "../../stores/session";
 
 const props = defineProps<{ stack: StackDetail }>();
 const session = useSession();
 const emit = defineEmits<{ changed: [] }>();
 
-const pull = ref(false);
-const force = ref(false);
 const operationId = ref("");
 const error = ref("");
 const busy = ref(false);
@@ -19,16 +20,45 @@ const hcTarget = ref<Container | null>(null);
 const imageTarget = ref<Container | null>(null);
 const hcInfo = ref("");
 const probeOpen = ref<string | null>(null);
+const showDiff = ref(false);
+/** Révision confirmée dans la boîte de déploiement (figée à l'ouverture) ; null = boîte fermée. */
+const deployTarget = ref<number | null>(null);
 
 /** Texte de l'infobulle : raison du dernier test, ou à défaut une indication générale. */
 function probeTitle(c: Container): string {
   const p = c.healthProbe;
   if (!p) return "Détail du test indisponible (inventaire pas encore rafraîchi).";
-  const out = p.output.replace(/s+/g, " ").trim().slice(0, 300);
-  return `Code de sortie ${p.exitCode}${p.at ? " · " + fmtDate(p.at) : ""}
-${out || "(aucune sortie)"}
-Cliquer pour le détail`;
+  const out = p.output.replace(/\s+/g, " ").trim().slice(0, 300);
+  return `Code de sortie ${p.exitCode}${p.at ? " · " + fmtDate(p.at) : ""}\n${out || "(aucune sortie)"}\nCliquer pour le détail`;
 }
+
+// --- État de la stack : en service, prête à déployer ----------------------------------------------------
+const deployed = computed(() => props.stack.deployedRevision);
+const state = computed<"first" | "pending" | "current">(() => (deployed.value === null ? "first" : deployed.value === props.stack.currentRevision ? "current" : "pending"));
+const deployLabel = computed(() => {
+  const r = props.stack.currentRevision;
+  if (state.value === "first") return `Premier déploiement (révision ${r})`;
+  if (state.value === "pending") return `Déployer la révision ${r}`;
+  return `Redéployer la révision ${r} (en service)`;
+});
+const offline = computed(() => props.stack.hostPresence === "offline");
+/** Pourquoi une action est indisponible, pour l'expliquer plutôt que de griser sans rien dire. */
+const blocked = computed(() => {
+  if (!session.canOperate) return "Votre rôle (lecteur) ne permet pas de lancer des actions.";
+  if (offline.value) return "L'agent de l'hôte est hors ligne : aucune action ne peut être lancée.";
+  return "";
+});
+const neverDeployed = computed(() => deployed.value === null);
+
+// « Préparer le premier déploiement » (après création) ouvre directement la confirmation, sans lancer quoi que ce soit.
+const route = useRoute();
+const router = useRouter();
+onMounted(() => {
+  if (route.query.deploy !== "1") return;
+  const { deploy: _drop, ...rest } = route.query;
+  void router.replace({ query: rest });
+  if (!blocked.value) deployTarget.value = props.stack.currentRevision;
+});
 
 function onHcSaved(revision: number) {
   hcTarget.value = null;
@@ -42,16 +72,23 @@ function onImageSaved(revision: number) {
   emit("changed");
 }
 
-async function run(action: "deploy" | "stop" | "start") {
+function onDeployStarted(id: string) {
+  deployTarget.value = null;
+  hcInfo.value = "";
+  error.value = "";
+  operationId.value = id;
+}
+
+/** Démarrer et arrêter agissent sur la dernière configuration déployée : pas de choix de révision. */
+async function run(action: "stop" | "start") {
   error.value = "";
   hcInfo.value = "";
   if (action === "stop" && !confirm(`Arrêter la stack « ${props.stack.name} » ? Les conteneurs sont stoppés, les volumes et la configuration sont conservés.`)) return;
   busy.value = true;
   try {
-    const body = action === "deploy" ? { pullImages: pull.value, forceRecreate: force.value } : {};
     const r = await api<{ operationId: string }>(`/api/v1/stacks/${props.stack.id}/${action}`, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify({}),
       headers: { "Idempotency-Key": crypto.randomUUID() },
     });
     operationId.value = r.operationId;
@@ -67,25 +104,62 @@ async function run(action: "deploy" | "stop" | "start") {
   <div class="space-y-6">
     <section class="rounded-lg border border-slate-200 bg-white p-4">
       <h2 class="font-semibold">Actions</h2>
-      <p v-if="stack.hostPresence === 'offline'" class="mt-2 text-sm text-amber-700">
-        L'agent de l'hôte est hors ligne : l'état affiché est la dernière observation, et aucune action ne peut être lancée.
+
+      <dl class="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
+        <dt class="text-slate-500">Application</dt><dd class="font-medium">{{ stack.name }}</dd>
+        <dt class="text-slate-500">Hôte</dt>
+        <dd>
+          <RouterLink to="/hosts" class="underline">{{ stack.hostName }}</RouterLink>
+          <span class="ml-1" :class="offline ? 'text-red-700' : 'text-green-700'">({{ offline ? "hors ligne" : "en ligne" }})</span>
+        </dd>
+        <dt class="text-slate-500">En service</dt>
+        <dd><template v-if="deployed !== null">révision <strong>{{ deployed }}</strong></template><span v-else class="text-slate-600">aucune : jamais déployée</span></dd>
+        <dt class="text-slate-500">Prête à déployer</dt>
+        <dd>
+          <template v-if="state === 'pending'">
+            révision <strong>{{ stack.currentRevision }}</strong>
+            <button class="ml-2 underline" :aria-expanded="showDiff" @click="showDiff = !showDiff">{{ showDiff ? "Masquer" : "Voir" }} les différences</button>
+          </template>
+          <template v-else-if="state === 'first'">révision <strong>{{ stack.currentRevision }}</strong></template>
+          <span v-else class="text-slate-600">rien : la révision {{ stack.currentRevision }} est déjà en service</span>
+        </dd>
+      </dl>
+      <div v-if="showDiff && state === 'pending'" class="mt-3 max-h-96 overflow-auto rounded border border-slate-200 p-3">
+        <RevisionDiff :stack-id="stack.id" :from="deployed" :to="stack.currentRevision" />
+      </div>
+
+      <p v-if="blocked" role="status" class="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        {{ blocked }}
+        <template v-if="offline">L'état affiché est la dernière observation. <RouterLink to="/hosts" class="underline">Voir l'hôte</RouterLink></template>
       </p>
+
       <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
-        <button :disabled="busy || !session.canOperate || stack.hostPresence === 'offline'" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="run('deploy')">
-          <template v-if="stack.deployedRevision === stack.currentRevision">Redéployer la révision {{ stack.currentRevision }} (active)</template>
-          <template v-else>Déployer la révision {{ stack.currentRevision }}</template>
-        </button>
-        <label class="flex items-center gap-1"><input v-model="pull" type="checkbox" /> Télécharger les images</label>
-        <label class="flex items-center gap-1"><input v-model="force" type="checkbox" /> Forcer la recréation</label>
-        <span class="mx-2 text-slate-300">|</span>
-        <button :disabled="busy || !session.canOperate || stack.hostPresence === 'offline'" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" @click="run('start')">Démarrer</button>
-        <button :disabled="busy || !session.canOperate || stack.hostPresence === 'offline'" class="rounded border border-red-300 px-3 py-2 text-red-700 hover:bg-red-50 disabled:opacity-50" @click="run('stop')">Arrêter</button>
+        <button :disabled="busy || !!blocked" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="deployTarget = stack.currentRevision">{{ deployLabel }}</button>
+        <span class="mx-1 text-slate-300">|</span>
+        <button
+          :disabled="busy || !!blocked || neverDeployed"
+          :title="neverDeployed ? 'Rien n\'a été déployé : faites d\'abord un premier déploiement.' : `Relance la dernière configuration déployée (révision ${deployed})`"
+          class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50"
+          @click="run('start')"
+        >
+Démarrer
+</button>
+        <button
+          :disabled="busy || !!blocked || neverDeployed"
+          :title="neverDeployed ? 'Rien n\'a été déployé : il n\'y a rien à arrêter.' : 'Arrête les conteneurs (volumes et configuration conservés)'"
+          class="rounded border border-red-300 px-3 py-2 text-red-700 hover:bg-red-50 disabled:opacity-50"
+          @click="run('stop')"
+        >
+Arrêter
+</button>
       </div>
       <p class="mt-2 text-xs text-slate-500">
-        « Démarrer » relance la dernière configuration déployée ; un brouillon enregistré n'est appliqué que par « Déployer ».
+        « Démarrer » relance la dernière configuration déployée ; un brouillon enregistré n'est appliqué que par le déploiement. Le déploiement demande confirmation de la révision exacte et propose des options avancées (téléchargement des images, recréation forcée).
       </p>
       <p v-if="error" role="alert" class="mt-2 text-sm text-red-700">{{ error }}</p>
     </section>
+
+    <DeployDialog v-if="deployTarget !== null" :stack="stack" :target="deployTarget" @close="deployTarget = null" @started="onDeployStarted" />
 
     <p v-if="hcInfo" role="status" class="text-sm text-green-700">{{ hcInfo }}</p>
     <HealthcheckDialog
@@ -110,7 +184,7 @@ async function run(action: "deploy" | "stop" | "start") {
       @saved="onImageSaved"
     />
 
-    <OperationLog v-if="operationId" :operation-id="operationId" @finished="emit('changed')" />
+    <OperationLog v-if="operationId" :operation-id="operationId" :stack-id="stack.id" @finished="emit('changed')" />
 
     <section class="rounded-lg border border-slate-200 bg-white">
       <h2 class="border-b border-slate-200 px-4 py-2 font-semibold">Conteneurs observés</h2>

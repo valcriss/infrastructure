@@ -232,7 +232,17 @@ export interface DashboardAlert {
   kind: string;
   title: string;
   message: string;
-  target: { type: "host" | "stack" | "container" | "backup" | "operation" | "image"; id: string; name: string };
+  target: {
+    type: "host" | "stack" | "container" | "backup" | "operation" | "image";
+    id: string;
+    name: string;
+    hostId?: string;
+    project?: string | null;
+    stackId?: string | null;
+    service?: string | null;
+    stacks?: string[];
+    stackName?: string;
+  };
   since: string | null;
 }
 

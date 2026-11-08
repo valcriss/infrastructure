@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { ApiError, ago, api, describeError, fmtDate, formatBytes, type Application, type Container } from "../api";
+import CopyButton from "../components/CopyButton.vue";
 import MeterBar from "../components/MeterBar.vue";
 import PanelCard from "../components/PanelCard.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
@@ -21,7 +22,8 @@ const containers = ref<Container[]>([]);
 const error = ref("");
 const info = ref("");
 const now = ref(Date.now());
-const tab = ref("overview");
+// ?tab=… ouvre directement un onglet (lien d'alerte du tableau de bord).
+const tab = ref(["overview", "security", "metrics", "logs", "terminal"].includes(String(route.query.tab)) ? String(route.query.tab) : "overview");
 const open = reactive<Record<string, boolean>>({});
 let timer: number | undefined;
 
@@ -138,11 +140,15 @@ async function scan(imageId: string, platform: string, ref: string) {
           </PanelCard>
           <PanelCard title="Origine Compose" icon="code-branch" subtitle="D'après les libellés Docker des conteneurs (chemins de l'hôte)" class="xl:col-span-2">
             <dl v-if="origin" class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-              <dt class="text-slate-500">Dossier du projet</dt><dd class="break-all font-mono text-xs">{{ origin.composeWorkingDir ?? "inconnu" }}</dd>
-              <dt class="text-slate-500">Fichier(s) Compose</dt><dd class="break-all font-mono text-xs">{{ origin.composeConfigFiles ?? "inconnu" }}</dd>
+              <dt class="text-slate-500">Dossier du projet</dt>
+              <dd class="break-all font-mono text-xs">{{ origin.composeWorkingDir ?? "inconnu" }}<CopyButton v-if="origin.composeWorkingDir" :text="origin.composeWorkingDir" label="Copier le dossier du projet" /></dd>
+              <dt class="font-medium text-slate-700">Compose d'origine</dt>
+              <dd class="break-all font-mono text-xs font-semibold">{{ origin.composeConfigFiles ?? "inconnu" }}<CopyButton v-if="origin.composeConfigFiles" :text="origin.composeConfigFiles" label="Copier le chemin du fichier Compose" /></dd>
             </dl>
             <p v-else class="text-sm text-slate-500">Ce projet n'indique pas l'emplacement de son fichier Compose.</p>
-            <p class="mt-3 text-xs text-slate-500">Le contenu de ce fichier n'est pas lu : il n'est pas visible par l'agent. Pour le gérer ici, copiez-le dans « Prendre en charge ».</p>
+            <p class="mt-3 text-xs text-slate-500">
+              Le contenu de ce fichier n'est pas lu : il n'est pas visible par l'agent. Ouvrez-le sur l'hôte (chemins ci-dessus), puis collez-le dans « Prendre en charge » : c'est lui, et non un squelette reconstruit, qui doit servir de base.
+            </p>
           </PanelCard>
         </div>
 
