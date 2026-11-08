@@ -26,7 +26,7 @@ onMounted(async () => {
 
 watch(
   () => props.option,
-  (o) => chart?.setOption(asOption(o)),
+  (o) => chart?.setOption(asOption(o), true),
   { deep: true },
 );
 

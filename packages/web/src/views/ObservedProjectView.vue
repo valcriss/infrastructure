@@ -193,7 +193,7 @@ async function scan(imageId: string, platform: string, ref: string) {
 
       <template v-else-if="tab === 'security'">
         <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
-        <PanelCard title="Évolution des CVE" icon="chart-line" subtitle="Par gravité, selon le seuil des paramètres ; au choix pour toute l'application ou un service">
+        <PanelCard title="Évolution des CVE" icon="chart-line" subtitle="Par gravité, filtrée selon le seuil des paramètres ou non ; pour toute l'application ou un service">
           <CveHistoryChart :host-id="app.hostId" :project="app.name" :services="app.services" />
         </PanelCard>
         <PanelCard title="Images du projet" icon="layer-group" subtitle="Vulnérabilités selon le seuil de gravité des paramètres de l'application">

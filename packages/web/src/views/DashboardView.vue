@@ -19,16 +19,22 @@ import DonutChart from "../charts/DonutChart.vue";
 import { TONE } from "../charts/palette";
 import CveHistoryChart from "../components/CveHistoryChart.vue";
 import MeterBar from "../components/MeterBar.vue";
+import RangeToggle from "../components/RangeToggle.vue";
 import PanelCard from "../components/PanelCard.vue";
 import StatCard from "../components/StatCard.vue";
 
 const data = ref<Dashboard | null>(null);
-const overview = ref<OverviewResult | null>(null);
+const ovCpu = ref<OverviewResult | null>(null);
+const ovMem = ref<OverviewResult | null>(null);
+const ovNet = ref<OverviewResult | null>(null);
 const applications = ref<Application[]>([]);
 const error = ref("");
 const hostId = ref("");
 const stackId = ref("");
-const range = ref<OverviewRange>("1h");
+// Chaque carte de ressources a sa propre période ; le Top 5 suit celle de sa carte jumelle.
+const cpuRange = ref<OverviewRange>("1h");
+const memRange = ref<OverviewRange>("1h");
+const netRange = ref<OverviewRange>("1h");
 const now = ref(Date.now());
 let timer: number | undefined;
 let overviewTimer: number | undefined;
@@ -53,20 +59,26 @@ async function load() {
   }
 }
 
-async function loadOverview() {
+async function loadOne(target: typeof ovCpu, range: OverviewRange) {
   try {
-    overview.value = await api<OverviewResult>(`/api/v1/dashboard/overview?range=${range.value}`);
+    target.value = await api<OverviewResult>(`/api/v1/dashboard/overview?range=${range}`);
   } catch {
     /* les graphiques de ressources restent sur leur dernière valeur */
   }
 }
+const loadCpu = () => loadOne(ovCpu, cpuRange.value);
+const loadMem = () => loadOne(ovMem, memRange.value);
+const loadNet = () => loadOne(ovNet, netRange.value);
+const loadOverview = () => Promise.all([loadCpu(), loadMem(), loadNet()]);
 
 const stacksForHost = computed(() => allStacks.value.filter((s) => !hostId.value || s.hostId === hostId.value));
 watch(hostId, () => {
   if (stackId.value && !stacksForHost.value.some((s) => s.id === stackId.value)) stackId.value = "";
 });
 watch([hostId, stackId], () => void load());
-watch(range, () => void loadOverview());
+watch(cpuRange, () => void loadCpu());
+watch(memRange, () => void loadMem());
+watch(netRange, () => void loadNet());
 
 onMounted(() => {
   void load();
@@ -151,6 +163,7 @@ const imageItems = computed(() => {
 });
 
 // Répartition des CVE par gravité : avec le seuil des paramètres (« filtered »), ou sans (« all »).
+const cveMode = ref<"filtered" | "all">("filtered");
 const vulnMode = ref<"filtered" | "all">("filtered");
 const vulnCounts = computed<VulnCounts | null>(() => data.value?.security.vulns[vulnMode.value] ?? null);
 const vulnItems = computed(() => [
@@ -164,12 +177,11 @@ const vulnItems = computed(() => [
 // --- Ressources -------------------------------------------------------------------------------------
 
 const ts = (iso: string): number => Date.parse(iso);
-const totals = computed(() => overview.value?.totals.points ?? []);
-const cpuSeries = computed(() => [{ name: "CPU des conteneurs", color: TONE.accent, points: totals.value.map((p) => ({ t: ts(p.t), v: p.cpu })) }]);
-const memSeries = computed(() => [{ name: "Mémoire des conteneurs", color: TONE.violet, points: totals.value.map((p) => ({ t: ts(p.t), v: p.mem })) }]);
+const cpuSeries = computed(() => [{ name: "CPU des conteneurs", color: TONE.accent, points: (ovCpu.value?.totals.points ?? []).map((p) => ({ t: ts(p.t), v: p.cpu })) }]);
+const memSeries = computed(() => [{ name: "Mémoire des conteneurs", color: TONE.violet, points: (ovMem.value?.totals.points ?? []).map((p) => ({ t: ts(p.t), v: p.mem })) }]);
 const netSeries = computed(() => [
-  { name: "Reçu", color: TONE.ok, points: totals.value.map((p) => ({ t: ts(p.t), v: p.rxBps })) },
-  { name: "Émis", color: TONE.warn, points: totals.value.map((p) => ({ t: ts(p.t), v: p.txBps })) },
+  { name: "Reçu", color: TONE.ok, points: (ovNet.value?.totals.points ?? []).map((p) => ({ t: ts(p.t), v: p.rxBps })) },
+  { name: "Émis", color: TONE.warn, points: (ovNet.value?.totals.points ?? []).map((p) => ({ t: ts(p.t), v: p.txBps })) },
 ]);
 
 const pct = (used: number | null | undefined, total: number | null | undefined): number | null =>
@@ -325,33 +337,29 @@ const alertCounts = computed(() => {
       </section>
 
       <section aria-label="Ressources" class="space-y-4">
-        <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Ressources</h2>
-          <div class="inline-flex rounded-md border border-slate-300 bg-white p-0.5 text-sm" role="group" aria-label="Période">
-            <button
-              v-for="r in RANGES"
-              :key="r.value"
-              :aria-pressed="range === r.value"
-              :class="['rounded px-3 py-1', range === r.value ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100']"
-              @click="range = r.value"
-            >
-{{ r.label }}
-</button>
-          </div>
-        </div>
+        <h2 class="text-lg font-semibold">Ressources</h2>
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <PanelCard title="CPU des conteneurs" icon="microchip" subtitle="100 % = un cœur complet"><AreaChart title="CPU des conteneurs" unit="percent" :series="cpuSeries" /></PanelCard>
-          <PanelCard title="Mémoire des conteneurs" icon="memory"><AreaChart title="Mémoire des conteneurs" unit="bytes" :series="memSeries" /></PanelCard>
-          <PanelCard title="Réseau" icon="network-wired"><AreaChart title="Réseau" unit="bps" :series="netSeries" /></PanelCard>
-          <PanelCard title="Évolution des CVE" icon="shield-halved" :subtitle="vulnMode === 'filtered' ? 'Par gravité, selon le seuil des paramètres' : 'Par gravité, toutes les gravités'">
-            <CveHistoryChart :host-id="hostId || undefined" :stack-id="stackId || undefined" :mode="vulnMode" />
+          <PanelCard title="CPU des conteneurs" icon="microchip" subtitle="100 % = un cœur complet">
+            <template #actions><RangeToggle v-model="cpuRange" :options="RANGES" label="Période du CPU" /></template>
+            <AreaChart title="CPU des conteneurs" unit="percent" :series="cpuSeries" />
+          </PanelCard>
+          <PanelCard title="Mémoire des conteneurs" icon="memory">
+            <template #actions><RangeToggle v-model="memRange" :options="RANGES" label="Période de la mémoire" /></template>
+            <AreaChart title="Mémoire des conteneurs" unit="bytes" :series="memSeries" />
+          </PanelCard>
+          <PanelCard title="Réseau" icon="network-wired">
+            <template #actions><RangeToggle v-model="netRange" :options="RANGES" label="Période du réseau" /></template>
+            <AreaChart title="Réseau" unit="bps" :series="netSeries" />
+          </PanelCard>
+          <PanelCard title="Évolution des CVE" icon="shield-halved" :subtitle="cveMode === 'filtered' ? 'Par gravité, selon le seuil des paramètres' : 'Par gravité, toutes les gravités'">
+            <CveHistoryChart :host-id="hostId || undefined" :stack-id="stackId || undefined" @update:mode="cveMode = $event" />
           </PanelCard>
         </div>
         <div class="grid gap-4 xl:grid-cols-4">
           <PanelCard title="Machines hôtes" icon="server" subtitle="Dernier relevé">
-            <p v-if="!overview || overview.hosts.length === 0" class="text-sm text-slate-500">Aucun hôte.</p>
+            <p v-if="!ovCpu || ovCpu.hosts.length === 0" class="text-sm text-slate-500">Aucun hôte.</p>
             <ul v-else class="space-y-5">
-              <li v-for="h in overview.hosts" :key="h.hostId" class="space-y-2">
+              <li v-for="h in ovCpu.hosts" :key="h.hostId" class="space-y-2">
                 <p class="text-sm font-medium">{{ h.name }}<span v-if="h.cpus" class="ml-2 text-xs font-normal text-slate-500">{{ h.cpus }} cœur(s)</span></p>
                 <template v-if="h.latest">
                   <MeterBar label="CPU" icon="microchip" :percent="h.latest.cpuPercent" />
@@ -362,20 +370,20 @@ const alertCounts = computed(() => {
               </li>
             </ul>
           </PanelCard>
-          <PanelCard title="Top 5 CPU" icon="microchip" subtitle="Applications les plus gourmandes sur la période">
-            <p v-if="!overview || overview.top.cpu.length === 0" class="text-sm text-slate-500">Aucune mesure.</p>
+          <PanelCard title="Top 5 CPU" icon="microchip" subtitle="Les plus gourmandes, sur la période de la carte CPU">
+            <p v-if="!ovCpu || ovCpu.top.cpu.length === 0" class="text-sm text-slate-500">Aucune mesure.</p>
             <ol v-else class="space-y-2 text-sm">
-              <li v-for="(a, i) in overview.top.cpu" :key="a.project + a.hostName" class="flex items-center gap-3">
+              <li v-for="(a, i) in ovCpu.top.cpu" :key="a.project + a.hostName" class="flex items-center gap-3">
                 <span class="w-5 text-center text-xs text-slate-400">{{ i + 1 }}</span>
                 <span class="min-w-0 flex-1 truncate">{{ a.project }}<span class="ml-1 text-xs text-slate-400">{{ a.hostName }}</span></span>
                 <span class="tabular-nums">{{ (a.value / 100).toFixed(2) }} cœur(s)</span>
               </li>
             </ol>
           </PanelCard>
-          <PanelCard title="Top 5 mémoire" icon="memory" subtitle="Applications les plus gourmandes sur la période">
-            <p v-if="!overview || overview.top.mem.length === 0" class="text-sm text-slate-500">Aucune mesure.</p>
+          <PanelCard title="Top 5 mémoire" icon="memory" subtitle="Les plus gourmandes, sur la période de la carte Mémoire">
+            <p v-if="!ovMem || ovMem.top.mem.length === 0" class="text-sm text-slate-500">Aucune mesure.</p>
             <ol v-else class="space-y-2 text-sm">
-              <li v-for="(a, i) in overview.top.mem" :key="a.project + a.hostName" class="flex items-center gap-3">
+              <li v-for="(a, i) in ovMem.top.mem" :key="a.project + a.hostName" class="flex items-center gap-3">
                 <span class="w-5 text-center text-xs text-slate-400">{{ i + 1 }}</span>
                 <span class="min-w-0 flex-1 truncate">{{ a.project }}<span class="ml-1 text-xs text-slate-400">{{ a.hostName }}</span></span>
                 <span class="tabular-nums">{{ formatBytes(a.value) }}</span>

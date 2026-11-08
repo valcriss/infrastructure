@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, fmtDate } from "../api";
 import BaseChart from "../charts/BaseChart.vue";
 import { TONE, useChartColors } from "../charts/palette";
+import RangeToggle from "./RangeToggle.vue";
 
 // Évolution du nombre de CVE par gravité (aires empilées), pour l'ensemble du tableau de bord, une application ou un de ses services.
 const props = defineProps<{
@@ -12,15 +13,18 @@ const props = defineProps<{
   project?: string;
   /** Services proposés dans la liste (application) ; vide : pas de choix. */
   services?: string[];
-  /** « filtered » : seuil de gravité des paramètres ; « all » : toutes les gravités. */
-  mode?: "filtered" | "all";
   height?: number;
 }>();
 
 interface Point { t: string; critical: number; high: number; medium: number; low: number; unknown: number }
 interface History { days: number; stepSec: number; firstScanAt: string | null; points: Point[] }
 
+const emit = defineEmits<{ "update:mode": ["filtered" | "all"] }>();
+// « filtered » : seuil de gravité des paramètres ; « all » : toutes les gravités. Choix propre à ce graphique.
+const mode = ref<"filtered" | "all">("filtered");
 const DAYS = [7, 30, 90] as const;
+const DAY_OPTIONS = DAYS.map((d) => ({ value: d, label: `${d} j` }));
+const MODE_OPTIONS = [{ value: "filtered" as const, label: "Filtrées" }, { value: "all" as const, label: "Toutes" }];
 const days = ref<(typeof DAYS)[number]>(30);
 const service = ref("");
 const data = ref<History | null>(null);
@@ -31,7 +35,7 @@ let seq = 0;
 
 async function load() {
   const my = ++seq;
-  const q = new URLSearchParams({ days: String(days.value), mode: props.mode ?? "filtered" });
+  const q = new URLSearchParams({ days: String(days.value), mode: mode.value });
   if (props.hostId) q.set("hostId", props.hostId);
   if (props.stackId) q.set("stackId", props.stackId);
   if (props.project) q.set("project", props.project);
@@ -45,7 +49,8 @@ async function load() {
     if (my === seq) error.value = "Historique indisponible.";
   }
 }
-watch([days, service, () => props.mode, () => props.hostId, () => props.stackId, () => props.project], () => void load());
+watch(mode, (m) => emit("update:mode", m));
+watch([days, service, mode, () => props.hostId, () => props.stackId, () => props.project], () => void load());
 // Un changement d'application remet le choix du service à zéro.
 watch([() => props.stackId, () => props.project], () => (service.value = ""));
 onMounted(() => {
@@ -81,15 +86,18 @@ const option = computed(() => {
     },
     xAxis: { type: "time", axisLine: { lineStyle: { color: colors.value.grid } }, axisLabel: { color: colors.value.muted, hideOverlap: true }, splitLine: { show: false } },
     yAxis: { type: "value", min: 0, axisLabel: { color: colors.value.muted }, splitLine: { lineStyle: { color: colors.value.grid, type: "dashed" } } },
-    series: SEVERITIES.map((s) => ({
+    // Une gravité absente sur toute la période (ex. inconnues masquées par les paramètres) n'est pas tracée : sa ligne
+    // grise viendrait se superposer au bord de la gravité précédente et brouiller la lecture.
+    series: SEVERITIES.filter((s) => pts.some((p) => p[s.key] > 0)).map((s) => ({
       name: s.name,
       type: "line",
       stack: "cve",
       smooth: false,
       showSymbol: false,
-      lineStyle: { width: 1, color: s.color },
+      // Pas de contour : dans un empilement, la ligne d'une série se dessine sur le bord de celle du dessous.
+      lineStyle: { width: 0 },
       itemStyle: { color: s.color },
-      areaStyle: { color: s.color, opacity: 0.55 },
+      areaStyle: { color: s.color, opacity: 0.7 },
       data: pts.map((p) => [Date.parse(p.t), p[s.key]]),
     })),
   };
@@ -107,8 +115,9 @@ const option = computed(() => {
         </select>
       </label>
       <span v-else />
-      <div role="group" aria-label="Période de l'historique" class="inline-flex overflow-hidden rounded-md border border-slate-300">
-        <button v-for="d in DAYS" :key="d" :aria-pressed="days === d" :class="['px-2 py-1', days === d ? 'bg-blue-600 text-white' : 'hover:bg-slate-100']" @click="days = d">{{ d }} j</button>
+      <div class="ml-auto flex flex-wrap items-center gap-2">
+        <RangeToggle v-model="mode" :options="MODE_OPTIONS" label="Filtrage des vulnérabilités" />
+        <RangeToggle v-model="days" :options="DAY_OPTIONS" label="Période de l'historique" />
       </div>
     </div>
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>

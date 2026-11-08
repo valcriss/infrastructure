@@ -95,7 +95,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
     <p v-if="stack.hostPresence === 'offline'" class="rounded bg-amber-50 p-3 text-sm text-amber-800">Agent hors ligne : les scans sont impossibles. Les résultats affichés sont les derniers connus, datés.</p>
     <section class="rounded-lg border border-slate-200 bg-white p-4">
       <h2 class="font-semibold">Évolution des CVE</h2>
-      <p class="mb-2 text-xs text-slate-500">Par gravité, selon le seuil des paramètres ; au choix pour toute l'application ou un service.</p>
+      <p class="mb-2 text-xs text-slate-500">Par gravité, filtrée selon le seuil des paramètres ou non ; pour toute l'application ou un service.</p>
       <CveHistoryChart :stack-id="stack.id" :services="components.map((c) => c.service)" />
     </section>
     <p v-if="components.length === 0" class="text-sm text-slate-500">Aucune image observée : la stack n'est pas déployée ou l'hôte n'a pas encore remonté d'inventaire.</p>
