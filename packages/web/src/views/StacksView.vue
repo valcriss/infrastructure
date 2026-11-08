@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ApiError, ago, api, describeError, fmtDate, formatBytes, type Application, type StackStatus } from "../api";
+import { ApiError, ago, api, describeError, fmtDate, formatBytes, type Application, type ScanStateName, type StackStatus } from "../api";
 import MeterBar from "../components/MeterBar.vue";
-import SeverityBadges from "../components/SeverityBadges.vue";
+import SeverityBadges, { type Counts } from "../components/SeverityBadges.vue";
 
 const apps = ref<Application[]>([]);
 const loading = ref(true);
@@ -73,6 +73,37 @@ async function act(a: Application, action: "start" | "stop" | "deploy") {
   }
 }
 
+/** Synthèse des vulnérabilités de toute l'application : somme par gravité et état agrégé des scans. */
+function vulns(a: Application): { state: ScanStateName; counts: Counts; notes: string[] } {
+  const counts: Counts = { critical: 0, high: 0, medium: 0, low: 0 };
+  let never = 0;
+  let failed = 0;
+  let waiting = 0;
+  let stale = 0;
+  for (const i of a.images) {
+    if (i.counts) {
+      counts.critical += i.counts.critical;
+      counts.high += i.counts.high;
+      counts.medium += i.counts.medium;
+      counts.low += i.counts.low;
+    }
+    if (i.scan === "never") never++;
+    else if (i.scan === "failed") failed++;
+    else if (i.scan === "pending" || i.scan === "running") waiting++;
+    if (i.stale) stale++;
+  }
+  const notes: string[] = [];
+  if (never) notes.push(`${never} jamais scannée(s)`);
+  if (failed) notes.push(`${failed} scan(s) en échec`);
+  if (waiting) notes.push(`${waiting} scan(s) en cours ou en attente`);
+  if (stale) notes.push(`${stale} scan(s) périmé(s)`);
+  const unscanned = never + failed + waiting;
+  // Partiel : aucun badge « Sain » trompeur, les notes expliquent ce qui manque.
+  const state: ScanStateName =
+    unscanned === a.images.length ? (never === a.images.length ? "never" : failed ? "failed" : "pending") : unscanned > 0 ? "vulnerable" : "clean";
+  return { state, counts, notes };
+}
+
 const adoptLink = (a: Application) => ({ path: "/stacks/new", query: { adopt: "1", host: a.hostId, name: a.name } });
 const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "managed").length, observed: apps.value.filter((a) => a.kind === "observed").length }));
 </script>
@@ -120,7 +151,12 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
       <article
         v-for="a in visible"
         :key="`${a.hostId}/${a.name}`"
-        :class="['flex flex-col rounded-xl bg-white p-4 shadow-sm', a.kind === 'managed' ? 'border border-slate-200' : 'border-2 border-dashed border-slate-300']"
+        :class="[
+          'flex flex-col rounded-xl p-4 shadow-sm',
+          a.containers.unhealthy ? 'bg-red-50' : 'bg-white',
+          a.kind === 'managed' ? 'border' : 'border-2 border-dashed',
+          a.containers.unhealthy ? 'border-red-300' : a.kind === 'managed' ? 'border-slate-200' : 'border-slate-300',
+        ]"
       >
         <header class="flex items-start gap-3">
           <span :class="['flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-lg', a.kind === 'managed' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500']" :title="a.kind === 'managed' ? 'Gérée par la console' : 'Observée : le fichier Compose n\'est pas connu de la console'">
@@ -158,12 +194,16 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
           <p class="flex items-center gap-1.5 text-xs text-slate-600"><FaIcon :icon="['fas', 'memory']" class="text-slate-400" /> Mémoire : <span class="font-medium tabular-nums">{{ formatBytes(a.usage.memBytes) }}</span></p>
         </div>
 
-        <ul v-if="a.images.length" class="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
-          <li v-for="i in a.images" :key="i.ref" class="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span class="flex min-w-0 items-center gap-1.5 text-slate-600"><FaIcon :icon="['fas', 'layer-group']" class="shrink-0 text-slate-400" /><span class="truncate" :title="i.ref">{{ i.ref }}</span></span>
-            <SeverityBadges :state="i.scan" :counts="i.counts" :stale="i.stale" />
-          </li>
-        </ul>
+        <div class="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs">
+          <template v-if="a.images.length">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="flex items-center gap-1.5 text-slate-600"><FaIcon :icon="['fas', 'shield-halved']" class="text-slate-400" /> Vulnérabilités · {{ a.images.length }} image(s)</span>
+              <SeverityBadges :state="vulns(a).state" :counts="vulns(a).counts" />
+            </div>
+            <p v-if="vulns(a).notes.length" class="text-slate-500">{{ vulns(a).notes.join(" · ") }}</p>
+          </template>
+          <p v-else class="flex items-center gap-1.5 text-slate-500"><FaIcon :icon="['fas', 'layer-group']" class="text-slate-400" /> Aucune image observée</p>
+        </div>
 
         <footer class="mt-auto flex flex-wrap items-center justify-between gap-2 pt-4">
           <div class="flex flex-wrap items-center gap-1.5 text-xs">
