@@ -1,5 +1,6 @@
 import {
   ComposeEditError,
+  cleanCompose,
   compareWithObserved,
   detectEnvLiterals,
   detectVariableReferences,
@@ -23,6 +24,8 @@ export const AnalyzeBody = z.object({
   project: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/).optional(),
 });
 
+export const CleanBody = z.object({ compose: z.string().max(1_000_000) });
+
 /**
  * Analyse un Compose avant son enregistrement : erreurs avec leur ligne, variables à renseigner (obligatoires ou avec
  * valeur par défaut, secrets probables), valeurs écrites en clair, et — pour un import — écarts avec les conteneurs
@@ -30,6 +33,18 @@ export const AnalyzeBody = z.object({
  */
 export function registerComposeAnalyzeRoutes(app: FastifyInstance, deps: { pool: Pool; auth: Guard }): void {
   const { pool, auth } = deps;
+
+  // « Nettoyer le contenu » : calcule le Compose sans commentaires ni `version`, aéré. Ne modifie rien : l'interface
+  // affiche un aperçu puis applique le résultat au brouillon.
+  app.post("/api/v1/compose/clean", { preHandler: auth }, async (request) => {
+    const body = CleanBody.parse(request.body);
+    try {
+      return cleanCompose(body.compose);
+    } catch (err) {
+      if (err instanceof ComposeEditError) throw new HttpError(422, "unsupported_compose_structure", err.message);
+      throw err;
+    }
+  });
 
   app.post("/api/v1/compose/analyze", { preHandler: auth }, async (request) => {
     const body = AnalyzeBody.parse(request.body);

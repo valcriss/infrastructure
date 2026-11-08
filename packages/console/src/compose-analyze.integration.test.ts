@@ -7,6 +7,7 @@ import { buildApp, type BuiltApp } from "./app.js";
 import { createPool, migrate, type Pool } from "./db.js";
 
 const url = process.env.TEST_DATABASE_URL;
+const NL = String.fromCharCode(10);
 
 const COMPOSE = `services:
   web:
@@ -80,6 +81,15 @@ describe.skipIf(!url)("analyse d'un Compose avant enregistrement (intégration)"
     const messages = (r.json.differences as { message: string }[]).map((d) => d.message).join("\n");
     expect(messages).toContain("8443");
     expect(messages).toContain("8080");
+  });
+
+  it("nettoie un Compose (commentaires, version, lignes vides)", async () => {
+    const input = ["# c", 'version: "3"', "services:", "  a:", "    image: x # t", "  b:", "    image: y", ""].join(NL);
+    const r = await call("POST", "/api/v1/compose/clean", { compose: input });
+    expect(r.status).toBe(200);
+    expect(r.json.compose).toBe(["services:", "  a:", "    image: x", "", "  b:", "    image: y", ""].join(NL));
+    expect(r.json).toMatchObject({ comments: 2, versionRemoved: "3", changed: true });
+    expect((await call("POST", "/api/v1/compose/clean", { compose: "services: [" })).status).toBe(422);
   });
 
   it("répond 404 pour un hôte inconnu", async () => {

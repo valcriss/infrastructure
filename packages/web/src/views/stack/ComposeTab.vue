@@ -2,8 +2,10 @@
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError, api, describeError, type ChangeResult, type StackDetail } from "../../api";
+import CleanComposeDialog from "../../components/CleanComposeDialog.vue";
 import DiffView from "../../components/DiffView.vue";
 import ExtractVariablesDialog from "../../components/ExtractVariablesDialog.vue";
+import ToolsMenu, { type ToolItem } from "../../components/ToolsMenu.vue";
 import YamlEditor from "../../components/YamlEditor.vue";
 import { useSession } from "../../stores/session";
 
@@ -18,6 +20,7 @@ const saved = ref(props.stack.compose);
 const draft = ref(props.stack.compose);
 const message = ref("");
 const extracting = ref(false);
+const cleaning = ref(false);
 const showDiff = ref(false);
 const error = ref("");
 const info = ref("");
@@ -55,6 +58,26 @@ watch(
 // Une révision plus récente existe pendant qu'on édite : l'enregistrement serait refusé tant qu'on ne choisit pas.
 const outdated = computed(() => props.stack.currentRevision !== baseRevision.value);
 const inConflict = computed(() => outdated.value || conflict.value);
+
+// Outils : transformations du contenu, regroupées dans un menu. Ajouter un outil = une entrée ici + son action.
+const tools = computed<ToolItem[]>(() => [
+  { id: "clean", label: "Nettoyer le contenu", description: "Retire les commentaires et la directive version, aère les sections et les services (aperçu avant d'appliquer)." },
+  {
+    id: "extract",
+    label: "Extraire les variables…",
+    description: "Transforme les valeurs de environment en variables de stack (les secrets peuvent être chiffrés).",
+    ...(dirty.value ? { disabledReason: "Enregistrez ou annulez vos modifications avant." } : {}),
+  },
+]);
+function runTool(id: string) {
+  if (id === "clean") cleaning.value = true;
+  else if (id === "extract") extracting.value = true;
+}
+function applyCleaned(compose: string) {
+  cleaning.value = false;
+  draft.value = compose;
+  info.value = "Contenu nettoyé dans le brouillon : relisez-le, puis enregistrez une révision (ou annulez les modifications).";
+}
 
 function onExtracted(revision: number, count: number) {
   extracting.value = false;
@@ -161,6 +184,7 @@ function prepareDeploy() {
       </div>
     </div>
 
+    <div v-if="session.canOperate" class="flex justify-end"><ToolsMenu :items="tools" @select="runTool" /></div>
     <YamlEditor ref="editor" v-model="draft" label="Fichier Compose" />
 
     <div v-if="issues.length" role="alert" class="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-900">
@@ -180,7 +204,6 @@ function prepareDeploy() {
         {{ showDiff ? "Masquer les différences" : "Voir les différences" }}
       </button>
       <button :disabled="!dirty" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" @click="reset">Annuler les modifications</button>
-      <button v-if="session.canOperate" :disabled="dirty" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" :title="dirty ? 'Enregistrez ou annulez vos modifications avant' : 'Transformer les valeurs de environment en variables de stack'" @click="extracting = true">Extraire les variables…</button>
       <span v-if="dirty" class="text-xs text-amber-700">modifications non enregistrées</span>
     </div>
     <p v-if="error && !issues.length" role="alert" class="text-sm text-red-700">{{ error }}</p>
@@ -196,6 +219,7 @@ function prepareDeploy() {
       <DiffView v-if="showLastDiff" :before="lastSave.before" :after="lastSave.after" />
     </div>
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
+    <CleanComposeDialog v-if="cleaning" :compose="draft" @close="cleaning = false" @apply="applyCleaned" />
     <ExtractVariablesDialog v-if="extracting" :stack-id="stack.id" @close="extracting = false" @saved="onExtracted" />
 
     <label class="flex items-center gap-2 text-sm">

@@ -3140,6 +3140,95 @@
         }
       }
     },
+    "/api/v1/compose/clean": {
+      "post": {
+        "summary": "Nettoyer un Compose",
+        "description": "Ne modifie rien : le résultat est proposé en aperçu puis appliqué au brouillon par l'interface. Ordre, valeurs, guillemets et alias sont conservés ; les lignes vides existantes sont remplacées par la règle unique.",
+        "tags": [
+          "Stacks"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "compose": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "compose"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Compose sans commentaires ni directive version, avec une ligne vide entre les sections et entre les services ; nombre de commentaires supprimés, version retirée, changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Requête comprise mais refusée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/compose/analyze": {
       "post": {
         "summary": "Analyser un Compose avant enregistrement",
