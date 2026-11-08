@@ -10,16 +10,25 @@ const PACKAGE_MANAGERS = ["apk", "apt-get", "dnf", "microdnf", "yum", "zypper"];
 // Tests de présence uniquement (`command -v`) : aucune écriture, aucune action sur l'application.
 const PROBE_SCRIPT = [
   `for t in ${TOOLS.join(" ")}; do command -v $t >/dev/null 2>&1 && echo "tool:$t"; done`,
-  `for p in ${PACKAGE_MANAGERS.join(" ")}; do command -v $p >/dev/null 2>&1 && echo "pm:$p" && break; done`,
+  // Tous les gestionnaires présents (pas seulement le premier) et la distribution (/etc/os-release), pour expliquer l'absence.
+  `for p in ${PACKAGE_MANAGERS.join(" ")}; do command -v $p >/dev/null 2>&1 && echo "pm:$p"; done`,
+  `[ -r /etc/os-release ] && . /etc/os-release 2>/dev/null && echo "os:$ID"`,
   "echo probe-done",
 ].join("; ");
 
 /** Analyse la sortie de la sonde ; sans la ligne finale, le conteneur n'a pas de shell utilisable. */
-export function parseProbe(output: string): { tools: string[]; packageManager?: string; shell: boolean } {
+export function parseProbe(output: string): { tools: string[]; packageManager?: string; packageManagers: string[]; os?: string; shell: boolean } {
   const lines = output.split("\n").map((l) => l.trim());
   const tools = lines.filter((l) => l.startsWith("tool:")).map((l) => l.slice(5));
-  const pm = lines.find((l) => l.startsWith("pm:"))?.slice(3);
-  return { tools, ...(pm ? { packageManager: pm } : {}), shell: lines.includes("probe-done") };
+  const packageManagers = lines.filter((l) => l.startsWith("pm:")).map((l) => l.slice(3));
+  const os = lines.find((l) => l.startsWith("os:"))?.slice(3);
+  return {
+    tools,
+    ...(packageManagers[0] ? { packageManager: packageManagers[0] } : {}),
+    packageManagers,
+    ...(os && /^[A-Za-z0-9._-]{1,40}$/.test(os) ? { os } : {}),
+    shell: lines.includes("probe-done"),
+  };
 }
 
 /** Sondes sur les conteneurs et téléchargements d'images pour comparaison. */
@@ -31,7 +40,7 @@ export class Prober {
   ) {}
 
   async tools(probeId: string, containerId: string, emit: (m: AgentMessage) => void): Promise<void> {
-    const fail = (error: string): void => emit({ type: "tools_result", probeId, error, tools: [], user: "", shell: false });
+    const fail = (error: string): void => emit({ type: "tools_result", probeId, error, tools: [], packageManagers: [], user: "", shell: false });
     let info: { State?: { Running?: boolean }; Config?: { Labels?: Record<string, string>; User?: string } };
     try {
       info = (await dockerGet(this.socketPath, `/containers/${containerId}/json`)) as typeof info;
@@ -44,7 +53,7 @@ export class Prober {
     try {
       const { output } = await execCapture(this.socketPath, containerId, ["sh", "-c", PROBE_SCRIPT]);
       const r = parseProbe(output);
-      emit({ type: "tools_result", probeId, tools: r.tools, ...(r.packageManager ? { packageManager: r.packageManager } : {}), user: info.Config?.User ?? "", shell: r.shell });
+      emit({ type: "tools_result", probeId, tools: r.tools, ...(r.packageManager ? { packageManager: r.packageManager } : {}), packageManagers: r.packageManagers, ...(r.os ? { os: r.os } : {}), user: info.Config?.User ?? "", shell: r.shell });
     } catch (err) {
       fail(`Sonde impossible : ${(err as Error).message}`.slice(0, 300));
     }

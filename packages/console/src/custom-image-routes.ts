@@ -4,15 +4,19 @@ import {
   editServiceBuild,
   editServiceImageTag,
   generateDockerfile,
+  guessPackageManager,
+  replaceBaseImage,
+  serviceBaseImage,
   validateBaseImage,
   validateFilePath,
   validatePackages,
 } from "@infra/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { withTag } from "./candidates.js";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
-import { changeStack, getRevision } from "./stacks.js";
+import { changeStack, getRevision, type RevisionContent } from "./stacks.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -90,6 +94,26 @@ export function registerCustomImageRoutes(app: FastifyInstance, deps: { pool: Po
     }
   };
 
+  /**
+   * Nouvelle étiquette d'un service : dans le Compose (`image:`) ou, pour un service construit sur l'hôte, sur la ligne
+   * FROM de son Dockerfile (image de base). `file` désigne alors le Dockerfile modifié.
+   */
+  const retagService = (content: RevisionContent, service: string, tag: string) => {
+    const base = serviceBaseImage(content.compose, content.files, service);
+    if (base === null) {
+      const out = retag(content.compose, service, tag);
+      return { before: content.compose, after: out.compose, from: out.from, to: out.to, file: null as string | null, next: { ...content, compose: out.compose } };
+    }
+    if ("error" in base) throw new HttpError(422, "unsupported_compose_structure", base.error);
+    if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/.test(tag)) throw new HttpError(400, "invalid_tag", "Étiquette invalide.");
+    if (base.ref.includes("@")) throw new HttpError(422, "unsupported_compose_structure", "L'image de base est épinglée par digest : modifiez le Dockerfile à la main.");
+    const to = withTag(base.ref, tag);
+    if (to === base.ref) throw new HttpError(422, "unsupported_compose_structure", "C'est déjà l'étiquette actuelle de l'image de base.");
+    const before = content.files[base.path] ?? "";
+    const after = replaceBaseImage(before, base.line, to);
+    return { before, after, from: base.ref, to, file: base.path as string | null, next: { ...content, files: { ...content.files, [base.path]: after } } };
+  };
+
   // Utiliser une autre version de l'image (typiquement après une comparaison) : aperçu puis révision, sans déploiement.
   app.post("/api/v1/stacks/:id/services/:service/image-tag/preview", { preHandler: auth }, async (request) => {
     const { id, service } = Params.parse(request.params);
@@ -99,14 +123,14 @@ export function registerCustomImageRoutes(app: FastifyInstance, deps: { pool: Po
     if (stack.rows[0]?.current_revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "La stack a une révision plus récente : rechargez la page.");
     const rev = await getRevision(pool, id, body.expectedRevision);
     if (!rev) throw new Error("révision courante introuvable");
-    const out = retag(rev.compose, service, body.tag);
-    return { before: rev.compose, after: out.compose, from: out.from, to: out.to };
+    const out = retagService(rev, service, body.tag);
+    return { before: out.before, after: out.after, from: out.from, to: out.to, file: out.file };
   });
 
   app.patch("/api/v1/stacks/:id/services/:service/image-tag", { preHandler: auth }, async (request) => {
     const { id, service } = Params.parse(request.params);
     const body = ImageTagBody.parse(request.body);
-    return changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? `Image du service ${service} : étiquette ${body.tag}`, (c) => ({ ...c, compose: retag(c.compose, service, body.tag).compose }));
+    return changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? `Image du service ${service} : étiquette ${body.tag}`, (c) => retagService(c, service, body.tag).next);
   });
 
   // Aperçu : Dockerfile généré et Compose modifié, rien n'est enregistré.
@@ -119,7 +143,7 @@ export function registerCustomImageRoutes(app: FastifyInstance, deps: { pool: Po
     const rev = await getRevision(pool, id, body.expectedRevision);
     if (!rev) throw new Error("révision courante introuvable");
     const out = build(rev.compose, name, service, body);
-    return { dockerfilePath: out.path, dockerfile: out.dockerfile, before: rev.compose, after: out.compose, image: out.image, baseImage: out.baseImage };
+    return { dockerfilePath: out.path, dockerfile: out.dockerfile, before: rev.compose, after: out.compose, image: out.image, baseImage: out.baseImage, guessedPackageManager: guessPackageManager(out.baseImage) };
   });
 
   // Enregistrement : une révision contenant le Dockerfile et le Compose modifié. Rien n'est déployé.

@@ -9,11 +9,18 @@ const props = defineProps<{ stackId: string; hostId: string; revision: number; s
 const emit = defineEmits<{ close: []; saved: [revision: number] }>();
 
 type Pm = "apk" | "apt-get" | "dnf" | "microdnf" | "yum" | "zypper";
-interface Probe { tools: string[]; packageManager: Pm | null; user: string; shell: boolean }
+interface Probe { tools: string[]; packageManager: Pm | null; packageManagers?: Pm[]; os?: string | null; user: string; shell: boolean }
 
 const probe = ref<Probe | null>(null);
 const probing = ref(true);
 const probeNote = ref("");
+/** Gestionnaires de paquets trouvés dans le conteneur (le premier est présélectionné). */
+const detected = ref<Pm[]>([]);
+/** D'où vient le gestionnaire choisi : trouvé dans le conteneur, déduit du nom de l'image, ou à choisir soi-même. */
+const pmSource = ref<"detected" | "guessed" | "manual">("manual");
+/** L'image a été sondée mais n'offre aucun moyen d'installer des paquets (pas de gestionnaire, ou pas de shell). */
+const noInstaller = ref(false);
+const probeFailed = ref(false);
 
 const pm = ref<Pm>("apt-get");
 const upgrade = ref(false);
@@ -46,6 +53,9 @@ const message = ref("");
 const error = ref("");
 const busy = ref(false);
 
+/** Gestionnaire probable d'après le nom de l'image (heuristique du serveur), utilisé seulement si la sonde est impossible. */
+const guess = ref<Pm | null>(null);
+
 const body = () => ({
   expectedRevision: props.revision,
   packageManager: pm.value,
@@ -60,12 +70,13 @@ let timer: number | undefined;
 async function refresh() {
   error.value = "";
   try {
-    const r = await api<{ dockerfilePath: string; dockerfile: string; before: string; after: string; image: string }>(`${url()}/preview`, { method: "POST", body: JSON.stringify(body()) });
+    const r = await api<{ dockerfilePath: string; dockerfile: string; before: string; after: string; image: string; guessedPackageManager?: Pm | null }>(`${url()}/preview`, { method: "POST", body: JSON.stringify(body()) });
     if (!edited.value) dockerfile.value = r.dockerfile;
     before.value = r.before;
     after.value = r.after;
     dockerfilePath.value = r.dockerfilePath;
     image.value = r.image;
+    guess.value = r.guessedPackageManager ?? null;
   } catch (err) {
     error.value = describeError(err);
   }
@@ -79,16 +90,30 @@ onMounted(async () => {
   try {
     const p = await api<Probe>(`/api/v1/hosts/${props.hostId}/containers/${props.container.id}/tools`, { method: "POST" });
     probe.value = p;
-    if (p.packageManager) pm.value = p.packageManager;
-    else probeNote.value = "Aucun gestionnaire de paquets détecté dans cette image : choisissez-en un si vous savez lequel elle utilise, ou modifiez le Dockerfile à la main.";
-    if (!p.shell) probeNote.value = "Cette image n'a pas de shell : le Dockerfile généré ne pourra pas installer de paquets. Modifiez-le à la main (construction en plusieurs étapes).";
-    for (const t of TOOLS) if (t.key !== "ca" && !p.tools.includes(t.key) && (t.key === "curl" || t.key === "wget")) picked[t.key] = t.key === "curl";
+    detected.value = p.packageManagers?.length ? p.packageManagers : p.packageManager ? [p.packageManager] : [];
+    if (!p.shell) {
+      noInstaller.value = true;
+      probeNote.value = "Cette image n'a pas de shell : aucun paquet ne peut être installé par un Dockerfile simple. Modifiez-le à la main (construction en plusieurs étapes).";
+    } else if (detected.value.length === 0) {
+      noInstaller.value = true;
+      probeNote.value = `Aucun gestionnaire de paquets disponible dans cette image${p.os ? ` (distribution : ${p.os})` : ""} : il n'est pas possible d'ajouter des outils ni d'appliquer des mises à jour avec un Dockerfile simple. Modifiez-le à la main (construction en plusieurs étapes).`;
+    } else {
+      pm.value = detected.value[0] as Pm;
+      pmSource.value = "detected";
+      for (const t of TOOLS) if (t.key !== "ca" && !p.tools.includes(t.key) && (t.key === "curl" || t.key === "wget")) picked[t.key] = t.key === "curl";
+    }
   } catch (err) {
-    probeNote.value = `Détection de l'image impossible (${describeError(err)}) : vérifiez le gestionnaire de paquets choisi.`;
+    probeFailed.value = true;
+    probeNote.value = `Détection impossible (${describeError(err)}).`;
   } finally {
     probing.value = false;
   }
   await refresh();
+  // Sonde impossible (conteneur arrêté…) : on propose le gestionnaire le plus probable d'après le nom de l'image.
+  if (probeFailed.value && guess.value) {
+    pm.value = guess.value;
+    pmSource.value = "guessed";
+  }
 });
 onBeforeUnmount(() => window.clearTimeout(timer));
 
@@ -127,33 +152,42 @@ const input = "rounded border border-slate-300 px-3 py-2";
 
       <div class="space-y-4 p-6 text-sm">
         <p class="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
-          Une image personnalisée est <strong>construite sur l'hôte</strong> à chaque déploiement (avec cache). Elle n'est plus suivie par la vérification des versions :
-          les nouvelles versions de l'image de base ne sont reprises qu'avec « Télécharger les images » au déploiement. Ajouter des outils ajoute aussi leurs vulnérabilités éventuelles.
+          Une image personnalisée est <strong>construite sur l'hôte</strong> à chaque déploiement (avec cache). Son <strong>image de base</strong> (ligne FROM du Dockerfile) reste suivie par la vérification
+          des versions ; les paquets que vous ajoutez sont reconstruits à chaque déploiement, et une nouvelle version de l'image de base n'est reprise qu'avec « Télécharger les images ».
+          Ajouter des outils ajoute aussi leurs vulnérabilités éventuelles.
         </p>
         <p v-if="probing" class="rounded bg-slate-100 p-3 text-slate-700">Analyse de l'image du conteneur…</p>
-        <p v-else-if="probeNote" class="rounded bg-slate-100 p-3 text-slate-700">{{ probeNote }}</p>
+        <p v-else-if="pmSource === 'detected'" role="status" class="rounded border border-green-200 bg-green-50 p-3 text-green-900">
+          Gestionnaire de paquets détecté automatiquement : <strong>{{ pm }}</strong><template v-if="probe?.os"> (distribution : {{ probe.os }})</template>.
+          <template v-if="detected.length > 1">Également disponibles : {{ detected.filter((d) => d !== pm).join(", ") }}.</template>
+        </p>
+        <p v-else-if="probeNote" :class="['rounded p-3', noInstaller ? 'border border-amber-300 bg-amber-50 text-amber-900' : 'bg-slate-100 text-slate-700']">
+          {{ probeNote }}
+          <template v-if="pmSource === 'guessed'">Gestionnaire <strong>supposé</strong> d'après le nom de l'image : <strong>{{ pm }}</strong>. Démarrez le conteneur pour le confirmer.</template>
+          <template v-else-if="probeFailed">Choisissez le gestionnaire de paquets de l'image si vous le connaissez.</template>
+        </p>
 
         <div class="grid gap-4 sm:grid-cols-2">
           <fieldset>
             <legend class="mb-1 font-medium">Outils à ajouter</legend>
-            <label v-for="t in TOOLS" :key="t.key" class="flex items-center gap-2 py-0.5" :class="{ 'opacity-50': present(t.key) }">
-              <input v-model="picked[t.key]" type="checkbox" :disabled="present(t.key)" /> {{ t.label }}
+            <label v-for="t in TOOLS" :key="t.key" class="flex items-center gap-2 py-0.5" :class="{ 'opacity-50': present(t.key) || noInstaller }">
+              <input v-model="picked[t.key]" type="checkbox" :disabled="present(t.key) || noInstaller" /> {{ t.label }}
               <span v-if="present(t.key)" class="text-xs text-green-700">déjà présent</span>
             </label>
             <label class="mt-2 block text-xs">
               <span class="block font-medium">Autres paquets (séparés par des espaces)</span>
-              <input v-model="extra" placeholder="ex. jq git" :class="[input, 'mt-1 w-full']" />
+              <input v-model="extra" :disabled="noInstaller" placeholder="ex. jq git" :class="[input, 'mt-1 w-full']" />
             </label>
           </fieldset>
           <div class="space-y-3">
-            <label class="flex items-start gap-2">
-              <input v-model="upgrade" type="checkbox" class="mt-1" />
+            <label class="flex items-start gap-2" :class="{ 'opacity-50': noInstaller }">
+              <input v-model="upgrade" type="checkbox" class="mt-1" :disabled="noInstaller" />
               <span><span class="font-medium">Mettre à jour les paquets du système</span><span class="block text-xs text-slate-500">Applique les correctifs disponibles (corrige les CVE du système qui ont un correctif). Les CVE des bibliothèques de l'application ne sont pas concernées.</span></span>
             </label>
             <label class="block">
               <span class="mb-1 block font-medium">Gestionnaire de paquets</span>
-              <select v-model="pm" :class="[input, 'w-full']">
-                <option v-for="p in ['apk', 'apt-get', 'dnf', 'microdnf', 'yum', 'zypper']" :key="p" :value="p">{{ p }}</option>
+              <select v-model="pm" :disabled="noInstaller" :class="[input, 'w-full']" @change="pmSource = detected.includes(pm) ? 'detected' : 'manual'">
+                <option v-for="p in ['apk', 'apt-get', 'dnf', 'microdnf', 'yum', 'zypper']" :key="p" :value="p">{{ p }}{{ detected.includes(p as Pm) ? " (détecté)" : "" }}</option>
               </select>
             </label>
           </div>

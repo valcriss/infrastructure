@@ -155,11 +155,19 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <template v-else> — aucune observation réussie pour l'instant : l'état est inconnu.</template>
           </p>
           <template v-if="c.check.detail">
+            <p v-if="c.check.detail.built" class="rounded bg-slate-50 p-2 text-xs text-slate-700">
+              Service personnalisé (construit sur l'hôte) : la vérification porte sur son <strong>image de base</strong>
+              <template v-if="c.check.detail.ref"><code class="font-mono">{{ c.check.detail.ref }}</code></template>
+              <template v-if="c.check.detail.built.dockerfile"> (ligne FROM de {{ c.check.detail.built.dockerfile }})</template>.
+            </p>
             <p v-if="c.check.kind === 'up_to_date'" class="text-green-700">À jour : le tag « {{ c.check.detail.tag }} » pointe toujours vers le contenu déployé.</p>
             <p v-else-if="c.check.kind === 'pinned'" class="text-slate-600">Image épinglée par digest.</p>
             <p v-else-if="c.check.kind === 'local'" class="text-slate-600">Image locale : aucune comparaison avec un registre.</p>
             <template v-else-if="c.check.kind === 'update_available'">
-              <p v-if="c.check.detail.contentChanged" class="text-amber-700">Le tag « {{ c.check.detail.tag }} » pointe vers un nouveau contenu dans le registre.</p>
+              <p v-if="c.check.detail.contentChanged" class="text-amber-700">
+                Le tag « {{ c.check.detail.tag }} » pointe vers un nouveau contenu dans le registre.
+                <template v-if="c.check.detail.built">Redéployez avec « Télécharger les images » pour reconstruire l'image sur cette nouvelle base.</template>
+              </p>
               <div v-if="c.check.detail.candidates.length">
                 <p class="text-amber-700">Versions plus récentes{{ c.check.detail.uncertain ? " (candidats incertains)" : "" }} :</p>
                 <ul class="mt-1 flex flex-wrap gap-2">
@@ -169,7 +177,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   </li>
                 </ul>
               </div>
-              <p class="text-xs text-slate-500">Rien n'est déployé automatiquement : modifiez le tag dans le Compose (onglet Configuration, section Compose) puis déployez.</p>
+              <p v-if="c.check.detail.built" class="text-xs text-slate-500">Rien n'est déployé automatiquement : utilisez « Comparer une autre version » puis « Utiliser cette version » (modifie la ligne FROM du Dockerfile), ou éditez-le dans l'onglet Configuration, puis déployez.</p>
+              <p v-else class="text-xs text-slate-500">Rien n'est déployé automatiquement : modifiez le tag dans le Compose (onglet Configuration, section Compose) puis déployez.</p>
             </template>
             <ul v-if="c.check.detail.notes.length" class="list-disc space-y-0.5 pl-5 text-xs text-slate-600"><li v-for="n in c.check.detail.notes" :key="n">{{ n }}</li></ul>
             <p class="text-xs text-slate-400">

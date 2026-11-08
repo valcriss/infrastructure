@@ -418,6 +418,8 @@ export interface CheckDetailView {
   uncertain: boolean;
   tagsTruncated: boolean;
   notes: string[];
+  /** Service construit sur l'hôte : cette vérification porte sur l'image de base (FROM) de ce Dockerfile. */
+  built?: { dockerfile: string };
 }
 
 export type UpdatePolicyName = "same_tag" | "patch" | "minor" | "major" | "pattern";

@@ -1,12 +1,12 @@
-import { listComposeServices, type ImageInfo } from "@infra/shared";
+import { listComposeServices, serviceBaseImage, type ImageInfo } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
-import { loadUsedImages } from "./images.js";
+import { findLocalImage, loadUsedImages } from "./images.js";
 import { localRepoDigest, parseImageRef } from "./image-ref.js";
 import { POLICIES, pickCandidates, validatePattern, type UpdatePolicy } from "./image-tags.js";
 import type { ManifestHead, Platform, RegistryClient, ResolvedManifest } from "./registry.js";
 import { RegistryError } from "./registry.js";
-import { bumpConfigRevision } from "./stacks.js";
+import { bumpConfigRevision, deployedRevision } from "./stacks.js";
 import { getSecuritySettings } from "./settings.js";
 
 /** Ce dont l'évaluation a besoin du registre (substituable dans les tests). */
@@ -39,6 +39,8 @@ export interface CheckDetail {
   policy: UpdatePolicy;
   pattern: string | null;
   notes: string[];
+  /** Service construit sur l'hôte : la vérification porte sur l'image de base de ce Dockerfile. */
+  built?: { dockerfile: string };
 }
 
 export interface CheckOutcome {
@@ -54,6 +56,10 @@ export interface EvaluateInput {
   pattern: string | null;
   /** Versions à ne plus proposer pour ce composant. */
   ignored?: string[];
+  /** Service construit sur l'hôte : `ref` est l'image de base (FROM) de ce Dockerfile, pas l'image qui tourne. */
+  built?: { dockerfile: string };
+  /** Image de base peut-être absente de l'hôte : seules les nouvelles versions de tag sont cherchées, pas le contenu du même tag. */
+  tagsOnly?: boolean;
 }
 
 const empty = (input: EvaluateInput): CheckDetail => ({
@@ -72,7 +78,15 @@ const empty = (input: EvaluateInput): CheckDetail => ({
   policy: input.policy,
   pattern: input.pattern,
   notes: [],
+  ...(input.built ? { built: input.built } : {}),
 });
+
+/** Résultat d'un service construit dont l'image de base ne peut pas être suivie (raison expliquée). */
+export function unsupportedBuilt(dockerfile: string, reason: string, policy: PolicyRow): CheckOutcome {
+  const detail = empty({ ref: "", imageId: "", image: null, policy: policy.policy, pattern: policy.pattern, built: { dockerfile } });
+  detail.notes.push(reason);
+  return { kind: "unsupported", detail };
+}
 
 /**
  * Compare l'image déployée à ce que propose le registre : (1) même tag mais
@@ -96,55 +110,64 @@ export async function evaluateImage(input: EvaluateInput, client: RegistryLike):
     detail.notes.push("Image épinglée par digest : son contenu ne peut pas dériver. Changez le digest dans le Compose pour la mettre à jour.");
     return { kind: "pinned", detail };
   }
-  if (!input.image) {
-    detail.notes.push("Informations d'image indisponibles pour le moment (inventaire de l'hôte).");
-    return { kind: "unsupported", detail };
-  }
-  const local = localRepoDigest(input.image, parsed);
-  if (!local) {
-    detail.notes.push(
-      input.image.repoDigests.length === 0
-        ? "Image locale (construite ou chargée sans registre) : aucune comparaison possible."
-        : "Cette image n'a pas été téléchargée depuis ce dépôt : aucune comparaison possible.",
-    );
-    return { kind: "local", detail };
-  }
-  detail.deployedDigest = local;
-  const platform: Platform | null = input.image.os && input.image.arch ? { os: input.image.os, arch: input.image.arch, ...(input.image.variant ? { variant: input.image.variant } : {}) } : null;
-  detail.platform = platform ? `${platform.os}/${platform.arch}${platform.variant ? `/${platform.variant}` : ""}` : "";
-
-  // 1. Même tag, contenu différent ?
-  const head: ManifestHead = await client.headManifest(parsed, parsed.tag as string);
-  detail.remoteDigest = head.digest;
-  if (head.digest === local) {
-    detail.contentChanged = false;
-  } else if (!platform) {
-    detail.contentChanged = null;
-    detail.notes.push("Plateforme de l'image inconnue : le tag a changé mais l'effet sur votre variante n'est pas déterminable.");
+  const local = input.image ? localRepoDigest(input.image, parsed) : null;
+  // Image de base d'un service construit : si elle n'est plus sur l'hôte, on cherche quand même les nouvelles versions de tag.
+  const tagsOnly = !local && input.tagsOnly === true;
+  if (!tagsOnly) {
+    if (!input.image) {
+      detail.notes.push("Informations d'image indisponibles pour le moment (inventaire de l'hôte).");
+      return { kind: "unsupported", detail };
+    }
+    if (!local) {
+      detail.notes.push(
+        input.image.repoDigests.length === 0
+          ? "Image locale (construite ou chargée sans registre) : aucune comparaison possible."
+          : "Cette image n'a pas été téléchargée depuis ce dépôt : aucune comparaison possible.",
+      );
+      return { kind: "local", detail };
+    }
   } else {
-    try {
-      const remote: ResolvedManifest = await client.resolvePlatform(parsed, parsed.tag as string, platform);
-      let same = [remote.manifestDigest, remote.configDigest].some((d) => d !== null && (d === input.imageId || d === local));
-      let repackaged = false;
-      // Les identifiants locaux et distants peuvent différer sans que le contenu change (image poussée depuis un
-      // index multi-plateforme, autre compression…) : on compare alors les couches décrites par la configuration.
-      if (!same && remote.configDigest && input.image.layers && input.image.layers.length > 0) {
-        const remoteLayers = await client.configLayers(parsed, remote.configDigest);
-        same = remoteLayers.length === input.image.layers.length && remoteLayers.every((l, i) => l === input.image?.layers?.[i]);
-        repackaged = same;
-      }
-      detail.contentChanged = !same;
-      if (same) {
-        detail.notes.push(
-          repackaged
-            ? "Le registre expose un autre empaquetage (digest différent) du même contenu : les couches sont identiques."
-            : "Le tag a été republié pour d'autres plateformes ; la variante de cet hôte est inchangée.",
-        );
-      }
-    } catch (err) {
-      if (!(err instanceof RegistryError) || err.code !== "unsupported") throw err;
+    detail.notes.push("Image de base absente de l'hôte ou sans digest de registre : seule la recherche de nouvelles versions est possible, pas celle d'un nouveau contenu du même tag.");
+  }
+
+  if (local && input.image) {
+    detail.deployedDigest = local;
+    const platform: Platform | null = input.image.os && input.image.arch ? { os: input.image.os, arch: input.image.arch, ...(input.image.variant ? { variant: input.image.variant } : {}) } : null;
+    detail.platform = platform ? `${platform.os}/${platform.arch}${platform.variant ? `/${platform.variant}` : ""}` : "";
+  
+    // 1. Même tag, contenu différent ?
+    const head: ManifestHead = await client.headManifest(parsed, parsed.tag as string);
+    detail.remoteDigest = head.digest;
+    if (head.digest === local) {
+      detail.contentChanged = false;
+    } else if (!platform) {
       detail.contentChanged = null;
-      detail.notes.push(err.message);
+      detail.notes.push("Plateforme de l'image inconnue : le tag a changé mais l'effet sur votre variante n'est pas déterminable.");
+    } else {
+      try {
+        const remote: ResolvedManifest = await client.resolvePlatform(parsed, parsed.tag as string, platform);
+        let same = [remote.manifestDigest, remote.configDigest].some((d) => d !== null && (d === input.imageId || d === local));
+        let repackaged = false;
+        // Les identifiants locaux et distants peuvent différer sans que le contenu change (image poussée depuis un
+        // index multi-plateforme, autre compression…) : on compare alors les couches décrites par la configuration.
+        if (!same && remote.configDigest && input.image.layers && input.image.layers.length > 0) {
+          const remoteLayers = await client.configLayers(parsed, remote.configDigest);
+          same = remoteLayers.length === input.image.layers.length && remoteLayers.every((l, i) => l === input.image?.layers?.[i]);
+          repackaged = same;
+        }
+        detail.contentChanged = !same;
+        if (same) {
+          detail.notes.push(
+            repackaged
+              ? "Le registre expose un autre empaquetage (digest différent) du même contenu : les couches sont identiques."
+              : "Le tag a été republié pour d'autres plateformes ; la variante de cet hôte est inchangée.",
+          );
+        }
+      } catch (err) {
+        if (!(err instanceof RegistryError) || err.code !== "unsupported") throw err;
+        detail.contentChanged = null;
+        detail.notes.push(err.message);
+      }
     }
   }
 
@@ -317,6 +340,8 @@ export class ImageWatcher {
       const policies = await this.policies(stackId);
       const ignored = await this.ignoredTags(stackId);
       const images = await loadUsedImages(this.pool, { stackId });
+      // Services construits sur l'hôte : la vérification porte sur l'image de base (FROM) du Dockerfile déployé.
+      const deployed = await deployedRevision(this.pool, stackId);
       const done = new Set<string>();
       for (const img of images) {
         for (const user of img.usedBy) {
@@ -324,7 +349,19 @@ export class ImageWatcher {
           done.add(user.service);
           const policy = policies[user.service] ?? { policy: "same_tag" as const, pattern: null };
           try {
-            const out = await evaluateImage({ ref: user.ref, imageId: img.imageId, image: img.info, policy: policy.policy, pattern: policy.pattern, ignored: (ignored[user.service] ?? []).map((i) => i.tag) }, this.client);
+            const base = deployed ? serviceBaseImage(deployed.compose, deployed.files, user.service) : null;
+            let out: CheckOutcome;
+            if (base && "error" in base) {
+              out = unsupportedBuilt("", base.error, policy);
+            } else if (base) {
+              const local = await findLocalImage(this.pool, user.hostId, base.ref);
+              out = await evaluateImage(
+                { ref: base.ref, imageId: local?.id ?? "", image: local, policy: policy.policy, pattern: policy.pattern, ignored: (ignored[user.service] ?? []).map((i) => i.tag), built: { dockerfile: base.path }, tagsOnly: true },
+                this.client,
+              );
+            } else {
+              out = await evaluateImage({ ref: user.ref, imageId: img.imageId, image: img.info, policy: policy.policy, pattern: policy.pattern, ignored: (ignored[user.service] ?? []).map((i) => i.tag) }, this.client);
+            }
             await this.pool.query(
               `INSERT INTO image_checks (stack_id, service, checked_at, status, kind, detail, error, last_success_at)
                VALUES ($1, $2, now(), 'ok', $3, $4, NULL, now())

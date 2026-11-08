@@ -91,8 +91,14 @@ describe("mapLimit", () => {
 describe("parseProbe", () => {
   it("lit les outils et le gestionnaire de paquets ; sans ligne finale, pas de shell utilisable", async () => {
     const { parseProbe } = await import("./probe.js");
-    expect(parseProbe("tool:wget\ntool:busybox\npm:apk\nprobe-done\n")).toEqual({ tools: ["wget", "busybox"], packageManager: "apk", shell: true });
-    expect(parseProbe("tool:node\nprobe-done")).toEqual({ tools: ["node"], shell: true });
-    expect(parseProbe("OCI runtime exec failed: exec: \"sh\": executable file not found")).toEqual({ tools: [], shell: false });
+    expect(parseProbe("tool:wget\ntool:busybox\npm:apk\nos:alpine\nprobe-done\n")).toEqual({ tools: ["wget", "busybox"], packageManager: "apk", packageManagers: ["apk"], os: "alpine", shell: true });
+    expect(parseProbe("tool:node\nprobe-done")).toEqual({ tools: ["node"], packageManagers: [], shell: true });
+    expect(parseProbe("OCI runtime exec failed: exec: \"sh\": executable file not found")).toEqual({ tools: [], packageManagers: [], shell: false });
+  });
+
+  it("liste tous les gestionnaires présents et ignore une distribution illisible", async () => {
+    const { parseProbe } = await import("./probe.js");
+    expect(parseProbe("pm:apt-get\npm:dnf\nos:debian\nprobe-done")).toMatchObject({ packageManager: "apt-get", packageManagers: ["apt-get", "dnf"], os: "debian" });
+    expect(parseProbe("os:bad value;rm\nprobe-done")).not.toHaveProperty("os");
   });
 });

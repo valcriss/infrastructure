@@ -321,7 +321,7 @@ export class AgentClient {
             case "tools_probe":
               void this.prober
                 .tools(msg.probeId, msg.containerId, (m) => this.emit(m))
-                .catch((err: unknown) => this.emit({ type: "tools_result", probeId: msg.probeId, error: `Erreur de l'agent : ${(err as Error).message}`.slice(0, 300), tools: [], user: "", shell: false }));
+                .catch((err: unknown) => this.emit({ type: "tools_result", probeId: msg.probeId, error: `Erreur de l'agent : ${(err as Error).message}`.slice(0, 300), tools: [], packageManagers: [], user: "", shell: false }));
               break;
             case "image_pull": {
               const verdict = this.guard.check(msg.pullId, msg.expiresAt);

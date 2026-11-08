@@ -1,6 +1,7 @@
 import type { ConsoleMessage } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
+import { deployedBase } from "./built-base.js";
 import { loadUsedImages } from "./images.js";
 import { parseImageRef } from "./image-ref.js";
 import type { RegistryStore } from "./registries.js";
@@ -136,11 +137,15 @@ export class CandidateScans {
     const images = await loadUsedImages(this.pool, { stackId: input.stackId });
     const used = images.flatMap((i) => i.usedBy).find((u) => u.service === input.service);
     if (!used) throw new HttpError(404, "service_not_found", "Service introuvable ou jamais déployé : aucune image observée.");
-    const parsed = parseImageRef(used.ref);
+    // Service construit sur l'hôte : on compare des versions de son image de base (FROM), pas l'image locale qui tourne.
+    const base = await deployedBase(this.pool, input.stackId, input.service);
+    if (base && "error" in base) throw new HttpError(422, "unsupported_base", base.error);
+    const currentRef = base?.ref ?? used.ref;
+    const parsed = parseImageRef(currentRef);
     if (!parsed) throw new HttpError(422, "unsupported_ref", "Référence d'image non comparable (identifiant brut).");
     if (parsed.digest) throw new HttpError(422, "pinned_image", "Image épinglée par digest : indiquez la version à comparer en modifiant le Compose.");
-    const ref = withTag(used.ref, input.tag);
-    if (ref === used.ref) throw new HttpError(400, "same_image", "C'est la version actuellement déployée.");
+    const ref = withTag(currentRef, input.tag);
+    if (ref === currentRef) throw new HttpError(400, "same_image", "C'est la version actuellement déployée.");
 
     const recent = await this.pool.query<Db>(
       `SELECT ${COLUMNS} FROM candidate_scans
@@ -157,7 +162,7 @@ export class CandidateScans {
     const { rows } = await this.pool.query<Db>(
       `INSERT INTO candidate_scans (stack_id, service, host_id, ref, base_ref, status, requested_by)
        VALUES ($1, $2, $3, $4, $5, 'pulling', $6) RETURNING ${COLUMNS}`,
-      [input.stackId, input.service, hostId, ref, used.ref, input.actor],
+      [input.stackId, input.service, hostId, ref, currentRef, input.actor],
     );
     const row = toRow(rows[0] as Db);
     await audit(this.pool, input.actor, "candidate-scan.start", `${input.service}: ${ref}`, "success");

@@ -16,6 +16,20 @@ export interface DockerfileOptions {
   user: string;
 }
 
+/**
+ * Gestionnaire de paquets probable d'après le nom de l'image (`node:20-alpine` → apk). Heuristique, utilisée seulement
+ * quand l'image ne peut pas être sondée (conteneur arrêté) : null si rien ne permet de conclure.
+ */
+export function guessPackageManager(ref: string): PackageManager | null {
+  const r = ref.toLowerCase();
+  if (/alpine/.test(r)) return "apk";
+  if (/(^|[/:._-])(debian|ubuntu|bookworm|bullseye|buster|trixie|jammy|noble|focal)([/:._-]|$)/.test(r)) return "apt-get";
+  if (/(^|[/:._-])ubi\d*-minimal([/:._-]|$)|microdnf/.test(r)) return "microdnf";
+  if (/(^|[/:._-])(fedora|ubi\d*|rhel|centos|rockylinux|almalinux)([/:._-]|$)/.test(r)) return "dnf";
+  if (/(^|[/:._-])(opensuse|sles|suse)([/:._-]|$)/.test(r)) return "zypper";
+  return null;
+}
+
 export function validatePackages(packages: string[]): string | null {
   if (packages.length > 12) return "Trop de paquets (12 au plus).";
   for (const p of packages) if (!PACKAGE_NAME.test(p)) return `Nom de paquet invalide : « ${p} ».`;
@@ -57,8 +71,8 @@ export function generateDockerfile(o: DockerfileOptions): string {
   const keepUser = o.user.trim() !== "" && o.user.trim() !== "root" && o.user.trim() !== "0";
   return [
     "# Image personnalisée générée par la console : modifiable ici, reconstruite à chaque déploiement.",
-    "# Attention : cette image est construite sur l'hôte ; les nouvelles versions de l'image de base",
-    "# ne sont reprises qu'avec « Télécharger les images » au déploiement.",
+    "# L'image de base (FROM) reste suivie par la console ; une nouvelle version de ce tag n'est reprise",
+    "# qu'avec « Télécharger les images » au déploiement.",
     `FROM ${o.base}`,
     "USER root",
     steps.length ? `RUN ${steps.join(" \\\n    && ")}` : "# (rien à installer)",

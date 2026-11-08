@@ -93,7 +93,7 @@ function verdict(c: CandidateView): { text: string; cls: string } | null {
 }
 
 // --- Adopter la version comparée : aperçu du changement dans le Compose, puis une révision (sans déploiement) ---
-const adopt = ref<{ tag: string; before: string; after: string; from: string; to: string } | null>(null);
+const adopt = ref<{ tag: string; before: string; after: string; from: string; to: string; file?: string | null } | null>(null);
 const adoptMessage = ref("");
 const adoptError = ref("");
 const adoptBusy = ref(false);
@@ -105,7 +105,7 @@ async function startAdopt(c: CandidateView) {
   try {
     const stack = await api<{ currentRevision: number }>(`/api/v1/stacks/${props.stackId}`);
     revision.value = stack.currentRevision;
-    const r = await api<{ before: string; after: string; from: string; to: string }>(`${adoptUrl()}/preview`, { method: "POST", body: JSON.stringify({ expectedRevision: revision.value, tag: c.tag }) });
+    const r = await api<{ before: string; after: string; from: string; to: string; file?: string | null }>(`${adoptUrl()}/preview`, { method: "POST", body: JSON.stringify({ expectedRevision: revision.value, tag: c.tag }) });
     adopt.value = { tag: c.tag, ...r };
     adoptMessage.value = "";
   } catch (err) {
@@ -200,7 +200,10 @@ const noneNewer = computed(() => suggestions.value !== null && suggestions.value
     <div v-if="adopt" class="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-8" @mousedown.self="adopt = null">
       <div role="dialog" aria-modal="true" aria-label="Utiliser cette version" class="w-full max-w-2xl space-y-3 rounded-xl border border-slate-200 bg-white p-6 text-sm shadow-2xl">
         <h2 class="text-lg font-semibold">Utiliser {{ adopt.to }}</h2>
-        <p class="text-slate-600">L'image de « {{ service }} » passe de <code>{{ adopt.from }}</code> à <code>{{ adopt.to }}</code> dans une nouvelle révision. Rien n'est déployé : vous déployez ensuite, quand vous le décidez.</p>
+        <p class="text-slate-600">
+          <template v-if="adopt.file">L'image de base de « {{ service }} » (ligne FROM de <code>{{ adopt.file }}</code>)</template><template v-else>L'image de « {{ service }} »</template>
+          passe de <code>{{ adopt.from }}</code> à <code>{{ adopt.to }}</code> dans une nouvelle révision. Rien n'est déployé : vous déployez ensuite, quand vous le décidez.
+        </p>
         <DiffView :before="adopt.before" :after="adopt.after" />
         <input v-model="adoptMessage" maxlength="200" placeholder="Message de révision (optionnel)" aria-label="Message de révision" class="w-full rounded border border-slate-300 px-3 py-2" />
         <p v-if="adoptError" role="alert" class="text-red-700">{{ adoptError }}</p>

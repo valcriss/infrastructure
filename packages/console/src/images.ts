@@ -1,6 +1,6 @@
 import type { Container, ImageInfo, SeverityCounts } from "@infra/shared";
 import type { Pool } from "./db.js";
-import { platformOf } from "./image-ref.js";
+import { parseImageRef, platformOf } from "./image-ref.js";
 import { reportedCounts, type SecuritySettings } from "./settings.js";
 
 export interface ImageUser {
@@ -88,6 +88,23 @@ export async function loadUsedImages(pool: Pick<Pool, "query">, filter: ImageFil
     }
   }
   return [...byKey.values()].sort((a, b) => (a.refs[0] ?? a.imageId).localeCompare(b.refs[0] ?? b.imageId));
+}
+
+/**
+ * Image de l'hôte portant cette référence (même registre, dépôt et étiquette), ou null : sert à retrouver l'image de
+ * base d'un service construit, téléchargée lors de la construction.
+ */
+export async function findLocalImage(pool: Pick<Pool, "query">, hostId: string, ref: string): Promise<ImageInfo | null> {
+  const wanted = parseImageRef(ref);
+  if (!wanted) return null;
+  const { rows } = await pool.query<{ images: ImageInfo[] | null }>("SELECT images FROM hosts WHERE id = $1", [hostId]);
+  for (const img of rows[0]?.images ?? []) {
+    for (const tag of img.repoTags) {
+      const p = parseImageRef(tag);
+      if (p && p.registry === wanted.registry && p.repository === wanted.repository && p.tag === wanted.tag) return img;
+    }
+  }
+  return null;
 }
 
 // --- État d'un scan -----------------------------------------------------------------------

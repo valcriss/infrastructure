@@ -11,6 +11,10 @@ type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 export interface ToolsResult {
   tools: string[];
   packageManager: string | null;
+  /** Tous les gestionnaires de paquets présents. */
+  packageManagers: string[];
+  /** Distribution (alpine, debian…), si lisible. */
+  os: string | null;
   /** Utilisateur du conteneur ; vide = root. */
   user: string;
   shell: boolean;
@@ -47,13 +51,16 @@ export class ToolProbeService {
     });
   }
 
-  onResult(hostId: string, msg: { probeId: string; error?: string; tools: string[]; packageManager?: string; user: string; shell: boolean }): void {
+  onResult(hostId: string, msg: { probeId: string; error?: string; tools: string[]; packageManager?: string; packageManagers?: string[]; os?: string; user: string; shell: boolean }): void {
     const p = this.pending.get(msg.probeId);
     if (!p || p.hostId !== hostId) return;
     clearTimeout(p.timer);
     this.pending.delete(msg.probeId);
     if (msg.error) p.reject(new HttpError(422, "probe_failed", msg.error));
-    else p.resolve({ tools: msg.tools, packageManager: msg.packageManager ?? null, user: msg.user, shell: msg.shell });
+    else {
+      const packageManagers = msg.packageManagers ?? (msg.packageManager ? [msg.packageManager] : []);
+      p.resolve({ tools: msg.tools, packageManager: msg.packageManager ?? null, packageManagers, os: msg.os ?? null, user: msg.user, shell: msg.shell });
+    }
   }
 
   onHostDisconnect(hostId: string): void {

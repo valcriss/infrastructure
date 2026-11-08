@@ -189,6 +189,13 @@ export async function getRevision(
   return rows[0] ? toRevision(rows[0]) : null;
 }
 
+/** Révision actuellement déployée d'une stack ; null si elle n'a jamais été déployée. */
+export async function deployedRevision(db: Pick<pg.Pool, "query">, stackId: string): Promise<RevisionRow | null> {
+  const { rows } = await db.query<{ deployed_revision: number | null }>("SELECT deployed_revision FROM stacks WHERE id = $1", [stackId]);
+  const n = rows[0]?.deployed_revision;
+  return n === null || n === undefined ? null : getRevision(db, stackId, n);
+}
+
 export interface CreateStackInput {
   name: string;
   hostId: string;

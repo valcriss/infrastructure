@@ -3,6 +3,7 @@ export * from "./dotenv.js";
 export * from "./compose-tag.js";
 export * from "./compose-vars.js";
 export * from "./dockerfile.js";
+export * from "./dockerfile-base.js";
 export * from "./compose.js";
 export * from "./protocol.js";
 export * from "./stack.js";

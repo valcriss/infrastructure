@@ -175,3 +175,28 @@ describe("evaluateImage — erreurs du registre", () => {
     await expect(evaluateImage(input(), down)).rejects.toMatchObject({ code: "rate_limited" });
   });
 });
+
+describe("evaluateImage — image de base d'un service construit", () => {
+  const built = { dockerfile: "build/app/Dockerfile" };
+
+  it("marque la vérification comme portant sur l'image de base et compare son contenu", async () => {
+    const r = await evaluateImage(input({ built, tagsOnly: true }), fakeClient());
+    expect(r.kind).toBe("up_to_date");
+    expect(r.detail.built).toEqual(built);
+  });
+
+  it("image de base absente de l'hôte : cherche quand même les nouvelles versions de tag", async () => {
+    const c = fakeClient();
+    const r = await evaluateImage(input({ built, tagsOnly: true, image: null, imageId: "", policy: "major" }), c);
+    expect(r.kind).toBe("update_available");
+    expect(r.detail.candidates[0]).toBe("2.0.0");
+    expect(r.detail.contentChanged).toBeNull();
+    expect(r.detail.notes.join(" ")).toMatch(/absente de l'hôte/);
+    expect(c.calls).toEqual(["tags"]); // pas de HEAD : aucun digest local à comparer
+  });
+
+  it("sans tagsOnly, une image absente reste non comparable (comportement inchangé)", async () => {
+    const r = await evaluateImage(input({ image: null }), fakeClient());
+    expect(r.kind).toBe("unsupported");
+  });
+});

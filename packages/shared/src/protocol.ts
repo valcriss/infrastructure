@@ -196,6 +196,10 @@ export const ToolsResultSchema = z.object({
   tools: z.array(z.string().max(40)).max(40).default([]),
   /** Gestionnaire de paquets trouvé (apk, apt-get, dnf, yum…), pour un Dockerfile adapté. */
   packageManager: z.string().max(20).optional(),
+  /** Tous les gestionnaires de paquets présents (le premier est aussi dans `packageManager`). */
+  packageManagers: z.array(z.string().max(20)).max(10).default([]),
+  /** Identifiant de la distribution (`/etc/os-release` : alpine, debian…), s'il est lisible. */
+  os: z.string().max(40).optional(),
   /** Utilisateur du conteneur (`Config.User`) ; vide = root. */
   user: z.string().max(100).default(""),
   shell: z.boolean().default(false),

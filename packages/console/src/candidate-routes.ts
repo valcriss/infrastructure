@@ -10,7 +10,8 @@ import type { ScanRow, ScanService } from "./scans.js";
 import { pickCandidates, type UpdatePolicy } from "./image-tags.js";
 import { getSecuritySettings, isReported, reportedCounts, type SecuritySettings } from "./settings.js";
 import { compareVersions, repoKey, summarizeVulns } from "./vuln-summary.js";
-import { composeServiceImage } from "@infra/shared";
+import { composeServiceImage, serviceBaseImage } from "@infra/shared";
+import { deployedBase } from "./built-base.js";
 import { getRevision } from "./stacks.js";
 import type { Pool } from "./db.js";
 
@@ -163,11 +164,21 @@ export function registerCandidateRoutes(
     // Une comparaison n'est plus utile quand sa version est déjà celle qui tourne, ou après une semaine.
     const deployed = new Map<string, string>();
     for (const img of await loadUsedImages(pool, { stackId: id })) for (const u of img.usedBy) if (u.service && !deployed.has(u.service)) deployed.set(u.service, u.ref);
+    // Service construit : la version « déployée » est celle de l'image de base (FROM), pas de l'image locale qui tourne.
+    for (const service of [...deployed.keys()]) {
+      const base = await deployedBase(pool, id, service);
+      if (base && !("error" in base)) deployed.set(service, base.ref);
+    }
     const stack = await pool.query<{ current_revision: number }>("SELECT current_revision FROM stacks WHERE id = $1", [id]);
     const rev = stack.rows[0] ? await getRevision(pool, id, stack.rows[0].current_revision) : null;
+    const currentRef = (service: string): string | null => {
+      if (!rev) return null;
+      const b = serviceBaseImage(rev.compose, rev.files, service);
+      return b && !("error" in b) ? b.ref : composeServiceImage(rev.compose, service);
+    };
     const weekAgo = Date.now() - 7 * 24 * 3600_000;
     const list = (await candidates.list(id)).filter((c) => c.ref !== deployed.get(c.service) && c.createdAt.getTime() > weekAgo);
-    return { candidates: await Promise.all(list.map((c) => view(c, current, settings, rev ? composeServiceImage(rev.compose, c.service) === c.ref : false))) };
+    return { candidates: await Promise.all(list.map((c) => view(c, current, settings, currentRef(c.service) === c.ref))) };
   });
 
   // Versions à comparer : plus récentes (suivi des versions) et variantes plus légères du même dépôt.
@@ -175,7 +186,10 @@ export function registerCandidateRoutes(
     const { id, service } = ServiceParams.parse(request.params);
     const img = (await loadUsedImages(pool, { stackId: id })).flatMap((i) => i.usedBy).find((u) => u.service === service);
     if (!img) throw new HttpError(404, "service_not_found", "Service introuvable ou jamais déployé.");
-    const parsed = parseImageRef(img.ref);
+    // Service construit : suggestions pour son image de base (FROM).
+    const base = await deployedBase(pool, id, service);
+    if (base && "error" in base) return { current: null, newer: [], variants: [], note: base.error };
+    const parsed = parseImageRef(base?.ref ?? img.ref);
     if (!parsed || !parsed.tag) return { current: null, newer: [], variants: [], note: "Image épinglée ou sans étiquette : indiquez la version à comparer." };
     // Repli : candidats de la dernière vérification, si la liste du registre est indisponible.
     const check = (await watcher.checks(id)).find((c) => c.service === service);

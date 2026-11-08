@@ -276,7 +276,8 @@ export function registerImageRoutes(
         seen.add(u.service);
         // Un résultat obtenu pour une autre référence (tag modifié depuis) ne vaut plus : il est écarté.
         const found = byService.get(u.service);
-        const c = found && (!found.detail?.ref || found.detail.ref === u.ref) ? found : undefined;
+        // Exception : pour un service construit, la vérification porte sur l'image de base, pas sur l'image locale qui tourne.
+        const c = found && (!found.detail?.ref || found.detail.ref === u.ref || found.detail.built) ? found : undefined;
         components.push({
           service: u.service,
           ref: u.ref,
