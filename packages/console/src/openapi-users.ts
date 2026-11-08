@@ -86,3 +86,13 @@ export const SECURITY_ROUTE_DOCS: RouteDoc[] = [
   { method: "post", path: "/api/v1/vulnerability-acceptances", summary: "Accepter un risque", tag: "Images", access: "session", body: acceptBody, success: { status: 201, description: "Risque accepté jusqu'à la date limite" }, errors: [400, 401, 403, 409], description: "Administrateurs uniquement. La vulnérabilité n'est plus comptée (alertes, tableaux de bord) ; le scan reste complet. Durée : 7, 30, 90, 180 ou 365 jours ; justification obligatoire." },
   { method: "delete", path: "/api/v1/vulnerability-acceptances/{id}", summary: "Révoquer un risque accepté", tag: "Images", access: "session", success: { status: 204, description: "La vulnérabilité est de nouveau comptée" }, errors: [401, 403, 404] },
 ];
+
+const destroyBody = z.object({ confirmName: z.string(), networks: z.boolean(), volumes: z.array(z.string()), images: z.array(z.string()), workspace: z.boolean() });
+const finalizeBody = z.object({ confirmName: z.string(), skipHost: z.boolean().optional() });
+
+/** Suppression d'une application (réservée aux administrateurs). */
+export const REMOVAL_ROUTE_DOCS: RouteDoc[] = [
+  { method: "post", path: "/api/v1/stacks/{id}/removal-plan", summary: "Éléments qu'une suppression retirerait", tag: "Stacks", access: "any", success: { status: 200, description: "Côté hôte (conteneurs, réseaux, volumes, images, dossiers montés, dossier de travail) et côté console (révisions, opérations, vérifications d'images). Lecture seule." }, errors: [401, 403, 404, 409, 422, 504], description: "Réservé aux administrateurs. L'hôte est interrogé en direct : indisponible si l'agent est hors ligne." },
+  { method: "post", path: "/api/v1/stacks/{id}/destroy", summary: "Retirer l'application de l'hôte", tag: "Opérations", access: "any", body: destroyBody, success: { status: 202, description: "Opération acceptée", ref: "OperationAccepted" }, errors: [401, 403, 404, 409, 422], description: "Réservé aux administrateurs. Retire conteneurs (arrêtés), puis, selon les cases, réseaux, volumes, images et dossier de travail. Les dossiers montés depuis l'hôte ne sont jamais supprimés. Exige le nom exact de l'application." },
+  { method: "delete", path: "/api/v1/stacks/{id}", summary: "Supprimer l'application de la console", tag: "Stacks", access: "any", body: finalizeBody, success: { status: 204, description: "Application, révisions et historique supprimés" }, errors: [401, 403, 404, 409, 422], description: "Réservé aux administrateurs. Exige le nom exact ; n'a lieu qu'une fois l'hôte nettoyé (ou avec skipHost). La stack doit être arrêtée et sans opération en cours." },
+];

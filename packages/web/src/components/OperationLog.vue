@@ -25,7 +25,7 @@ const colors: Record<string, string> = {
   failed: "bg-red-100 text-red-800",
   unknown: "bg-amber-100 text-amber-800",
 };
-const typeLabel = computed(() => ({ deploy: "Déploiement", stop: "Arrêt", start: "Démarrage" })[op.value?.type ?? "deploy"]);
+const typeLabel = computed(() => ({ deploy: "Déploiement", stop: "Arrêt", start: "Démarrage", destroy: "Suppression" })[op.value?.type ?? "deploy"]);
 
 // Étapes d'un déploiement, d'après les lignes écrites par l'agent : la dernière rencontrée est celle qui a échoué.
 const STEPS: { match: RegExp; label: string; where: "config" | "apply" }[] = [

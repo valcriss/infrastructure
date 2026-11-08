@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import { AUTH_HINT, isAuthDenied, prepareDockerAuth, type DockerAuth } from "./docker-auth.js";
 import { encodeDotenv } from "./dotenv.js";
+import { executeRemoval } from "./removal.js";
 import { dockerGet } from "./docker.js";
 import { LineBuffer, dockerEnv, runCommand } from "./exec.js";
 import { exists, isManaged, syncStackDir } from "./workspace.js";
@@ -118,6 +119,12 @@ export class Executor {
   ): Promise<{ images?: ImageUsed[]; services?: ServiceState[] }> {
     const { id, project } = msg.stack;
     const dir = join(this.cfg.workspaceDir, id);
+
+    if (msg.action === "destroy") {
+      log(`Suppression de l'application « ${project} » sur l'hôte…`);
+      await executeRemoval(this.cfg.dockerSocket, this.cfg.workspaceDir, msg, log);
+      return {};
+    }
 
     if (msg.action !== "deploy") {
       if (!(await exists(join(dir, "compose.yaml")))) {

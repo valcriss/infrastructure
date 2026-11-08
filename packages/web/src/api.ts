@@ -139,7 +139,7 @@ export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "
 
 export interface OperationView {
   id: string;
-  type: "deploy" | "stop" | "start";
+  type: "deploy" | "stop" | "start" | "destroy";
   stackId: string;
   revision: number | null;
   status: OperationStatus;
@@ -671,4 +671,23 @@ export interface TagSuggestions {
   /** Faux quand la liste des versions du registre n'a pas pu être lue (absence de suggestion ≠ aucune version plus récente). */
   listed?: boolean;
   note?: string | null;
+}
+
+/** Ce que la suppression d'une application retirerait (réservé aux administrateurs). */
+export interface RemovalHostPlan {
+  available: true;
+  containers: { id: string; name: string; state: string; image: string }[];
+  running: number;
+  networks: { id: string; name: string }[];
+  volumes: { name: string; sizeBytes: number | null }[];
+  images: { ref: string; id: string; usedByOthers: number }[];
+  /** Dossiers de l'hôte montés dans les conteneurs : jamais supprimés. */
+  binds: string[];
+  workspace: boolean;
+}
+export interface RemovalPlanView {
+  stack: { id: string; name: string; deployed: boolean };
+  busy: boolean;
+  host: RemovalHostPlan | { available: false; reason: string };
+  console: { revisions: number; operations: number; imageChecks: number };
 }

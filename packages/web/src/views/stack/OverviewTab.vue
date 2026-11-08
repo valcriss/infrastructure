@@ -5,6 +5,7 @@ import { findActiveOperation } from "../../active-operation";
 import { healthApplies } from "../../container-health";
 import { api, describeError, fmtDate, type Container, type OperationView, type StackDetail } from "../../api";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
+import DeleteStackDialog from "../../components/DeleteStackDialog.vue";
 import DeployDialog from "../../components/DeployDialog.vue";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
@@ -54,6 +55,9 @@ const blocked = computed(() => {
   return "";
 });
 const neverDeployed = computed(() => deployed.value === null);
+/** « Supprimer » n'apparaît qu'application arrêtée : aucun conteneur en marche. */
+const anyRunning = computed(() => props.stack.containers.some((c) => c.state === "running"));
+const deleteOpen = ref(false);
 
 // « Préparer le premier déploiement » (après création) ouvre directement la confirmation, sans lancer quoi que ce soit.
 const route = useRoute();
@@ -179,6 +183,15 @@ Démarrer
         >
 Arrêter
 </button>
+        <button
+          v-if="session.isAdmin && !anyRunning"
+          :disabled="operationActive"
+          title="Supprimer l'application (conteneurs, volumes, images, configuration…) : liste détaillée et confirmation par le nom"
+          class="ml-auto rounded border border-red-300 px-3 py-2 text-red-700 hover:bg-red-50 disabled:opacity-50"
+          @click="deleteOpen = true"
+        >
+Supprimer…
+</button>
       </div>
       <p class="mt-2 text-xs text-slate-500">
         « Démarrer » relance la dernière configuration déployée ; un brouillon enregistré n'est appliqué que par le déploiement. Le déploiement demande confirmation de la révision exacte et propose des options avancées (téléchargement des images, recréation forcée).
@@ -186,6 +199,7 @@ Arrêter
       <p v-if="error" role="alert" class="mt-2 text-sm text-red-700">{{ error }}</p>
     </section>
 
+    <DeleteStackDialog v-if="deleteOpen" :stack-id="stack.id" :stack-name="stack.name" @close="deleteOpen = false" />
     <DeployDialog v-if="deployTarget !== null" :stack="stack" :target="deployTarget" @close="deployTarget = null" @started="onDeployStarted" />
 
     <p v-if="hcInfo" role="status" class="text-sm text-green-700">{{ hcInfo }}</p>

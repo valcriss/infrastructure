@@ -6,7 +6,7 @@ import type { RegistryStore } from "./registries.js";
 import { collectImageRefs } from "./registry-use.js";
 import { getRevision } from "./stacks.js";
 
-export type OperationType = "deploy" | "stop" | "start";
+export type OperationType = "deploy" | "stop" | "start" | "destroy";
 export type OperationStatus = "pending" | "running" | "succeeded" | "failed" | "unknown";
 type OperationResult = z.infer<typeof OperationResultSchema>;
 
@@ -81,6 +81,8 @@ export interface CreateOperationInput {
   revision?: number;
   pullImages?: boolean;
   forceRecreate?: boolean;
+  /** Pour `destroy` : éléments à retirer de l'hôte (obligatoire pour ce type). */
+  removal?: NonNullable<RunMessage["removal"]>;
   requestedBy: string;
   idempotencyKey?: string;
 }
@@ -195,18 +197,21 @@ export class OperationsService {
       for (const a of registryAuths) secretValues.push(a.password, Buffer.from(`${a.username}:${a.password}`).toString("base64"));
     }
 
+    if (input.type === "destroy" && !input.removal) throw new HttpError(400, "removal_missing", "Détail de la suppression absent.");
     const options = {
       pullImages: input.pullImages ?? false,
       forceRecreate: input.forceRecreate ?? false,
       // Premier déploiement d'une stack importée : reprise explicite du projet existant.
       ...(s.adopt_pending ? { adoptExisting: true } : {}),
     };
+    // Ce qui est enregistré avec l'opération : pour une suppression, la liste demandée (jamais de secret).
+    const recorded = input.type === "destroy" ? { removal: input.removal } : options;
     let id: string;
     try {
       const ins = await this.pool.query<{ id: string }>(
         `INSERT INTO operations (type, stack_id, host_id, revision, status, options, requested_by, idempotency_key)
          VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7) RETURNING id`,
-        [input.type, input.stackId, s.host_id, revisionNumber, JSON.stringify(options), input.requestedBy, input.idempotencyKey ?? null],
+        [input.type, input.stackId, s.host_id, revisionNumber, JSON.stringify(recorded), input.requestedBy, input.idempotencyKey ?? null],
       );
       id = ins.rows[0]?.id ?? "";
     } catch (err) {
@@ -227,6 +232,7 @@ export class OperationsService {
       ...(payload ? { revision: payload } : {}),
       ...(input.type === "deploy" ? { options } : {}),
       ...(registryAuths.length > 0 ? { registryAuths } : {}),
+      ...(input.type === "destroy" && input.removal ? { removal: input.removal } : {}),
     };
 
     // L'opération passe à « en cours » AVANT l'envoi : un agent qui répond tout de suite (refus immédiat, erreur de
@@ -282,6 +288,10 @@ export class OperationsService {
         "UPDATE stacks SET deployed_revision = $2, deployed_at = now(), adopt_pending = false WHERE id = $1",
         [op.stack_id, op.revision],
       );
+    }
+    // Application retirée de l'hôte : elle n'est plus déployée (un nouveau déploiement repart de zéro).
+    if (op.type === "destroy" && msg.status === "succeeded") {
+      await this.pool.query("UPDATE stacks SET deployed_revision = NULL, deployed_at = NULL, adopt_pending = false WHERE id = $1", [op.stack_id]);
     }
   }
 

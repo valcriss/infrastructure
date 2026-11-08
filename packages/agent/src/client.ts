@@ -20,6 +20,7 @@ import { fitInventory } from "./inventory-fit.js";
 import { LogStreamer } from "./logs.js";
 import { TerminalManager } from "./terminal.js";
 import { Prober } from "./probe.js";
+import { planRemoval } from "./removal.js";
 import { MetricsCollector } from "./metrics.js";
 import { Pruner } from "./pruner.js";
 import { TrivyScanner } from "./scanner.js";
@@ -336,6 +337,17 @@ export class AgentClient {
             case "image_remove":
               void this.prober.remove(msg.imageId);
               break;
+            case "removal_plan": {
+              const failed = (error: string): void =>
+                this.emit({ type: "removal_plan_result", planId: msg.planId, error: error.slice(0, 300), containers: [], running: 0, networks: [], volumes: [], images: [], binds: [], workspace: false });
+              void this.protection
+                .isProtected(msg.stack.project)
+                .then((isProtected) =>
+                  isProtected ? failed(`La stack « ${msg.stack.project} » fait tourner la console ou son agent : elle ne peut pas être supprimée depuis son propre interface.`) : planRemoval(this.config.dockerSocket, this.config.workspaceDir, msg).then((plan) => this.emit(plan)),
+                )
+                .catch((err: unknown) => failed(`Erreur de l'agent : ${(err as Error).message}`));
+              break;
+            }
             case "run": {
               const verdict = this.guard.check(msg.operationId, msg.expiresAt);
               if (verdict === "replayed") {

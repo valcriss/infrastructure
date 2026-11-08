@@ -54,6 +54,7 @@ import { consumeRecoveryCode, consumeTotp } from "./mfa.js";
 import { registerUserRoutes, sessionInfo } from "./user-routes.js";
 import { TerminalService, registerTerminalRoutes } from "./terminal-routes.js";
 import { ToolProbeService, registerToolRoutes } from "./tools-routes.js";
+import { RemovalPlanService, registerRemovalRoutes } from "./removal-routes.js";
 import { registerAcceptanceRoutes } from "./acceptance-routes.js";
 import { registerDisplayRoutes } from "./display.js";
 import { registerExportRoutes } from "./export-routes.js";
@@ -426,6 +427,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const logStreams = new LogStreams(gateway);
   const terminals = new TerminalService(pool, gateway);
   const toolProbes = new ToolProbeService(gateway);
+  const removalPlans = new RemovalPlanService(gateway);
   app.addHook("onClose", async () => terminals.closeAll());
   const pruning = new PruneService(pool, gateway);
   gateway.setHandlers({
@@ -435,6 +437,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       logStreams.onHostDisconnect(hostId);
       terminals.onHostDisconnect(hostId);
       toolProbes.onHostDisconnect(hostId);
+      removalPlans.onHostDisconnect(hostId);
       await ops.onDisconnect(hostId);
       await scans.onDisconnect(hostId);
       await pruning.onDisconnect(hostId);
@@ -442,6 +445,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
     onToolsResult: (hostId, msg) => toolProbes.onResult(hostId, msg),
+    onRemovalPlanResult: (hostId, msg) => removalPlans.onResult(hostId, msg),
     onImagePullResult: (hostId, msg) => void candidates.onPullResult(hostId, msg).catch((err: unknown) => app.log.error({ err }, "résultat de téléchargement d'image")),
     onTerminalData: (hostId, sessionId, data) => terminals.onData(hostId, sessionId, data),
     onTerminalEnd: (hostId, sessionId, reason, exitCode) => terminals.onEnd(hostId, sessionId, reason, exitCode),
@@ -482,6 +486,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerTokenRoutes(app, { pool, auth });
   registerUserRoutes(app, { pool, config, box, auth, limiter });
   registerToolRoutes(app, { pool, auth, service: toolProbes });
+  registerRemovalRoutes(app, { pool, auth: apiAuth, ops, plans: removalPlans, isOnline: (id) => gateway.isOnline(id) });
   registerAcceptanceRoutes(app, { pool, auth });
   registerDisplayRoutes(app, { pool, auth });
   registerExportRoutes(app, { pool, auth, limiter, config });

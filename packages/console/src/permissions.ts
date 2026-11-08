@@ -30,6 +30,8 @@ export function requiredRole(method: string, routeUrl: string): Role {
   if (SELF.some((r) => r.test(routeUrl))) return "viewer";
   if (method === "POST" && VIEWER_POST.some((r) => r.test(routeUrl))) return "viewer";
   if (ADMIN_ANY.some((r) => r.test(routeUrl))) return "admin";
+  // Suppression d'une application (irréversible) : plan, retrait de l'hôte et suppression de la configuration.
+  if (/^\/api\/v1\/stacks\/:id\/(removal-plan|destroy)$/.test(routeUrl) || (method === "DELETE" && /^\/api\/v1\/stacks\/:id$/.test(routeUrl))) return "admin";
   const read = method === "GET" || method === "HEAD";
   if (!read && ADMIN_WRITE.some((r) => r.test(routeUrl))) return "admin";
   return read ? "viewer" : "operator";

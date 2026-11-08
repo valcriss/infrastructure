@@ -205,6 +205,26 @@ export const ToolsResultSchema = z.object({
   shell: z.boolean().default(false),
 });
 
+/** Ce que la suppression d'une application retirerait de l'hôte, observé par l'agent (rien n'est modifié). */
+export const RemovalPlanResultSchema = z.object({
+  type: z.literal("removal_plan_result"),
+  planId: z.uuid(),
+  error: z.string().max(300).optional(),
+  /** Conteneurs du projet (arrêtés ou non) : `running` > 0 interdit la suppression. */
+  containers: z.array(z.object({ id: z.string().max(80), name: z.string().max(200), state: z.string().max(30), image: z.string().max(300) })).max(200).default([]),
+  running: z.number().int().min(0).default(0),
+  /** Réseaux créés par le projet (jamais les réseaux externes). */
+  networks: z.array(z.object({ id: z.string().max(80), name: z.string().max(200) })).max(100).default([]),
+  /** Volumes nommés du projet, avec leur taille si Docker l'a fournie. */
+  volumes: z.array(z.object({ name: z.string().max(255), sizeBytes: z.number().min(0).nullable() })).max(200).default([]),
+  /** Images des conteneurs du projet ; `usedByOthers` = conteneurs d'autres projets qui les utilisent (alors non supprimables). */
+  images: z.array(z.object({ ref: z.string().max(300), id: z.string().max(100), usedByOthers: z.number().int().min(0) })).max(100).default([]),
+  /** Dossiers de l'hôte montés dans les conteneurs : jamais supprimés par la console. */
+  binds: z.array(z.string().max(500)).max(100).default([]),
+  /** Le dossier de travail de la stack (Compose, .env, Dockerfiles) existe sur l'hôte. */
+  workspace: z.boolean().default(false),
+});
+
 /** Téléchargement d'une image (pour comparer ses vulnérabilités avant de l'adopter). */
 export const ImagePullResultSchema = z.object({
   type: z.literal("image_pull_result"),
@@ -384,6 +404,7 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   TerminalEndSchema,
   ToolsResultSchema,
   ImagePullResultSchema,
+  RemovalPlanResultSchema,
 ]);
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
 
@@ -454,8 +475,20 @@ export const RunSchema = z.object({
   operationId: z.uuid(),
   /** Échéance de la demande : l'agent refuse une demande reçue après cette date. */
   expiresAt: z.iso.datetime().optional(),
-  action: z.enum(["deploy", "stop", "start"]),
+  action: z.enum(["deploy", "stop", "start", "destroy"]),
   stack: z.object({ id: z.uuid(), project: z.string() }),
+  /** Pour `destroy` : ce qu'il faut retirer de l'hôte (les conteneurs du projet le sont toujours, à l'arrêt). */
+  removal: z
+    .object({
+      networks: z.boolean(),
+      /** Noms de volumes (doivent appartenir au projet : revérifié par l'agent). */
+      volumes: z.array(z.string().max(255)).max(200),
+      /** Références ou identifiants d'images (doivent être celles des conteneurs du projet et inutilisées ailleurs). */
+      images: z.array(z.string().max(300)).max(100),
+      /** Dossier de travail de la stack sur l'hôte (Compose, .env, Dockerfiles). */
+      workspace: z.boolean(),
+    })
+    .optional(),
   /** Obligatoire pour `deploy`, absent pour `stop` et `start`. */
   revision: RevisionPayloadSchema.optional(),
   options: z
@@ -522,6 +555,14 @@ export const ImagePullSchema = z.object({
 });
 export type ImagePullMessage = z.infer<typeof ImagePullSchema>;
 
+/** Demande ce que la suppression d'une application retirerait de l'hôte ; l'agent répond par `removal_plan_result`. */
+export const RemovalPlanSchema = z.object({
+  type: z.literal("removal_plan"),
+  planId: z.uuid(),
+  stack: z.object({ id: z.uuid(), project: z.string() }),
+});
+export type RemovalPlanMessage = z.infer<typeof RemovalPlanSchema>;
+
 /** Supprime une image téléchargée pour comparaison (sans forcer : refusée si un conteneur l'utilise). */
 export const ImageRemoveSchema = z.object({ type: z.literal("image_remove"), imageId: z.string().min(8).max(100).regex(/^(sha256:)?[0-9a-f]{12,64}$/) });
 
@@ -553,6 +594,7 @@ export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   ToolsProbeSchema,
   ImagePullSchema,
   ImageRemoveSchema,
+  RemovalPlanSchema,
 ]);
 export type ConsoleMessage = z.infer<typeof ConsoleMessageSchema>;
 

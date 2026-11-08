@@ -11,7 +11,7 @@ const selected = ref(String(useRoute().query.operation ?? ""));
 let timer: number | undefined;
 
 const labels: Record<string, string> = { pending: "en attente", running: "en cours", succeeded: "réussie", failed: "échouée", unknown: "résultat inconnu" };
-const types: Record<string, string> = { deploy: "Déploiement", stop: "Arrêt", start: "Démarrage" };
+const types: Record<string, string> = { deploy: "Déploiement", stop: "Arrêt", start: "Démarrage", destroy: "Suppression" };
 
 async function load() {
   operations.value = (await api<{ operations: OperationView[] }>(`/api/v1/operations?stackId=${props.stack.id}&limit=30`)).operations;

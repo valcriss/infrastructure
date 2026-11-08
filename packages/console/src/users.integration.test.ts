@@ -18,6 +18,11 @@ describe("règles de permissions", () => {
     expect(requiredRole("GET", "/api/v1/settings/security")).toBe("viewer");
     expect(requiredRole("GET", "/api/v1/users")).toBe("admin");
     expect(requiredRole("POST", "/api/v1/hosts/:id/prune")).toBe("admin");
+    // Suppression d'une application : réservée aux administrateurs (le PATCH d'une stack reste opérateur).
+    expect(requiredRole("POST", "/api/v1/stacks/:id/removal-plan")).toBe("admin");
+    expect(requiredRole("POST", "/api/v1/stacks/:id/destroy")).toBe("admin");
+    expect(requiredRole("DELETE", "/api/v1/stacks/:id")).toBe("admin");
+    expect(requiredRole("GET", "/api/v1/stacks/:id")).toBe("viewer");
     expect(requiredRole("PATCH", "/api/v1/me/profile")).toBe("viewer");
     expect(requiredRole("PUT", "/api/v1/admin/credentials")).toBe("viewer");
   });
