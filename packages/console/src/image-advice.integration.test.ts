@@ -6,7 +6,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
-import { suggestVariants } from "./candidate-routes.js";
+import { suggestNewer, suggestVariants } from "./candidate-routes.js";
 import { withTag } from "./candidates.js";
 import { createPool, migrate, type Pool } from "./db.js";
 import { compareVersions, repoKey, summarizeVulns } from "./vuln-summary.js";
@@ -42,10 +42,27 @@ describe("aides à la décision sur les images", () => {
   it("propose les variantes légères les plus proches, jamais les préversions", () => {
     const tags = ["5", "5.130.2", "5-alpine", "5.130.2-alpine", "6-alpine", "alpine", "5.9-alpine", "5-alpine-rc1", "latest", "4-alpine"];
     const v = suggestVariants("5.130.2", tags);
-    expect(v.slice(0, 3)).toEqual(["5.130.2-alpine", "5.9-alpine", "5-alpine"]);
+    expect(v.slice(0, 2)).toEqual(["5.130.2-alpine", "5-alpine"]);
     expect(v).not.toContain("5-alpine-rc1");
     expect(v).not.toContain("latest");
     expect(suggestVariants("5-alpine", tags)).toEqual([]);
+  });
+
+  it("ne propose jamais une variante d'une version plus ancienne", () => {
+    const tags = ["3.0.6-develop-alpine", "develop-alpine-3.0.6.1429-ls1", "amd64-develop-alpine-version-3.0.6.1429", "5.0.1-develop-alpine", "4.9-alpine", "5-alpine"];
+    const v = suggestVariants("5.0.0-develop", tags);
+    expect(v).toEqual(expect.arrayContaining(["5.0.1-develop-alpine", "5-alpine"]));
+    expect(v).not.toContain("3.0.6-develop-alpine");
+    expect(v).not.toContain("develop-alpine-3.0.6.1429-ls1");
+    expect(v).not.toContain("amd64-develop-alpine-version-3.0.6.1429");
+    expect(v).not.toContain("4.9-alpine");
+  });
+
+  it("propose les versions plus récentes sans vérification préalable, hors versions ignorées", () => {
+    const tags = ["1.2.0", "1.3.0", "2.0.0", "2.1.0", "1.1.0", "2.2.0-rc1"];
+    expect(suggestNewer("1.2.0", tags, undefined, [])).toEqual(["2.1.0", "2.0.0", "1.3.0"]);
+    expect(suggestNewer("1.2.0", tags, { policy: "same_tag", pattern: null }, ["2.0.0"])).toEqual(["2.1.0", "1.3.0"]);
+    expect(suggestNewer("1.2.0", tags, { policy: "minor", pattern: null }, [])).toEqual(["1.3.0"]);
   });
 });
 

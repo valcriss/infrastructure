@@ -7,6 +7,7 @@ import { parseImageRef } from "./image-ref.js";
 import { loadUsedImages } from "./images.js";
 import type { RegistryClient } from "./registry.js";
 import type { ScanRow, ScanService } from "./scans.js";
+import { pickCandidates, type UpdatePolicy } from "./image-tags.js";
 import { getSecuritySettings, isReported, reportedCounts, type SecuritySettings } from "./settings.js";
 import { compareVersions, repoKey, summarizeVulns } from "./vuln-summary.js";
 import { composeServiceImage } from "@infra/shared";
@@ -25,10 +26,43 @@ const UNSTABLE = /(^|[-_.])(rc|beta|alpha|dev|nightly|edge|snapshot|latest|test|
 /** Segments numériques au début d'une étiquette (« 5.130.2-alpine » → [5, 130, 2]). */
 const numericPrefix = (tag: string): number[] => (/^v?(\d+(?:\.\d+)*)/.exec(tag)?.[1] ?? "").split(".").filter(Boolean).map(Number);
 
-/** Variantes plus légères du même dépôt (alpine, slim…), celles qui ressemblent le plus à la version actuelle d'abord. */
+/**
+ * Version d'une étiquette : ses segments numériques de tête (« 5.130.2-alpine »), sinon le premier numéro de version
+ * pointé qu'elle contient (« develop-alpine-3.0.6.1429-ls1 » → [3, 0, 6, 1429]). Vide si elle n'en a pas.
+ */
+const versionOf = (tag: string): number[] => {
+  const lead = numericPrefix(tag);
+  if (lead.length > 0) return lead;
+  return (/(?:^|[-_.])v?(\d+(?:\.\d+)+)/.exec(tag)?.[1] ?? "").split(".").filter(Boolean).map(Number);
+};
+
+/** Vrai si `tag` est plus ancienne que `current` ; la comparaison porte sur les segments communs (`5-alpine` n'est pas plus ancienne que `5.130.2`). */
+function olderThan(tag: number[], current: number[]): boolean {
+  for (let i = 0; i < Math.min(tag.length, current.length); i++) {
+    const d = (tag[i] as number) - (current[i] as number);
+    if (d !== 0) return d < 0;
+  }
+  return false;
+}
+
+/**
+ * Versions plus récentes à comparer, tirées de la liste de tags du registre selon la règle de suivi du service.
+ * Sans règle (ou « même tag »), toute version plus récente est proposée. Les versions ignorées sont écartées.
+ */
+export function suggestNewer(current: string, tags: string[], rule: { policy: UpdatePolicy; pattern: string | null } | undefined, ignored: string[]): string[] {
+  const policy: UpdatePolicy = !rule || rule.policy === "same_tag" ? "major" : rule.policy;
+  const hidden = new Set(ignored);
+  return pickCandidates(current, tags, policy, rule?.pattern ?? null).candidates.filter((t) => !hidden.has(t));
+}
+
+/**
+ * Variantes plus légères du même dépôt (alpine, slim…), celles qui ressemblent le plus à la version actuelle d'abord.
+ * Une variante d'une version plus ancienne que l'actuelle n'est jamais proposée (ce serait un retour en arrière).
+ */
 export function suggestVariants(current: string, tags: string[]): string[] {
   if (LIGHT.test(current)) return [];
   const cur = numericPrefix(current);
+  const curVersion = versionOf(current);
   // Nombre de segments de version communs avec l'étiquette actuelle : « 5.130.2-alpine » avant « 5-alpine ».
   const common = (t: string): number => {
     const p = numericPrefix(t);
@@ -37,7 +71,7 @@ export function suggestVariants(current: string, tags: string[]): string[] {
     return n;
   };
   return tags
-    .filter((t) => LIGHT.test(t) && !UNSTABLE.test(t) && t !== current)
+    .filter((t) => LIGHT.test(t) && !UNSTABLE.test(t) && t !== current && !olderThan(versionOf(t), curVersion))
     .sort((x, y) => {
       const cx = common(x);
       const cy = common(y);
@@ -143,15 +177,24 @@ export function registerCandidateRoutes(
     if (!img) throw new HttpError(404, "service_not_found", "Service introuvable ou jamais déployé.");
     const parsed = parseImageRef(img.ref);
     if (!parsed || !parsed.tag) return { current: null, newer: [], variants: [], note: "Image épinglée ou sans étiquette : indiquez la version à comparer." };
+    // Repli : candidats de la dernière vérification, si la liste du registre est indisponible.
     const check = (await watcher.checks(id)).find((c) => c.service === service);
-    const newer = check?.detail?.candidates?.slice(0, 8) ?? [];
+    let newer = check?.detail?.candidates?.slice(0, 8) ?? [];
     let variants: string[] = [];
+    let truncated = false;
     let note: string | null = null;
     try {
-      variants = suggestVariants(parsed.tag, (await registryClient.listTags(parsed)).tags);
+      const listed = await registryClient.listTags(parsed);
+      truncated = listed.truncated;
+      // Calculées à la demande : une vérification préalable n'est pas nécessaire.
+      const rule = (await watcher.policies(id))[service];
+      const ignored = ((await watcher.ignoredTags(id))[service] ?? []).map((i) => i.tag);
+      newer = suggestNewer(parsed.tag, listed.tags, rule, ignored).slice(0, 8);
+      variants = suggestVariants(parsed.tag, listed.tags);
+      if (truncated) note = "Liste des versions du registre incomplète : les plus récentes peuvent manquer. Saisissez l'étiquette à comparer si vous la connaissez.";
     } catch {
       note = "Liste des versions du registre indisponible : saisissez l'étiquette à comparer.";
     }
-    return { current: parsed.tag, newer, variants, note };
+    return { current: parsed.tag, newer, variants, truncated, note };
   });
 }

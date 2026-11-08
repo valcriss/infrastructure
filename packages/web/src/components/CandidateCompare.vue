@@ -131,10 +131,10 @@ async function confirmAdopt() {
   }
 }
 
-const chips = computed(() => [
-  ...(suggestions.value?.newer ?? []).map((t) => ({ tag: t, kind: "plus récente" })),
-  ...(suggestions.value?.variants ?? []).map((t) => ({ tag: t, kind: "variante légère" })),
-]);
+const newer = computed(() => suggestions.value?.newer ?? []);
+const variants = computed(() => suggestions.value?.variants ?? []);
+/** Les suggestions sont chargées, sans erreur de lecture du registre, et aucune version plus récente n'a été trouvée. */
+const noneNewer = computed(() => suggestions.value !== null && suggestions.value.current !== null && newer.value.length === 0 && !suggestions.value.note);
 </script>
 
 <template>
@@ -143,9 +143,15 @@ const chips = computed(() => [
     <p class="text-xs text-slate-500">
       Télécharge l'image sur l'hôte, la scanne puis la retire : rien n'est déployé. Pour adopter une version, modifiez le tag dans Configuration → Compose, puis déployez.
     </p>
-    <div v-if="chips.length" class="flex flex-wrap items-center gap-2">
-      <span class="text-xs text-slate-500">Suggestions :</span>
-      <button v-for="c in chips" :key="c.tag" :disabled="!session.canOperate || busy" class="rounded-full border border-slate-300 px-2.5 py-0.5 font-mono text-xs hover:bg-slate-100 disabled:opacity-50" :title="c.kind" @click="compare(c.tag)">{{ c.tag }}</button>
+    <div v-if="newer.length" class="flex flex-wrap items-center gap-2">
+      <span class="text-xs font-medium text-slate-700">Plus récentes :</span>
+      <button v-for="t in newer" :key="t" :disabled="!session.canOperate || busy" class="rounded-full border border-blue-300 bg-blue-50 px-2.5 py-0.5 font-mono text-xs text-blue-800 hover:bg-blue-100 disabled:opacity-50" title="Version plus récente" @click="compare(t)">{{ t }}</button>
+      <button :disabled="!session.canOperate || busy" class="rounded border border-blue-600 bg-blue-600 px-2.5 py-0.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50" @click="compare(newer[0] as string)">Comparer la plus récente ({{ newer[0] }})</button>
+    </div>
+    <p v-else-if="noneNewer" class="text-xs text-slate-500">Aucune version plus récente trouvée pour la règle de suivi de ce service.</p>
+    <div v-if="variants.length" class="flex flex-wrap items-center gap-2">
+      <span class="text-xs text-slate-500">Variantes légères :</span>
+      <button v-for="t in variants" :key="t" :disabled="!session.canOperate || busy" class="rounded-full border border-slate-300 px-2.5 py-0.5 font-mono text-xs hover:bg-slate-100 disabled:opacity-50" title="Variante légère" @click="compare(t)">{{ t }}</button>
     </div>
     <p v-if="suggestions?.note" class="text-xs text-slate-500">{{ suggestions.note }}</p>
     <form class="flex flex-wrap items-end gap-2" @submit.prevent="compare(tag)">

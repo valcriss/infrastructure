@@ -664,5 +664,7 @@ export interface TagSuggestions {
   current: string | null;
   newer: string[];
   variants: string[];
+  /** La liste de tags du registre est incomplète : les versions les plus récentes peuvent manquer. */
+  truncated?: boolean;
   note?: string | null;
 }
