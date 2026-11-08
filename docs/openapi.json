@@ -7524,6 +7524,121 @@
         }
       }
     },
+    "/api/v1/dashboard/cve-history": {
+      "get": {
+        "summary": "Évolution du nombre de CVE par gravité",
+        "description": "Reconstruit depuis les scans réussis conservés, pour les images actuellement utilisées. Les risques acceptés ne sont pas retranchés de l'historique.",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                7,
+                30,
+                90
+              ],
+              "default": 30
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "filtered",
+                "all"
+              ],
+              "default": "filtered"
+            },
+            "description": "filtered : seuil de gravité des paramètres ; all : toutes les gravités"
+          },
+          {
+            "name": "hostId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "stackId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Projet Compose (géré ou observé) ; exige hostId"
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Service Compose, avec stackId ou project"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Un point toutes les 6 h (7 jours) ou par jour : critiques, élevées, moyennes, faibles, inconnues ; firstScanAt = début de l'historique",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dashboard/overview": {
       "get": {
         "summary": "Utilisation globale (CPU, mémoire, réseau, hôtes)",

@@ -17,6 +17,7 @@ import {
 import AreaChart from "../charts/AreaChart.vue";
 import DonutChart from "../charts/DonutChart.vue";
 import { TONE } from "../charts/palette";
+import CveHistoryChart from "../components/CveHistoryChart.vue";
 import MeterBar from "../components/MeterBar.vue";
 import PanelCard from "../components/PanelCard.vue";
 import StatCard from "../components/StatCard.vue";
@@ -90,6 +91,29 @@ const RANGES: { value: OverviewRange; label: string }[] = [
 // Applications gérées ET observées (projets Compose qui tournent sans leur fichier), selon les filtres.
 const filteredApps = computed(() =>
   applications.value.filter((a) => (!hostId.value || a.hostId === hostId.value) && (!stackId.value || a.stackId === stackId.value)),
+);
+// Top 5 des applications les plus vulnérables : critiques d'abord, puis élevées, puis le reste.
+const topVulnerable = computed(() =>
+  filteredApps.value
+    .map((a) => {
+      const c = { critical: 0, high: 0, other: 0 };
+      for (const i of a.images) {
+        if (!i.counts) continue;
+        c.critical += i.counts.critical;
+        c.high += i.counts.high;
+        c.other += i.counts.medium + i.counts.low + i.counts.unknown;
+      }
+      return {
+        key: `${a.hostId}/${a.name}`,
+        name: a.name,
+        hostName: a.hostName,
+        counts: c,
+        to: a.stackId ? `/stacks/${a.stackId}?tab=security` : `/hosts/${a.hostId}/projects/${encodeURIComponent(a.name)}?tab=security`,
+      };
+    })
+    .filter((a) => a.counts.critical + a.counts.high + a.counts.other > 0)
+    .sort((x, y) => y.counts.critical - x.counts.critical || y.counts.high - x.counts.high || y.counts.other - x.counts.other)
+    .slice(0, 5),
 );
 const appCount = (status: string): number => filteredApps.value.filter((a) => a.status === status).length;
 const stackItems = computed(() => [
@@ -315,12 +339,15 @@ const alertCounts = computed(() => {
 </button>
           </div>
         </div>
-        <div class="grid gap-4 xl:grid-cols-3">
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <PanelCard title="CPU des conteneurs" icon="microchip" subtitle="100 % = un cœur complet"><AreaChart title="CPU des conteneurs" unit="percent" :series="cpuSeries" /></PanelCard>
           <PanelCard title="Mémoire des conteneurs" icon="memory"><AreaChart title="Mémoire des conteneurs" unit="bytes" :series="memSeries" /></PanelCard>
           <PanelCard title="Réseau" icon="network-wired"><AreaChart title="Réseau" unit="bps" :series="netSeries" /></PanelCard>
+          <PanelCard title="Évolution des CVE" icon="shield-halved" :subtitle="vulnMode === 'filtered' ? 'Par gravité, selon le seuil des paramètres' : 'Par gravité, toutes les gravités'">
+            <CveHistoryChart :host-id="hostId || undefined" :stack-id="stackId || undefined" :mode="vulnMode" />
+          </PanelCard>
         </div>
-        <div class="grid gap-4 xl:grid-cols-3">
+        <div class="grid gap-4 xl:grid-cols-4">
           <PanelCard title="Machines hôtes" icon="server" subtitle="Dernier relevé">
             <p v-if="!overview || overview.hosts.length === 0" class="text-sm text-slate-500">Aucun hôte.</p>
             <ul v-else class="space-y-5">
@@ -352,6 +379,20 @@ const alertCounts = computed(() => {
                 <span class="w-5 text-center text-xs text-slate-400">{{ i + 1 }}</span>
                 <span class="min-w-0 flex-1 truncate">{{ a.project }}<span class="ml-1 text-xs text-slate-400">{{ a.hostName }}</span></span>
                 <span class="tabular-nums">{{ formatBytes(a.value) }}</span>
+              </li>
+            </ol>
+          </PanelCard>
+          <PanelCard title="Top 5 CVE" icon="shield-halved" subtitle="Critiques d'abord, puis élevées (seuil des paramètres)">
+            <p v-if="topVulnerable.length === 0" class="text-sm text-slate-500">Aucune application avec des CVE.</p>
+            <ol v-else class="space-y-2 text-sm">
+              <li v-for="(a, i) in topVulnerable" :key="a.key" class="flex items-center gap-3">
+                <span class="w-5 text-center text-xs text-slate-400">{{ i + 1 }}</span>
+                <RouterLink :to="a.to" class="min-w-0 flex-1 truncate hover:underline" :title="`Ouvrir la sécurité de ${a.name}`">{{ a.name }}<span class="ml-1 text-xs text-slate-400">{{ a.hostName }}</span></RouterLink>
+                <span class="whitespace-nowrap text-xs tabular-nums">
+                  <span class="font-semibold text-red-600" title="Critiques">{{ a.counts.critical }}</span> ·
+                  <span class="font-semibold text-orange-500" title="Élevées">{{ a.counts.high }}</span> ·
+                  <span class="text-slate-500" title="Autres">{{ a.counts.other }}</span>
+                </span>
               </li>
             </ol>
           </PanelCard>

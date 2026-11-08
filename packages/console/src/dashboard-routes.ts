@@ -4,8 +4,10 @@ import type { Application } from "./applications.js";
 import type { Dashboard } from "./dashboard.js";
 import type { Pool } from "./db.js";
 import { hiddenProjects } from "./display.js";
+import { CVE_HISTORY_DAYS, cveHistory } from "./cve-history.js";
 import { HttpError } from "./http-error.js";
 import { RANGES, type MetricsStore } from "./metrics-store.js";
+import { getSecuritySettings } from "./settings.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -16,6 +18,15 @@ export const DashboardQuery = z.object({
 
 export const MetricsQuery = z.object({
   range: z.enum(["1h", "6h", "24h", "7d"]).default("1h"),
+  service: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/).optional(),
+});
+
+export const CveHistoryQuery = z.object({
+  days: z.coerce.number().int().refine((d) => (CVE_HISTORY_DAYS as readonly number[]).includes(d), "7, 30 ou 90").default(30),
+  mode: z.enum(["filtered", "all"]).default("filtered"),
+  hostId: z.uuid().optional(),
+  stackId: z.uuid().optional(),
+  project: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/).optional(),
   service: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/).optional(),
 });
 
@@ -38,6 +49,20 @@ export function registerDashboardRoutes(
   app.get("/api/v1/dashboard/overview", { preHandler: auth }, async (request) => {
     const q = MetricsQuery.pick({ range: true }).parse(request.query);
     return metrics.overview(RANGES[q.range] as number, await hiddenProjects(pool));
+  });
+
+  // Évolution du nombre de CVE par gravité, reconstruite depuis l'historique des scans (global, par hôte ou par application).
+  app.get("/api/v1/dashboard/cve-history", { preHandler: auth }, async (request) => {
+    const q = CveHistoryQuery.parse(request.query);
+    if (q.project && !q.hostId) throw new HttpError(400, "host_required", "Un projet se désigne avec son hôte (hostId).");
+    const filter = {
+      ...(q.hostId ? { hostId: q.hostId } : {}),
+      ...(q.stackId ? { stackId: q.stackId } : {}),
+      ...(q.project ? { project: q.project } : {}),
+      ...(q.service ? { service: q.service } : {}),
+      excludeProjects: await hiddenProjects(pool),
+    };
+    return cveHistory(pool, { days: q.days, mode: q.mode, filter, settings: await getSecuritySettings(pool) });
   });
 
   // Métriques d'une stack : CPU, mémoire, réseau par conteneur, rétention bornée.

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { ApiError, ago, api, describeError, fmtDate, formatBytes, type Application, type Container } from "../api";
 import CopyButton from "../components/CopyButton.vue";
+import CveHistoryChart from "../components/CveHistoryChart.vue";
 import MeterBar from "../components/MeterBar.vue";
 import PanelCard from "../components/PanelCard.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
@@ -192,6 +193,9 @@ async function scan(imageId: string, platform: string, ref: string) {
 
       <template v-else-if="tab === 'security'">
         <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
+        <PanelCard title="Évolution des CVE" icon="chart-line" subtitle="Par gravité, selon le seuil des paramètres ; au choix pour toute l'application ou un service">
+          <CveHistoryChart :host-id="app.hostId" :project="app.name" :services="app.services" />
+        </PanelCard>
         <PanelCard title="Images du projet" icon="layer-group" subtitle="Vulnérabilités selon le seuil de gravité des paramètres de l'application">
           <p v-if="app.images.length === 0" class="text-sm text-slate-500">Aucune image observée.</p>
           <ul class="divide-y divide-slate-200">

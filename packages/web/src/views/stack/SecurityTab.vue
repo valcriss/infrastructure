@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { ago, api, describeError, fmtDate, shortId, type StackDetail, type StackImageComponent, type UpdatePolicyName } from "../../api";
 import CandidateCompare from "../../components/CandidateCompare.vue";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
+import CveHistoryChart from "../../components/CveHistoryChart.vue";
 import { useSession } from "../../stores/session";
 import ScanBadge from "../../components/ScanBadge.vue";
 import VulnerabilityTable from "../../components/VulnerabilityTable.vue";
@@ -92,6 +93,11 @@ onBeforeUnmount(() => window.clearInterval(timer));
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
     <p v-if="stack.hostPresence === 'offline'" class="rounded bg-amber-50 p-3 text-sm text-amber-800">Agent hors ligne : les scans sont impossibles. Les résultats affichés sont les derniers connus, datés.</p>
+    <section class="rounded-lg border border-slate-200 bg-white p-4">
+      <h2 class="font-semibold">Évolution des CVE</h2>
+      <p class="mb-2 text-xs text-slate-500">Par gravité, selon le seuil des paramètres ; au choix pour toute l'application ou un service.</p>
+      <CveHistoryChart :stack-id="stack.id" :services="components.map((c) => c.service)" />
+    </section>
     <p v-if="components.length === 0" class="text-sm text-slate-500">Aucune image observée : la stack n'est pas déployée ou l'hôte n'a pas encore remonté d'inventaire.</p>
 
     <article v-for="c in components" :key="c.service" class="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
