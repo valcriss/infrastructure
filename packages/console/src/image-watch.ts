@@ -6,6 +6,7 @@ import { localRepoDigest, parseImageRef } from "./image-ref.js";
 import { POLICIES, pickCandidates, validatePattern, type UpdatePolicy } from "./image-tags.js";
 import type { ManifestHead, Platform, RegistryClient, ResolvedManifest } from "./registry.js";
 import { RegistryError } from "./registry.js";
+import { dropOlder } from "./tag-dates.js";
 import { bumpConfigRevision, deployedRevision } from "./stacks.js";
 import { getSecuritySettings } from "./settings.js";
 
@@ -15,6 +16,8 @@ export interface RegistryLike {
   resolvePlatform: RegistryClient["resolvePlatform"];
   listTags: RegistryClient["listTags"];
   configLayers: RegistryClient["configLayers"];
+  /** Date de création d'une image (comparaison d'ancienneté des versions proposées) ; facultatif. */
+  configCreated?: RegistryClient["configCreated"];
 }
 
 export type CheckKind = "up_to_date" | "update_available" | "pinned" | "local" | "unsupported";
@@ -130,9 +133,10 @@ export async function evaluateImage(input: EvaluateInput, client: RegistryLike):
     detail.notes.push("Image de base absente de l'hôte ou sans digest de registre : seule la recherche de nouvelles versions est possible, pas celle d'un nouveau contenu du même tag.");
   }
 
+  let platform: Platform | null = null;
   if (local && input.image) {
     detail.deployedDigest = local;
-    const platform: Platform | null = input.image.os && input.image.arch ? { os: input.image.os, arch: input.image.arch, ...(input.image.variant ? { variant: input.image.variant } : {}) } : null;
+    platform = input.image.os && input.image.arch ? { os: input.image.os, arch: input.image.arch, ...(input.image.variant ? { variant: input.image.variant } : {}) } : null;
     detail.platform = platform ? `${platform.os}/${platform.arch}${platform.variant ? `/${platform.variant}` : ""}` : "";
   
     // 1. Même tag, contenu différent ?
@@ -179,6 +183,10 @@ export async function evaluateImage(input: EvaluateInput, client: RegistryLike):
       const { tags, truncated } = await client.listTags(parsed);
       detail.tagsTruncated = truncated;
       const found = pickCandidates(parsed.tag as string, tags, input.policy, input.pattern);
+      // Une numérotation qui change de schéma (5.3.0 → 20.04.1) n'est pas une mise à jour : on écarte les versions plus anciennes.
+      const dated = await dropOlder(client, parsed, parsed.tag as string, found.candidates, platform);
+      found.candidates = dated.kept;
+      found.notes.push(...dated.notes);
       const hidden = new Set(input.ignored ?? []);
       detail.candidates = found.candidates.filter((t) => !hidden.has(t));
       detail.ignored = found.candidates.filter((t) => hidden.has(t));

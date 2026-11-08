@@ -5,7 +5,8 @@ import { HttpError } from "./http-error.js";
 import type { ImageWatcher } from "./image-watch.js";
 import { parseImageRef } from "./image-ref.js";
 import { loadUsedImages } from "./images.js";
-import type { RegistryClient } from "./registry.js";
+import type { Platform, RegistryClient } from "./registry.js";
+import { dropOlder } from "./tag-dates.js";
 import type { ScanRow, ScanService } from "./scans.js";
 import { pickCandidates, type UpdatePolicy } from "./image-tags.js";
 import { getSecuritySettings, isReported, reportedCounts, type SecuritySettings } from "./settings.js";
@@ -184,8 +185,11 @@ export function registerCandidateRoutes(
   // Versions à comparer : plus récentes (suivi des versions) et variantes plus légères du même dépôt.
   app.get("/api/v1/stacks/:id/services/:service/tag-suggestions", { preHandler: auth }, async (request) => {
     const { id, service } = ServiceParams.parse(request.params);
-    const img = (await loadUsedImages(pool, { stackId: id })).flatMap((i) => i.usedBy).find((u) => u.service === service);
-    if (!img) throw new HttpError(404, "service_not_found", "Service introuvable ou jamais déployé.");
+    const usedImage = (await loadUsedImages(pool, { stackId: id })).find((i) => i.usedBy.some((u) => u.service === service));
+    const img = usedImage?.usedBy.find((u) => u.service === service);
+    if (!usedImage || !img) throw new HttpError(404, "service_not_found", "Service introuvable ou jamais déployé.");
+    const info = usedImage.info;
+    const platform: Platform | null = info?.os && info.arch ? { os: info.os, arch: info.arch, ...(info.variant ? { variant: info.variant } : {}) } : null;
     // Service construit : suggestions pour son image de base (FROM).
     const base = await deployedBase(pool, id, service);
     if (base && "error" in base) return { current: null, newer: [], variants: [], note: base.error };
@@ -196,19 +200,25 @@ export function registerCandidateRoutes(
     let newer = check?.detail?.candidates?.slice(0, 8) ?? [];
     let variants: string[] = [];
     let truncated = false;
-    let note: string | null = null;
+    let listed = true;
+    let note: string | null;
     try {
-      const listed = await registryClient.listTags(parsed);
-      truncated = listed.truncated;
+      const tagList = await registryClient.listTags(parsed);
+      truncated = tagList.truncated;
       // Calculées à la demande : une vérification préalable n'est pas nécessaire.
       const rule = (await watcher.policies(id))[service];
       const ignored = ((await watcher.ignoredTags(id))[service] ?? []).map((i) => i.tag);
-      newer = suggestNewer(parsed.tag, listed.tags, rule, ignored).slice(0, 8);
-      variants = suggestVariants(parsed.tag, listed.tags);
-      if (truncated) note = "Liste des versions du registre incomplète : les plus récentes peuvent manquer. Saisissez l'étiquette à comparer si vous la connaissez.";
+      // Les numéros ne disent rien de l'âge quand la numérotation change de schéma : on écarte ce qui est plus ancien que l'image actuelle.
+      const dated = await dropOlder(registryClient, parsed, parsed.tag, suggestNewer(parsed.tag, tagList.tags, rule, ignored), platform);
+      newer = dated.kept.slice(0, 8);
+      variants = suggestVariants(parsed.tag, tagList.tags);
+      const notes = [...dated.notes];
+      if (truncated) notes.push("Liste des versions du registre incomplète : les plus récentes peuvent manquer. Saisissez l'étiquette à comparer si vous la connaissez.");
+      note = notes.length > 0 ? notes.join(" ") : null;
     } catch {
+      listed = false;
       note = "Liste des versions du registre indisponible : saisissez l'étiquette à comparer.";
     }
-    return { current: parsed.tag, newer, variants, truncated, note };
+    return { current: parsed.tag, newer, variants, truncated, listed, note };
   });
 }

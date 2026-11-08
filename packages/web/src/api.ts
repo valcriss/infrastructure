@@ -668,5 +668,7 @@ export interface TagSuggestions {
   variants: string[];
   /** La liste de tags du registre est incomplète : les versions les plus récentes peuvent manquer. */
   truncated?: boolean;
+  /** Faux quand la liste des versions du registre n'a pas pu être lue (absence de suggestion ≠ aucune version plus récente). */
+  listed?: boolean;
   note?: string | null;
 }

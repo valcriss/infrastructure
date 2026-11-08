@@ -134,7 +134,7 @@ async function confirmAdopt() {
 const newer = computed(() => suggestions.value?.newer ?? []);
 const variants = computed(() => suggestions.value?.variants ?? []);
 /** Les suggestions sont chargées, sans erreur de lecture du registre, et aucune version plus récente n'a été trouvée. */
-const noneNewer = computed(() => suggestions.value !== null && suggestions.value.current !== null && newer.value.length === 0 && !suggestions.value.note);
+const noneNewer = computed(() => suggestions.value !== null && suggestions.value.current !== null && newer.value.length === 0 && suggestions.value.listed !== false);
 </script>
 
 <template>

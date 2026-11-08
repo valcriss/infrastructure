@@ -270,6 +270,17 @@ export class RegistryClient {
     return ids.filter((x): x is string => typeof x === "string");
   }
 
+  /** Date de création de l'image décrite par une configuration (millisecondes) ; null si absente ou illisible. */
+  async configCreated(ref: ImageRef, configDigest: string): Promise<number | null> {
+    const res = await this.call(ref, `/v2/${ref.repository}/blobs/${configDigest}`, "GET", "application/json");
+    const length = Number(res.headers.get("content-length") ?? 0);
+    if (length > 1024 * 1024) throw new RegistryError("bad_response", "Configuration d'image trop volumineuse.");
+    const body = (await res.json().catch(() => null)) as { created?: unknown } | null;
+    const t = typeof body?.created === "string" ? Date.parse(body.created) : NaN;
+    // Une date « zéro » (0001-01-01) ou à venir est un horodatage normalisé ou erroné : inexploitable pour comparer.
+    return Number.isFinite(t) && t > Date.UTC(1990, 0, 1) && t < Date.now() + 86_400_000 ? t : null;
+  }
+
   /** Liste les tags d'un dépôt (pagination par en-tête Link, plafonnée). */
   async listTags(ref: ImageRef): Promise<{ tags: string[]; truncated: boolean }> {
     const tags: string[] = [];

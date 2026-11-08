@@ -200,3 +200,31 @@ describe("evaluateImage — image de base d'un service construit", () => {
     expect(r.kind).toBe("unsupported");
   });
 });
+
+describe("evaluateImage — versions plus anciennes écartées", () => {
+  const dates: Record<string, number> = { "cfg-1.27.0": Date.UTC(2025, 5, 1), "cfg-1.27.1": Date.UTC(2025, 6, 1), "cfg-1.28.0": Date.UTC(2025, 8, 1), "cfg-2.0.0": Date.UTC(2020, 1, 1) };
+  const dated = () =>
+    fakeClient({
+      resolvePlatform: async (_ref: unknown, tag: string) => ({ manifestDigest: sha("2"), configDigest: `cfg-${tag}`, indexDigest: null }),
+      configCreated: async (_ref: unknown, digest: string) => dates[digest] ?? null,
+    });
+
+  it("n'annonce pas une version au numéro plus grand mais plus ancienne", async () => {
+    const r = await evaluateImage(input({ policy: "major" }), dated());
+    expect(r.detail.candidates).toEqual(["1.28.0", "1.27.1"]);
+    expect(r.detail.candidates).not.toContain("2.0.0");
+    expect(r.detail.notes.join(" ")).toMatch(/2\.0\.0/);
+    expect(r.kind).toBe("update_available");
+  });
+
+  it("à jour quand tous les candidats sont plus anciens", async () => {
+    const onlyOld = fakeClient({
+      listTags: async () => ({ tags: ["2.0.0"], truncated: false }),
+      resolvePlatform: async (_ref: unknown, tag: string) => ({ manifestDigest: sha("2"), configDigest: `cfg-${tag}`, indexDigest: null }),
+      configCreated: async (_ref: unknown, digest: string) => dates[digest] ?? null,
+    });
+    const r = await evaluateImage(input({ policy: "major" }), onlyOld);
+    expect(r.detail.candidates).toEqual([]);
+    expect(r.kind).toBe("up_to_date");
+  });
+});
