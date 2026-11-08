@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { api, describeError, fmtDate, type Container, type StackDetail } from "../../api";
+import { findActiveOperation } from "../../active-operation";
+import { api, describeError, fmtDate, type Container, type OperationView, type StackDetail } from "../../api";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
 import DeployDialog from "../../components/DeployDialog.vue";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
@@ -14,6 +15,8 @@ const session = useSession();
 const emit = defineEmits<{ changed: [] }>();
 
 const operationId = ref("");
+/** Une opération de cette stack est en attente ou en cours : les actions sont bloquées (le serveur les refuserait). */
+const operationActive = ref(false);
 const error = ref("");
 const busy = ref(false);
 const hcTarget = ref<Container | null>(null);
@@ -46,6 +49,7 @@ const offline = computed(() => props.stack.hostPresence === "offline");
 const blocked = computed(() => {
   if (!session.canOperate) return "Votre rôle (lecteur) ne permet pas de lancer des actions.";
   if (offline.value) return "L'agent de l'hôte est hors ligne : aucune action ne peut être lancée.";
+  if (operationActive.value) return "Une opération est en cours sur cette application : les actions sont disponibles à sa fin.";
   return "";
 });
 const neverDeployed = computed(() => deployed.value === null);
@@ -53,7 +57,27 @@ const neverDeployed = computed(() => deployed.value === null);
 // « Préparer le premier déploiement » (après création) ouvre directement la confirmation, sans lancer quoi que ce soit.
 const route = useRoute();
 const router = useRouter();
+// Après un rafraîchissement de la page, reprend le suivi d'une opération encore active (lancée ici, ailleurs ou par un autre utilisateur).
+async function resumeActiveOperation() {
+  try {
+    const { operations } = await api<{ operations: Pick<OperationView, "id" | "status">[] }>(`/api/v1/operations?stackId=${props.stack.id}&limit=5`);
+    const active = findActiveOperation(operations);
+    if (active && !operationId.value) {
+      operationId.value = active.id;
+      operationActive.value = true;
+    }
+  } catch {
+    /* lecture impossible : la vue fonctionne comme avant, le serveur refuse tout lancement concurrent */
+  }
+}
+
+function onOperationFinished() {
+  operationActive.value = false;
+  emit("changed");
+}
+
 onMounted(() => {
+  void resumeActiveOperation();
   if (route.query.deploy !== "1") return;
   const { deploy: _drop, ...rest } = route.query;
   void router.replace({ query: rest });
@@ -77,6 +101,7 @@ function onDeployStarted(id: string) {
   hcInfo.value = "";
   error.value = "";
   operationId.value = id;
+  operationActive.value = true;
 }
 
 /** Démarrer et arrêter agissent sur la dernière configuration déployée : pas de choix de révision. */
@@ -92,6 +117,7 @@ async function run(action: "stop" | "start") {
       headers: { "Idempotency-Key": crypto.randomUUID() },
     });
     operationId.value = r.operationId;
+    operationActive.value = true;
   } catch (err) {
     error.value = describeError(err);
   } finally {
@@ -184,7 +210,7 @@ Arrêter
       @saved="onImageSaved"
     />
 
-    <OperationLog v-if="operationId" :operation-id="operationId" :stack-id="stack.id" @finished="emit('changed')" />
+    <OperationLog v-if="operationId" :operation-id="operationId" :stack-id="stack.id" @finished="onOperationFinished" />
 
     <section class="rounded-lg border border-slate-200 bg-white">
       <h2 class="border-b border-slate-200 px-4 py-2 font-semibold">Conteneurs observés</h2>
