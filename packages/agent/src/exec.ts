@@ -14,6 +14,8 @@ export interface ExecResult {
   code: number | null;
   timedOut: boolean;
   stdout: string;
+  /** Fin de la sortie d'erreur (les refus de registre y figurent). */
+  stderr: string;
 }
 
 /**
@@ -31,6 +33,7 @@ export function runCommand(file: string, args: string[], opts: ExecOptions): Pro
     });
     const max = opts.maxStdoutBytes ?? 1024 * 1024;
     let stdout = "";
+    let stderr = "";
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -43,14 +46,17 @@ export function runCommand(file: string, args: string[], opts: ExecOptions): Pro
       if (stdout.length < max) stdout += d.slice(0, max - stdout.length);
       opts.onOutput?.(d);
     });
-    child.stderr.on("data", (d: string) => opts.onOutput?.(d));
+    child.stderr.on("data", (d: string) => {
+      stderr = (stderr + d).slice(-8192);
+      opts.onOutput?.(d);
+    });
     child.on("error", (err) => {
       clearTimeout(timer);
       reject(err);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code, timedOut, stdout });
+      resolve({ code, timedOut, stdout, stderr });
     });
   });
 }

@@ -1,7 +1,9 @@
-import { redact, type OperationResultSchema, type RunMessage } from "@infra/shared";
+import { redact, type OperationResultSchema, type RegistryAuth, type RunMessage } from "@infra/shared";
 import type { z } from "zod";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
+import type { RegistryStore } from "./registries.js";
+import { collectImageRefs } from "./registry-use.js";
 import { getRevision } from "./stacks.js";
 
 export type OperationType = "deploy" | "stop" | "start";
@@ -91,6 +93,7 @@ export class OperationsService {
   constructor(
     private readonly pool: Pool,
     private readonly transport: AgentTransport,
+    private readonly registries: Pick<RegistryStore, "authsFor">,
   ) {
     this.sweeper = setInterval(() => void this.sweepTimeouts().catch(() => {}), 30_000);
     this.sweeper.unref();
@@ -167,6 +170,7 @@ export class OperationsService {
     }
 
     let payload: RunMessage["revision"];
+    let registryAuths: RegistryAuth[] = [];
     let revisionNumber: number | null = null;
     const secretValues: string[] = [];
     if (input.type === "deploy") {
@@ -186,6 +190,9 @@ export class OperationsService {
         }
       }
       payload = { number: rev.revision, compose: rev.compose, variables, sensitive, files: rev.files };
+      // Identifiants des registres privés utilisés par cette révision ; masqués dans les journaux comme les variables sensibles.
+      registryAuths = await this.registries.authsFor(collectImageRefs(rev.compose, variables, rev.files), [rev.compose, ...Object.values(rev.files)]);
+      for (const a of registryAuths) secretValues.push(a.password, Buffer.from(`${a.username}:${a.password}`).toString("base64"));
     }
 
     const options = {
@@ -219,6 +226,7 @@ export class OperationsService {
       stack: { id: input.stackId, project: s.name },
       ...(payload ? { revision: payload } : {}),
       ...(input.type === "deploy" ? { options } : {}),
+      ...(registryAuths.length > 0 ? { registryAuths } : {}),
     };
 
     // L'opération passe à « en cours » AVANT l'envoi : un agent qui répond tout de suite (refus immédiat, erreur de

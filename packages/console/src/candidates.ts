@@ -3,6 +3,7 @@ import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { loadUsedImages } from "./images.js";
 import { parseImageRef } from "./image-ref.js";
+import type { RegistryStore } from "./registries.js";
 import type { ScanService } from "./scans.js";
 
 export interface CandidateTransport {
@@ -89,6 +90,7 @@ export class CandidateScans {
     private readonly pool: Pool,
     private readonly scans: ScanService,
     private readonly transport: CandidateTransport,
+    private readonly registries: Pick<RegistryStore, "authsFor">,
   ) {}
 
   start(tickMs = 15_000): void {
@@ -159,7 +161,14 @@ export class CandidateScans {
     );
     const row = toRow(rows[0] as Db);
     await audit(this.pool, input.actor, "candidate-scan.start", `${input.service}: ${ref}`, "success");
-    const sent = this.transport.send(hostId, { type: "image_pull", pullId: row.id, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), ref });
+    const registryAuths = await this.registries.authsFor([ref]);
+    const sent = this.transport.send(hostId, {
+      type: "image_pull",
+      pullId: row.id,
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      ref,
+      ...(registryAuths.length > 0 ? { registryAuths } : {}),
+    });
     if (!sent) await this.fail(row.id, "Agent hors ligne : téléchargement non envoyé.");
     return { row: (await this.get(row.id)) ?? row, created: true };
   }

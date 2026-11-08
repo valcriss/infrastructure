@@ -422,6 +422,17 @@ export const PruneSchema = z.object({
 });
 export type PruneMessage = z.infer<typeof PruneSchema>;
 
+/**
+ * Identifiants d'un registre d'images privé, transmis à l'agent pour la durée d'une commande seulement
+ * (jamais stockés sur l'hôte). `registry` est le nom canonique (Docker Hub : `docker.io`).
+ */
+export const RegistryAuthSchema = z.object({
+  registry: z.string().min(1).max(255),
+  username: z.string().min(1).max(255),
+  password: z.string().min(1).max(1024),
+});
+export type RegistryAuth = z.infer<typeof RegistryAuthSchema>;
+
 /** Contenu figé d'une révision, transmis à l'agent pour un déploiement. */
 export const RevisionPayloadSchema = z.object({
   number: z.number().int().positive(),
@@ -454,6 +465,8 @@ export const RunSchema = z.object({
       adoptExisting: z.boolean().optional(),
     })
     .optional(),
+  /** Identifiants des registres privés utilisés par la révision (téléchargement et construction d'images). */
+  registryAuths: z.array(RegistryAuthSchema).max(20).optional(),
 });
 export type RunMessage = z.infer<typeof RunSchema>;
 
@@ -500,6 +513,8 @@ export const ImagePullSchema = z.object({
   pullId: z.uuid(),
   expiresAt: z.iso.datetime().optional(),
   ref: z.string().min(1).max(300).regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/),
+  /** Identifiants du registre de l'image, s'il est privé et configuré. */
+  registryAuths: z.array(RegistryAuthSchema).max(20).optional(),
 });
 export type ImagePullMessage = z.infer<typeof ImagePullSchema>;
 

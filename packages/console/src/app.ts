@@ -416,13 +416,13 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     return reply.code(201).send({ token, expiresAt: rows[0]?.expires_at.toISOString() });
   });
 
-  const ops = new OperationsService(pool, gateway);
   const box = new SecretBox(masterKey);
   const registries = new RegistryStore(pool, box);
+  const ops = new OperationsService(pool, gateway, registries);
   const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile) });
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
-  const candidates = new CandidateScans(pool, scans, gateway);
+  const candidates = new CandidateScans(pool, scans, gateway, registries);
   const logStreams = new LogStreams(gateway);
   const terminals = new TerminalService(pool, gateway);
   const toolProbes = new ToolProbeService(gateway);

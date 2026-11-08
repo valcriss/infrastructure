@@ -1,6 +1,7 @@
 import { redact, type AgentMessage, type ImageUsed, type RunMessage, type ServiceState } from "@infra/shared";
 import { join } from "node:path";
 import { rm } from "node:fs/promises";
+import { AUTH_HINT, isAuthDenied, prepareDockerAuth, type DockerAuth } from "./docker-auth.js";
 import { encodeDotenv } from "./dotenv.js";
 import { dockerGet } from "./docker.js";
 import { LineBuffer, dockerEnv, runCommand } from "./exec.js";
@@ -21,6 +22,9 @@ export interface ExecutorConfig {
 type Emit = (message: AgentMessage) => void;
 
 const MAX_LOG_SLICE = 30_000;
+
+/** Commande Docker refusée par un registre (droits ou identifiants) : seule erreur qui déclenche le repli anonyme. */
+class RegistryDeniedError extends Error {}
 
 /** Exécute les commandes typées reçues de la console. Aucune commande arbitraire. */
 export class Executor {
@@ -59,8 +63,12 @@ export class Executor {
       return;
     }
     this.running.add(msg.stack.id);
+    let auth: DockerAuth | undefined;
     try {
-      const outcome = await this.execute(msg, log, (chunk) => logs.push(chunk));
+      // Identifiants des registres privés : configuration Docker temporaire, supprimée à la fin de l'opération.
+      auth = await prepareDockerAuth(dockerEnv(this.cfg.dockerSocket), msg.registryAuths);
+      secrets.push(...auth.secrets);
+      const outcome = await this.execute(msg, log, (chunk) => logs.push(chunk), auth);
       logs.end();
       emit({ type: "operation_result", operationId: msg.operationId, status: "succeeded", ...outcome });
     } catch (err) {
@@ -73,6 +81,7 @@ export class Executor {
         error: redact((err as Error).message, secrets).slice(0, 4000),
       });
     } finally {
+      await auth?.cleanup().catch(() => {});
       this.running.delete(msg.stack.id);
     }
   }
@@ -91,14 +100,13 @@ export class Executor {
     ];
   }
 
-  private async docker(args: string[], onOutput: (chunk: string) => void): Promise<{ stdout: string }> {
-    const res = await runCommand("docker", args, {
-      env: dockerEnv(this.cfg.dockerSocket),
-      timeoutMs: this.timeoutMs,
-      onOutput,
-    });
+  private async docker(args: string[], onOutput: (chunk: string) => void, env: NodeJS.ProcessEnv = dockerEnv(this.cfg.dockerSocket)): Promise<{ stdout: string }> {
+    const res = await runCommand("docker", args, { env, timeoutMs: this.timeoutMs, onOutput });
     if (res.timedOut) throw new Error("Délai dépassé pour la commande Docker.");
-    if (res.code !== 0) throw new Error(`La commande « docker ${args[0] ?? ""} » a échoué (code ${res.code}).`);
+    if (res.code !== 0) {
+      const base = `La commande « docker ${args[0] ?? ""} » a échoué (code ${res.code}).`;
+      throw isAuthDenied(res.stderr) ? new RegistryDeniedError(`${base} ${AUTH_HINT}`) : new Error(base);
+    }
     return { stdout: res.stdout };
   }
 
@@ -106,6 +114,7 @@ export class Executor {
     msg: RunMessage,
     log: (line: string) => void,
     onOutput: (chunk: string) => void,
+    auth: DockerAuth,
   ): Promise<{ images?: ImageUsed[]; services?: ServiceState[] }> {
     const { id, project } = msg.stack;
     const dir = join(this.cfg.workspaceDir, id);
@@ -166,11 +175,19 @@ export class Executor {
     if (options.pullImages) {
       log("Téléchargement des images…");
       // Les images construites localement n'existent pas dans un registre : on ne tente pas de les télécharger.
-      await this.docker([...this.composeArgs(project, dir), "pull", ...(hasBuild ? ["--ignore-buildable"] : [])], onOutput);
+      const pullArgs = [...this.composeArgs(project, dir), "pull", ...(hasBuild ? ["--ignore-buildable"] : [])];
+      try {
+        await this.docker(pullArgs, onOutput, auth.env);
+      } catch (err) {
+        // Un jeton périmé ne doit pas bloquer les images publiques : un seul nouvel essai, sans identifiants.
+        if (!auth.active || !(err instanceof RegistryDeniedError)) throw err;
+        log("Identifiants refusés par un registre : nouvel essai sans identifiants…");
+        await this.docker(pullArgs, onOutput);
+      }
     }
     if (hasBuild) {
       log("Construction des images personnalisées…");
-      await this.docker([...this.composeArgs(project, dir), "build", ...(options.pullImages ? ["--pull"] : [])], onOutput);
+      await this.docker([...this.composeArgs(project, dir), "build", ...(options.pullImages ? ["--pull"] : [])], onOutput, auth.env);
     }
     if (adopting) {
       // Information seulement : montre ce que la reprise va recréer. Un échec n'est pas bloquant.
@@ -192,6 +209,7 @@ export class Executor {
         ...(options.forceRecreate ? ["--force-recreate"] : []),
       ],
       onOutput,
+      auth.env,
     );
 
     // 3. État observé et images réellement utilisées (digests).

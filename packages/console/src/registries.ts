@@ -1,7 +1,9 @@
+import type { RegistryAuth } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { normalizeRegistry } from "./image-ref.js";
 import type { RegistryCredentials } from "./registry.js";
+import { registriesOf } from "./registry-use.js";
 import type { SecretBox } from "./secretbox.js";
 
 export interface RegistryView {
@@ -38,6 +40,22 @@ export class RegistryStore {
       }
     }
     return { username: r.username, password, insecure: r.insecure };
+  }
+
+  /**
+   * Identifiants à transmettre à l'agent pour télécharger ces images : uniquement ceux des registres utilisés
+   * (déduits des références, ou cités littéralement dans les textes fournis) et seulement s'ils sont complets.
+   */
+  async authsFor(refs: string[], texts: string[] = []): Promise<RegistryAuth[]> {
+    const used = registriesOf(refs);
+    const { rows } = await this.pool.query<{ registry: string }>("SELECT registry FROM registry_credentials WHERE username IS NOT NULL AND password_enc IS NOT NULL ORDER BY registry");
+    const out: RegistryAuth[] = [];
+    for (const { registry } of rows) {
+      if (!used.has(registry) && !(registry !== "docker.io" && texts.some((t) => t.includes(registry)))) continue;
+      const c = await this.credentials(registry);
+      if (c?.username && c.password) out.push({ registry, username: c.username, password: c.password });
+    }
+    return out;
   }
 
   async list(): Promise<RegistryView[]> {

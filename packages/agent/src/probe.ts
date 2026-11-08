@@ -1,4 +1,5 @@
-import type { AgentMessage, ImagePullMessage } from "@infra/shared";
+import { redact, type AgentMessage, type ImagePullMessage } from "@infra/shared";
+import { AUTH_HINT, isAuthDenied, prepareDockerAuth, type DockerAuth } from "./docker-auth.js";
 import { dockerGet, dockerRequest, parseImage } from "./docker.js";
 import { dockerEnv, runCommand } from "./exec.js";
 import { execCapture } from "./terminal.js";
@@ -52,15 +53,26 @@ export class Prober {
   /** `docker pull` puis identification de l'image obtenue (identifiant et plateforme). */
   async pull(msg: ImagePullMessage, emit: (m: AgentMessage) => void): Promise<void> {
     const fail = (error: string): void => emit({ type: "image_pull_result", pullId: msg.pullId, status: "failed", error: error.slice(0, 500) });
+    let auth: DockerAuth | undefined;
     try {
-      const res = await runCommand("docker", ["pull", "--quiet", msg.ref], { env: this.pullEnv, timeoutMs: 15 * 60_000 });
-      if (res.code !== 0) return fail(res.timedOut ? "Téléchargement trop long (15 min)." : `Téléchargement refusé : ${res.stdout.trim().split("\n").pop() || "erreur inconnue"}`);
+      auth = await prepareDockerAuth(this.pullEnv, msg.registryAuths);
+      const pull = (env: NodeJS.ProcessEnv) => runCommand("docker", ["pull", "--quiet", msg.ref], { env, timeoutMs: 15 * 60_000 });
+      let res = await pull(auth.env);
+      // Un jeton périmé ne doit pas bloquer une image publique : un seul nouvel essai, sans identifiants.
+      if (res.code !== 0 && !res.timedOut && auth.active && isAuthDenied(res.stderr)) res = await pull(this.pullEnv);
+      if (res.code !== 0) {
+        if (res.timedOut) return fail("Téléchargement trop long (15 min).");
+        const detail = (res.stderr || res.stdout).trim().split("\n").pop() || "erreur inconnue";
+        return fail(`Téléchargement refusé : ${redact(detail, auth.secrets)}${isAuthDenied(res.stderr) ? ` ${AUTH_HINT}` : ""}`);
+      }
       const img = parseImage(await dockerGet(this.socketPath, `/images/${encodeURIComponent(msg.ref)}/json`));
       if (!img) return fail("Image téléchargée introuvable.");
       const platform = img.os && img.arch ? `${img.os}/${img.arch}${img.variant ? `/${img.variant}` : ""}` : "";
       emit({ type: "image_pull_result", pullId: msg.pullId, status: "succeeded", imageId: img.id, platform });
     } catch (err) {
       fail((err as Error).message);
+    } finally {
+      await auth?.cleanup().catch(() => {});
     }
   }
 
