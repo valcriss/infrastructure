@@ -168,6 +168,23 @@ export const LogEndSchema = z.object({
   reason: z.string().max(200),
 });
 
+// --- Terminal de conteneur ---------------------------------------------------------------------------
+
+/** Octets d'entrée/sortie d'un terminal : encodés en base64 ; au plus 48 Kio par message. */
+export const TERMINAL_MAX_CHUNK_BYTES = 48 * 1024;
+const TerminalData = z.string().max(Math.ceil((TERMINAL_MAX_CHUNK_BYTES * 4) / 3) + 8);
+const TerminalSize = { cols: z.number().int().min(10).max(500), rows: z.number().int().min(2).max(200) };
+
+/** Sortie du terminal (agent -> console). */
+export const TerminalDataSchema = z.object({ type: z.literal("terminal_data"), sessionId: z.uuid(), data: TerminalData });
+/** Fin d'une session de terminal (shell terminé, refus, erreur, fermeture demandée). */
+export const TerminalEndSchema = z.object({
+  type: z.literal("terminal_end"),
+  sessionId: z.uuid(),
+  reason: z.string().max(300),
+  exitCode: z.number().int().optional(),
+});
+
 /** Échantillon de métriques d'un conteneur en cours d'exécution. */
 export const MetricSampleSchema = z.object({
   containerId: z.string().min(1).max(80),
@@ -333,6 +350,8 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   OperationResultSchema,
   LogChunkSchema,
   LogEndSchema,
+  TerminalDataSchema,
+  TerminalEndSchema,
 ]);
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
 
@@ -428,6 +447,18 @@ export const LogsStopSchema = z.object({
   streamId: z.uuid(),
 });
 
+/** Ouvre un shell interactif (`docker exec` avec terminal) dans un conteneur. L'agent refuse ceux de la console et de l'agent. */
+export const TerminalOpenSchema = z.object({
+  type: z.literal("terminal_open"),
+  sessionId: z.uuid(),
+  containerId: z.string().regex(/^[0-9a-f]{12,64}$/),
+  ...TerminalSize,
+});
+export const TerminalInputSchema = z.object({ type: z.literal("terminal_input"), sessionId: z.uuid(), data: TerminalData });
+export const TerminalResizeSchema = z.object({ type: z.literal("terminal_resize"), sessionId: z.uuid(), ...TerminalSize });
+export const TerminalCloseSchema = z.object({ type: z.literal("terminal_close"), sessionId: z.uuid() });
+export type TerminalOpenMessage = z.infer<typeof TerminalOpenSchema>;
+
 /** Demande de scan d'une image locale (par identifiant) avec Trivy. */
 export const ScanSchema = z.object({
   type: z.literal("scan"),
@@ -449,6 +480,10 @@ export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   ScanSchema,
   LogsStartSchema,
   LogsStopSchema,
+  TerminalOpenSchema,
+  TerminalInputSchema,
+  TerminalResizeSchema,
+  TerminalCloseSchema,
 ]);
 export type ConsoleMessage = z.infer<typeof ConsoleMessageSchema>;
 
@@ -461,25 +496,29 @@ export const UsernameSchema = z
   .max(64)
   .regex(/^[A-Za-z0-9._-]+$/);
 
+/** Identifiant de connexion : l'e-mail (ou, pour un ancien compte, son identifiant d'origine). */
+export const LoginIdSchema = z.string().trim().min(3).max(254);
 export const SetupRequestSchema = z.object({
   setupToken: z.string().min(1).max(256),
-  username: UsernameSchema,
+  username: LoginIdSchema,
   password: PasswordSchema,
 });
 
 export const ChangeCredentialsSchema = z
   .object({
     currentPassword: z.string().min(1).max(256),
-    newUsername: UsernameSchema.optional(),
+    newEmail: z.string().trim().toLowerCase().pipe(z.email().max(254)).optional(),
     newPassword: PasswordSchema.optional(),
   })
-  .refine((v) => v.newUsername !== undefined || v.newPassword !== undefined, {
+  .refine((v) => v.newEmail !== undefined || v.newPassword !== undefined, {
     message: "Rien à modifier",
   });
 
 export const LoginRequestSchema = z.object({
-  username: z.string().min(1).max(64),
+  username: z.string().trim().min(1).max(254),
   password: z.string().min(1).max(256),
+  /** Code à usage unique (TOTP) ou code de secours, si le compte en a un. */
+  code: z.string().trim().min(6).max(16).optional(),
 });
 
 export type HostPresence = "online" | "offline" | "pending";

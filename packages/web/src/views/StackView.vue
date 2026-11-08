@@ -1,35 +1,60 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ApiError, api, type StackDetail } from "../api";
 import ComposeTab from "./stack/ComposeTab.vue";
 import FilesTab from "./stack/FilesTab.vue";
 import HistoryTab from "./stack/HistoryTab.vue";
 import LogsTab from "./stack/LogsTab.vue";
 import MetricsTab from "./stack/MetricsTab.vue";
+import TerminalPanel from "../components/TerminalPanel.vue";
+import { useSession } from "../stores/session";
 import OperationsTab from "./stack/OperationsTab.vue";
 import OverviewTab from "./stack/OverviewTab.vue";
 import SecurityTab from "./stack/SecurityTab.vue";
 import VariablesTab from "./stack/VariablesTab.vue";
 
 const route = useRoute();
+const router = useRouter();
+const session = useSession();
 const id = computed(() => String(route.params.id));
 const stack = ref<StackDetail | null>(null);
 const error = ref("");
-const tab = ref("overview");
 let timer: number | undefined;
 
+// Onglets principaux ; « Configuration » et « Historique » regroupent des sections.
 const tabs = [
   { key: "overview", label: "Vue d'ensemble", icon: "gauge-high" },
-  { key: "compose", label: "Compose", icon: "file-code" },
-  { key: "variables", label: "Variables", icon: "sliders" },
-  { key: "files", label: "Fichiers", icon: "folder-open" },
+  { key: "config", label: "Configuration", icon: "file-code" },
   { key: "security", label: "Sécurité et versions", icon: "shield-halved" },
   { key: "metrics", label: "Métriques", icon: "chart-line" },
   { key: "logs", label: "Logs", icon: "terminal" },
   { key: "history", label: "Historique", icon: "clock-rotate-left" },
-  { key: "operations", label: "Opérations", icon: "list-check" },
 ];
+const SECTIONS_BASE: Record<string, { key: string; label: string; icon: string }[]> = {
+  config: [
+    { key: "compose", label: "Compose", icon: "file-code" },
+    { key: "variables", label: "Variables", icon: "sliders" },
+    { key: "files", label: "Fichiers", icon: "folder-open" },
+  ],
+  history: [
+    { key: "revisions", label: "Révisions", icon: "clock-rotate-left" },
+    { key: "operations", label: "Opérations", icon: "list-check" },
+  ],
+};
+// « Logs » et « Terminal » partagent l'onglet ; le terminal n'apparaît que pour qui y a droit.
+const SECTIONS = computed<Record<string, { key: string; label: string; icon: string }[]>>(() => ({
+  ...SECTIONS_BASE,
+  ...(session.info?.terminalAllowed ? { logs: [{ key: "logs", label: "Logs", icon: "terminal" }, { key: "terminal", label: "Terminal", icon: "terminal" }] } : {}),
+}));
+
+// L'onglet et la section vivent dans l'URL (?tab=config&section=variables) : liens directs et retour arrière.
+const tab = computed(() => (tabs.some((t) => t.key === route.query.tab) ? String(route.query.tab) : "overview"));
+const sections = computed(() => SECTIONS.value[tab.value] ?? []);
+const section = computed(() => sections.value.find((s) => s.key === route.query.section)?.key ?? sections.value[0]?.key ?? "");
+function go(nextTab: string, nextSection?: string) {
+  void router.replace({ query: { ...(nextTab !== "overview" ? { tab: nextTab } : {}), ...(nextSection ? { section: nextSection } : {}) } });
+}
 
 async function load() {
   try {
@@ -72,22 +97,43 @@ onBeforeUnmount(() => window.clearInterval(timer));
           :aria-selected="tab === t.key"
           class="-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm"
           :class="tab === t.key ? 'border-blue-600 font-medium text-blue-700' : 'border-transparent text-slate-600 hover:text-slate-900'"
-          @click="tab = t.key"
+          @click="go(t.key)"
         >
           <FaIcon :icon="['fas', t.icon]" />
           {{ t.label }}
         </button>
       </div>
 
+      <div v-if="sections.length" role="tablist" :aria-label="`Sections de ${tab}`" class="flex flex-wrap gap-2">
+        <button
+          v-for="s in sections"
+          :key="s.key"
+          role="tab"
+          :aria-selected="section === s.key"
+          :class="['inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm', section === s.key ? 'border-blue-600 bg-blue-50 font-medium text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100']"
+          @click="go(tab, s.key)"
+        >
+          <FaIcon :icon="['fas', s.icon]" /> {{ s.label }}
+        </button>
+      </div>
+
       <OverviewTab v-if="tab === 'overview'" :stack="stack" @changed="load" />
-      <ComposeTab v-else-if="tab === 'compose'" :stack="stack" @changed="load" />
-      <VariablesTab v-else-if="tab === 'variables'" :stack="stack" @changed="load" />
-      <FilesTab v-else-if="tab === 'files'" :stack="stack" @changed="load" />
+      <!-- KeepAlive : un brouillon de Compose n'est pas perdu en passant à une autre section. -->
+      <KeepAlive v-else-if="tab === 'config'">
+        <ComposeTab v-if="section === 'compose'" :stack="stack" @changed="load" />
+        <VariablesTab v-else-if="section === 'variables'" :stack="stack" @changed="load" />
+        <FilesTab v-else :stack="stack" @changed="load" />
+      </KeepAlive>
       <SecurityTab v-else-if="tab === 'security'" :stack="stack" />
       <MetricsTab v-else-if="tab === 'metrics'" :stack="stack" />
-      <LogsTab v-else-if="tab === 'logs'" :stack="stack" />
-      <HistoryTab v-else-if="tab === 'history'" :stack="stack" @changed="load" />
-      <OperationsTab v-else-if="tab === 'operations'" :stack="stack" />
+      <template v-else-if="tab === 'logs'">
+        <TerminalPanel v-if="section === 'terminal'" :host-id="stack.hostId" :containers="stack.containers" />
+        <LogsTab v-else :stack="stack" />
+      </template>
+      <template v-else-if="tab === 'history'">
+        <HistoryTab v-if="section === 'revisions'" :stack="stack" @changed="load" />
+        <OperationsTab v-else :stack="stack" />
+      </template>
     </template>
     <p v-else-if="!error" class="text-slate-500">Chargement…</p>
   </div>

@@ -108,7 +108,7 @@ async function submit() {
       <label class="block text-sm">
         <span class="font-medium">Variables de stack (une par ligne, NOM=valeur)</span>
         <textarea v-model="variablesText" rows="4" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"></textarea>
-        <span class="text-xs text-slate-500">Les valeurs sensibles se marquent ensuite depuis l'onglet Variables.</span>
+        <span class="text-xs text-slate-500">Les valeurs sensibles se marquent ensuite depuis l'onglet Configuration, section Variables.</span>
       </label>
       <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
       <div class="flex gap-3">

@@ -179,14 +179,14 @@ describe.skipIf(!url)("console (intégration PostgreSQL)", () => {
     expect((await put({ currentPassword: "faux", newPassword: "nouveau-mot-de-passe-2" })).status).toBe(403);
     expect((await put({ currentPassword: "mot-de-passe-solide-1" })).status).toBe(400);
     expect((await put({ currentPassword: "mot-de-passe-solide-1", newPassword: "court" })).status).toBe(400);
-    expect((await put({ currentPassword: "mot-de-passe-solide-1", newPassword: "nouveau-mot-de-passe-2", newUsername: "root" })).status).toBe(200);
+    expect((await put({ currentPassword: "mot-de-passe-solide-1", newPassword: "nouveau-mot-de-passe-2", newEmail: "root@example.com" })).status).toBe(200);
 
     // La session courante survit, l'autre est révoquée.
     expect((await fetch(`${baseUrl}/api/v1/session`, { headers: { cookie } })).status).toBe(200);
     expect((await fetch(`${baseUrl}/api/v1/session`, { headers: { cookie: other } })).status).toBe(401);
     // Anciens identifiants refusés, nouveaux acceptés.
-    expect((await post("/api/v1/session", { username: "root", password: "mot-de-passe-solide-1" })).status).toBe(401);
-    expect((await post("/api/v1/session", { username: "root", password: "nouveau-mot-de-passe-2" })).status).toBe(200);
+    expect((await post("/api/v1/session", { username: "root@example.com", password: "mot-de-passe-solide-1" })).status).toBe(401);
+    expect((await post("/api/v1/session", { username: "root@example.com", password: "nouveau-mot-de-passe-2" })).status).toBe(200);
   });
 
   it("génère la clé de restauration une seule fois et n'en conserve que la partie publique", async () => {

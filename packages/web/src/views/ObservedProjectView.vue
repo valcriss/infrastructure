@@ -7,6 +7,8 @@ import PanelCard from "../components/PanelCard.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
 import VulnerabilityTable from "../components/VulnerabilityTable.vue";
 import LogsTab from "./stack/LogsTab.vue";
+import TerminalPanel from "../components/TerminalPanel.vue";
+import { useSession } from "../stores/session";
 import MetricsTab from "./stack/MetricsTab.vue";
 
 // Fiche en lecture seule d'un projet Compose qui tourne sur un hôte sans être géré par la console.
@@ -23,12 +25,14 @@ const tab = ref("overview");
 const open = reactive<Record<string, boolean>>({});
 let timer: number | undefined;
 
-const TABS = [
+const session = useSession();
+const TABS = computed(() => [
   { key: "overview", label: "Vue d'ensemble", icon: "gauge-high" },
   { key: "security", label: "Sécurité", icon: "shield-halved" },
   { key: "metrics", label: "Métriques", icon: "chart-line" },
   { key: "logs", label: "Logs", icon: "terminal" },
-];
+  ...(session.info?.terminalAllowed ? [{ key: "terminal", label: "Terminal", icon: "terminal" }] : []),
+]);
 
 async function load() {
   try {
@@ -207,6 +211,7 @@ async function scan(imageId: string, platform: string, ref: string) {
 
       <MetricsTab v-else-if="tab === 'metrics'" :stack="stackLike" :project="project" />
       <LogsTab v-else-if="tab === 'logs'" :stack="stackLike" :project="project" />
+      <TerminalPanel v-else-if="tab === 'terminal'" :host-id="hostId" :containers="containers" />
     </template>
     <p v-else-if="!error" class="text-slate-500">Chargement…</p>
   </div>

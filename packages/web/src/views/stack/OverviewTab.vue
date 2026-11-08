@@ -3,8 +3,10 @@ import { ref } from "vue";
 import { api, describeError, fmtDate, type Container, type StackDetail } from "../../api";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
+import { useSession } from "../../stores/session";
 
 const props = defineProps<{ stack: StackDetail }>();
+const session = useSession();
 const emit = defineEmits<{ changed: [] }>();
 
 const pull = ref(false);
@@ -61,15 +63,15 @@ async function run(action: "deploy" | "stop" | "start") {
         L'agent de l'hôte est hors ligne : l'état affiché est la dernière observation, et aucune action ne peut être lancée.
       </p>
       <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
-        <button :disabled="busy || stack.hostPresence === 'offline'" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="run('deploy')">
+        <button :disabled="busy || !session.canOperate || stack.hostPresence === 'offline'" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="run('deploy')">
           <template v-if="stack.deployedRevision === stack.currentRevision">Redéployer la révision {{ stack.currentRevision }} (active)</template>
           <template v-else>Déployer la révision {{ stack.currentRevision }}</template>
         </button>
         <label class="flex items-center gap-1"><input v-model="pull" type="checkbox" /> Télécharger les images</label>
         <label class="flex items-center gap-1"><input v-model="force" type="checkbox" /> Forcer la recréation</label>
         <span class="mx-2 text-slate-300">|</span>
-        <button :disabled="busy || stack.hostPresence === 'offline'" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" @click="run('start')">Démarrer</button>
-        <button :disabled="busy || stack.hostPresence === 'offline'" class="rounded border border-red-300 px-3 py-2 text-red-700 hover:bg-red-50 disabled:opacity-50" @click="run('stop')">Arrêter</button>
+        <button :disabled="busy || !session.canOperate || stack.hostPresence === 'offline'" class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100 disabled:opacity-50" @click="run('start')">Démarrer</button>
+        <button :disabled="busy || !session.canOperate || stack.hostPresence === 'offline'" class="rounded border border-red-300 px-3 py-2 text-red-700 hover:bg-red-50 disabled:opacity-50" @click="run('stop')">Arrêter</button>
       </div>
       <p class="mt-2 text-xs text-slate-500">
         « Démarrer » relance la dernière configuration déployée ; un brouillon enregistré n'est appliqué que par « Déployer ».

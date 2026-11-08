@@ -118,7 +118,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <p class="text-amber-700">Versions plus récentes{{ c.check.detail.uncertain ? " (candidats incertains)" : "" }} :</p>
                 <ul class="mt-1 flex flex-wrap gap-2"><li v-for="t in c.check.detail.candidates" :key="t" class="rounded bg-amber-100 px-2 py-0.5 font-mono text-xs text-amber-900">{{ t }}</li></ul>
               </div>
-              <p class="text-xs text-slate-500">Rien n'est déployé automatiquement : modifiez le tag dans le Compose (onglet Compose) puis déployez.</p>
+              <p class="text-xs text-slate-500">Rien n'est déployé automatiquement : modifiez le tag dans le Compose (onglet Configuration, section Compose) puis déployez.</p>
             </template>
             <ul v-if="c.check.detail.notes.length" class="list-disc space-y-0.5 pl-5 text-xs text-slate-600"><li v-for="n in c.check.detail.notes" :key="n">{{ n }}</li></ul>
             <p class="text-xs text-slate-400">

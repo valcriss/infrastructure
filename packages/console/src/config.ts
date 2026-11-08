@@ -17,6 +17,9 @@ export interface Config {
   metricsRetentionDays: number;
   /** Autorité de certification supplémentaire pour des registres d'images internes (optionnel). */
   registryCaFile: string | null;
+  /** Clés d'accès (WebAuthn) : domaine de référence et origine exacte de la console. Désactivées si absents. */
+  webauthnRpId?: string | null;
+  webauthnOrigin?: string | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -37,6 +40,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     gitCaFile: env.GIT_CA_FILE || null,
     metricsIntervalSec: boundedInt(env.METRICS_INTERVAL_SEC, 30, 5, 3600, "METRICS_INTERVAL_SEC"),
     registryCaFile: env.REGISTRY_CA_FILE || null,
+    webauthnRpId: env.WEBAUTHN_RP_ID || null,
+    webauthnOrigin: env.WEBAUTHN_ORIGIN || null,
     metricsRetentionDays: boundedInt(env.METRICS_RETENTION_DAYS, 7, 1, 365, "METRICS_RETENTION_DAYS"),
   };
 }

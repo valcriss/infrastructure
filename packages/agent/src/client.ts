@@ -18,6 +18,7 @@ import { collectDiskUsage, matchingBuildCache, parseDf } from "./disk-usage.js";
 import { RetainedBuildCache } from "./retained-cache.js";
 import { fitInventory } from "./inventory-fit.js";
 import { LogStreamer } from "./logs.js";
+import { TerminalManager } from "./terminal.js";
 import { MetricsCollector } from "./metrics.js";
 import { Pruner } from "./pruner.js";
 import { TrivyScanner } from "./scanner.js";
@@ -70,6 +71,7 @@ export class AgentClient {
   private socket: WebSocket | null = null;
   private readonly executor: Executor;
   private readonly logs: LogStreamer;
+  private readonly terminals: TerminalManager;
   private readonly scanner: TrivyScanner;
   /** Écart entre l'horloge de la console et celle de l'hôte (mesuré à la connexion), pour l'échéance des demandes. */
   private clockOffsetMs = 0;
@@ -100,6 +102,7 @@ export class AgentClient {
         return { count: left.length, bytes: left.reduce((s, x) => s + x.sizeBytes, 0) };
       },
     });
+    this.terminals = new TerminalManager(config.dockerSocket, (project) => this.protection.isProtected(project));
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
     this.scanner = new TrivyScanner({
       workspaceDir: config.workspaceDir,
@@ -232,7 +235,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "metrics", "scan.trivy"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "metrics", "scan.trivy"],
           auth: auth,
         });
       });
@@ -295,6 +298,23 @@ export class AgentClient {
             case "logs_stop":
               this.logs.stop(msg.streamId);
               break;
+            case "terminal_open":
+              void this.terminals
+                .open(msg, (m) => this.emit(m))
+                .catch((err: unknown) => {
+                  this.log(`erreur de terminal : ${(err as Error).message}`);
+                  this.emit({ type: "terminal_end", sessionId: msg.sessionId, reason: "Erreur inattendue de l'agent." });
+                });
+              break;
+            case "terminal_input":
+              this.terminals.input(msg.sessionId, msg.data);
+              break;
+            case "terminal_resize":
+              this.terminals.resize(msg.sessionId, msg.cols, msg.rows);
+              break;
+            case "terminal_close":
+              this.terminals.close(msg.sessionId);
+              break;
             case "run": {
               const verdict = this.guard.check(msg.operationId, msg.expiresAt);
               if (verdict === "replayed") {
@@ -356,6 +376,7 @@ export class AgentClient {
       const finish = (): void => {
         // Plus de client pour lire les flux : ils sont arrêtés avec la connexion.
         this.logs.stopAll();
+        this.terminals.closeAll();
         clearInterval(heartbeat);
         clearInterval(inventoryTimer);
         clearInterval(metricsTimer);

@@ -40,5 +40,7 @@ router.beforeEach(async (to) => {
   if (to.path === "/setup") return session.username ? "/dashboard" : "/login";
   if (!session.username && !to.meta.public) return "/login";
   if (session.username && to.path === "/login") return "/dashboard";
+  // Mot de passe provisoire : seule la page « Mon compte » est accessible tant qu'il n'est pas changé.
+  if (session.info?.mustChangePassword && to.path !== "/account") return "/account";
   return true;
 });

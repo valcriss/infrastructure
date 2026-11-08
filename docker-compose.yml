@@ -33,6 +33,9 @@ services:
       DATABASE_URL: postgres://infra:${POSTGRES_PASSWORD}@postgres:5432/infra
       # Passer à true dès que la console est servie en HTTPS.
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      # Clés d'accès (WebAuthn) : domaine et origine exacte de la console ; désactivées si vides.
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
       # Autorité de certification d'un serveur Git interne (optionnel) : fichier monté dans le conteneur.
       GIT_CA_FILE: ${GIT_CA_FILE:-}
       # Supervision : période de collecte des métriques (s) et rétention (jours).

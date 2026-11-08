@@ -30,6 +30,8 @@ export interface GatewayHandlers {
   onDisconnect(hostId: string): Promise<void>;
   onLogChunk(hostId: string, streamId: string, lines: string[]): void;
   onLogEnd(hostId: string, streamId: string, reason: string): void;
+  onTerminalData(hostId: string, sessionId: string, data: string): void;
+  onTerminalEnd(hostId: string, sessionId: string, reason: string, exitCode?: number): void;
   onMetrics(hostId: string, samples: MetricSample[], host?: HostMetrics): Promise<void>;
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
   onPruneResult(hostId: string, result: PruneResult): Promise<void>;
@@ -202,6 +204,12 @@ export class AgentGateway {
             break;
           case "log_end":
             this.handlers?.onLogEnd(hostId, msg.streamId, msg.reason);
+            break;
+          case "terminal_data":
+            this.handlers?.onTerminalData(hostId, msg.sessionId, msg.data);
+            break;
+          case "terminal_end":
+            this.handlers?.onTerminalEnd(hostId, msg.sessionId, msg.reason, msg.exitCode);
             break;
           case "hello":
             this.fail(socket, "bad_request", "hello déjà reçu");

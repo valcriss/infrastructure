@@ -14,7 +14,7 @@ const step = ref<Step>("account");
 
 // --- Étape 1 : compte administrateur -------------------------------------------
 const setupToken = ref("");
-const username = ref("admin");
+const username = ref("");
 const password = ref("");
 const confirm = ref("");
 const error = ref("");
@@ -134,8 +134,8 @@ async function finish() {
           <input v-model="setupToken" required autocomplete="off" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm" />
         </label>
         <label class="block text-sm">
-          <span class="font-medium">Identifiant</span>
-          <input v-model="username" required minlength="3" autocomplete="username" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
+          <span class="font-medium">E-mail de l'administrateur</span>
+          <input v-model="username" required type="email" autocomplete="email" placeholder="vous@exemple.fr" class="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
         </label>
         <label class="block text-sm">
           <span class="font-medium">Mot de passe (12 caractères minimum)</span>

@@ -35,8 +35,8 @@ import {
   SESSION_COOKIE,
   createSession,
   destroySession,
-  isAuthenticated,
   requireAuth,
+  sessionUser,
   requireSessionOrToken,
 } from "./auth.js";
 import { ensureBootstrapToken } from "./bootstrap.js";
@@ -50,6 +50,9 @@ import { OperationsService } from "./operations.js";
 import { buildOpenApi, toOpenApiPath } from "./openapi.js";
 import { registerStackRoutes } from "./stack-routes.js";
 import { registerTokenRoutes } from "./token-routes.js";
+import { consumeRecoveryCode, consumeTotp } from "./mfa.js";
+import { registerUserRoutes, sessionInfo } from "./user-routes.js";
+import { TerminalService, registerTerminalRoutes } from "./terminal-routes.js";
 
 export interface AppDeps {
   config: Config;
@@ -130,13 +133,16 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     }
   });
 
-  app.addHook("onSend", async (_request, reply) => {
+  app.addHook("onSend", async (request, reply) => {
+    // Le terminal utilise un WebSocket vers la console elle-même ; certains navigateurs ne le couvrent pas avec 'self'.
+    const host = /^[A-Za-z0-9.:[\]-]+$/.test(request.headers.host ?? "") ? request.headers.host : "";
+    const ws = host ? ` ws://${host} wss://${host}` : "";
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "no-referrer");
     reply.header(
       "Content-Security-Policy",
-      "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+      `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'${ws}; frame-ancestors 'none'`,
     );
   });
 
@@ -165,7 +171,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   // --- Statut public minimal ------------------------------------------------
   app.get("/api/v1/openapi.json", async () => buildOpenApi());
 
-  app.get("/status", async () => ({ status: "ok", initialized: setup.token === null }));
+  app.get("/status", async () => ({ status: "ok", initialized: setup.token === null, passkeys: Boolean(config.webauthnRpId && config.webauthnOrigin) }));
 
   // --- Initialisation (une seule fois) --------------------------------------
   app.post("/api/v1/setup", async (request, reply) => {
@@ -192,41 +198,64 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       throw err;
     }
     setup.token = null;
+    // Premier utilisateur : administrateur. Un identifiant sans « @ » (compatibilité) reçoit une adresse locale.
+    const email = body.username.includes("@") ? body.username.toLowerCase() : `${body.username.toLowerCase()}@console.local`;
+    const legacy = body.username.includes("@") ? null : body.username;
+    const created = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, username, display_name, role, password_hash) VALUES ($1, $2, $3, 'admin', $4) RETURNING id`,
+      [email, legacy, body.username, passwordHash],
+    );
     await audit(pool, body.username, "setup", null, "success");
     await ensureBootstrapToken(pool, config.sharedDir);
-    await createSession(pool, config, reply);
+    await createSession(pool, config, reply, { userId: created.rows[0]?.id ?? "", method: "password", mfa: false });
     return reply.code(201).send({ username: body.username });
   });
 
   // --- Session ----------------------------------------------------------------
   app.post("/api/v1/session", async (request, reply) => {
     const body = LoginRequestSchema.parse(request.body);
-    const key = `${body.username.toLowerCase()}|${request.ip}`;
+    const id = body.username.toLowerCase();
+    const key = `${id}|${request.ip}`;
     if (limiter.isBlocked(key)) {
       return reply.code(429).send(apiError("too_many_attempts", "Trop de tentatives, réessayez plus tard"));
     }
-    const { rows } = await pool.query<{ username: string; password_hash: string }>(
-      "SELECT username, password_hash FROM admin",
+    const { rows } = await pool.query<{ id: string; email: string; username: string | null; role: string; password_hash: string | null; totp_secret: string | null; totp_enabled: boolean }>(
+      `SELECT id, email, username, role, password_hash, totp_secret, totp_enabled FROM users
+        WHERE (lower(email) = $1 OR lower(username) = $1) AND active`,
+      [id],
     );
-    const admin = rows[0];
-    const ok = await verifyPassword(body.password, admin?.password_hash ?? DUMMY_HASH);
-    if (!admin || admin.username !== body.username || !ok) {
+    const user = rows[0];
+    const ok = await verifyPassword(body.password, user?.password_hash ?? DUMMY_HASH);
+    if (!user || !user.password_hash || !ok) {
       limiter.recordFailure(key);
       await audit(pool, body.username, "login", null, "failure");
       return reply.code(401).send(apiError("invalid_credentials", "Identifiants invalides"));
     }
+    // Deuxième facteur : demandé seulement si le compte en a un (TOTP) ; un code de secours le remplace.
+    let mfa = false;
+    if (user.totp_enabled && user.totp_secret) {
+      if (!body.code) {
+        return reply.code(401).send(apiError("mfa_required", "Code à usage unique requis"));
+      }
+      mfa = (await consumeTotp(pool, user.id, box.open(user.totp_secret), body.code)) || (await consumeRecoveryCode(pool, user.id, body.code));
+      if (!mfa) {
+        limiter.recordFailure(key);
+        await audit(pool, user.username ?? user.email, "login", null, "failure");
+        return reply.code(401).send(apiError("invalid_code", "Code invalide"));
+      }
+    }
     limiter.reset(key);
-    await createSession(pool, config, reply);
-    await audit(pool, admin.username, "login", null, "success");
-    return { username: admin.username };
+    await createSession(pool, config, reply, { userId: user.id, method: "password", mfa });
+    await audit(pool, user.username ?? user.email, "login", null, "success");
+    return { username: user.username ?? user.email };
   });
 
   app.get("/api/v1/session", async (request, reply) => {
-    if (!(await isAuthenticated(pool, request))) {
+    const user = await sessionUser(pool, request);
+    if (!user) {
       return reply.code(401).send(apiError("unauthorized", "Authentification requise"));
     }
-    const { rows } = await pool.query<{ username: string }>("SELECT username FROM admin");
-    return { username: rows[0]?.username };
+    return sessionInfo(user, config);
   });
 
   // --- Compte administrateur ----------------------------------------------------
@@ -256,27 +285,35 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     if (limiter.isBlocked(key)) {
       return reply.code(429).send(apiError("too_many_attempts", "Trop de tentatives, réessayez plus tard"));
     }
-    const { rows } = await pool.query<{ username: string; password_hash: string }>(
-      "SELECT username, password_hash FROM admin",
+    const current = request.user;
+    if (!current) return reply.code(401).send(apiError("unauthorized", "Authentification requise"));
+    const { rows } = await pool.query<{ password_hash: string | null; email: string; username: string | null }>(
+      "SELECT password_hash, email, username FROM users WHERE id = $1",
+      [current.id],
     );
-    const admin = rows[0];
-    if (!admin || !(await verifyPassword(body.currentPassword, admin.password_hash))) {
+    const row = rows[0];
+    if (!row || !row.password_hash || !(await verifyPassword(body.currentPassword, row.password_hash))) {
       limiter.recordFailure(key);
-      await audit(pool, "admin", "credentials.change", null, "failure");
+      await audit(pool, request.actor, "credentials.change", null, "failure");
       return reply.code(403).send(apiError("invalid_credentials", "Mot de passe actuel invalide"));
     }
     limiter.reset(key);
-    const username = body.newUsername ?? admin.username;
-    const passwordHash = body.newPassword ? await hashPassword(body.newPassword) : admin.password_hash;
-    await pool.query(
-      "UPDATE admin SET username = $1, password_hash = $2, updated_at = now()",
-      [username, passwordHash],
-    );
-    // Toute autre session est révoquée ; seule la session courante est conservée.
-    const current = request.cookies[SESSION_COOKIE];
-    await pool.query("DELETE FROM sessions WHERE id_hash <> $1", [sha256(current ?? "")]);
-    await audit(pool, username, "credentials.change", null, "success");
-    return { username };
+    const email = body.newEmail ?? row.email;
+    const passwordHash = body.newPassword ? await hashPassword(body.newPassword) : row.password_hash;
+    try {
+      await pool.query(
+        "UPDATE users SET email = $2, password_hash = $3, must_change_password = false, updated_at = now() WHERE id = $1",
+        [current.id, email, passwordHash],
+      );
+    } catch (err) {
+      if ((err as { code?: string }).code === "23505") return reply.code(409).send(apiError("email_taken", "Un utilisateur porte déjà cet e-mail"));
+      throw err;
+    }
+    // Toute autre session de cet utilisateur est révoquée ; seule la session courante est conservée.
+    const token = request.cookies[SESSION_COOKIE];
+    await pool.query("DELETE FROM sessions WHERE user_id = $1 AND id_hash <> $2", [current.id, sha256(token ?? "")]);
+    await audit(pool, row.username ?? email, "credentials.change", null, "success");
+    return { username: row.username ?? email, email };
   });
 
   app.delete("/api/v1/session", async (request, reply) => {
@@ -376,18 +413,23 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const logStreams = new LogStreams(gateway);
+  const terminals = new TerminalService(pool, gateway);
+  app.addHook("onClose", async () => terminals.closeAll());
   const pruning = new PruneService(pool, gateway);
   gateway.setHandlers({
     onLog: (hostId, operationId, text) => ops.onLog(hostId, operationId, text),
     onResult: (hostId, msg) => ops.onResult(hostId, msg),
     onDisconnect: async (hostId) => {
       logStreams.onHostDisconnect(hostId);
+      terminals.onHostDisconnect(hostId);
       await ops.onDisconnect(hostId);
       await scans.onDisconnect(hostId);
       await pruning.onDisconnect(hostId);
     },
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
+    onTerminalData: (hostId, sessionId, data) => terminals.onData(hostId, sessionId, data),
+    onTerminalEnd: (hostId, sessionId, reason, exitCode) => terminals.onEnd(hostId, sessionId, reason, exitCode),
     onMetrics: async (hostId, samples, host) => {
       await metrics.ingest(hostId, samples, host);
     },
@@ -422,6 +464,8 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
+  registerUserRoutes(app, { pool, config, box, auth, limiter });
+  registerTerminalRoutes(app, { pool, auth, service: terminals, hasFactor: async (id) => ((await pool.query("SELECT 1 FROM passkeys WHERE user_id = $1", [id])).rowCount ?? 0) > 0 });
   registerBackupRoutes(app, { backup, session: auth, apiAuth });
 
   app.get("/agent/ws", { websocket: true }, (socket) => gateway.handle(socket));

@@ -1,0 +1,43 @@
+import { z } from "zod";
+import type { RouteDoc } from "./openapi.js";
+import { CreateUserBody, UpdateUserBody } from "./user-routes.js";
+
+const passkeyResponse = z.object({ challengeId: z.string(), response: z.record(z.string(), z.unknown()) });
+const passwordOnly = z.object({ currentPassword: z.string().optional() });
+
+/** Utilisateurs, deuxième facteur et clés d'accès. */
+export const USER_ROUTE_DOCS: RouteDoc[] = [
+  { method: "get", path: "/api/v1/users", summary: "Lister les utilisateurs", tag: "Utilisateurs", access: "session", success: { status: 200, description: "Comptes, rôles et état du deuxième facteur" }, errors: [401, 403], description: "Administrateurs uniquement." },
+  { method: "post", path: "/api/v1/users", summary: "Créer un utilisateur", tag: "Utilisateurs", access: "session", body: CreateUserBody, success: { status: 201, description: "Compte créé avec un mot de passe provisoire (affiché une seule fois)" }, errors: [400, 401, 403, 409], description: "L'utilisateur devra changer ce mot de passe à sa première connexion." },
+  { method: "patch", path: "/api/v1/users/{id}", summary: "Modifier un utilisateur (rôle, droit Terminal, état)", tag: "Utilisateurs", access: "session", body: UpdateUserBody, success: { status: 200, description: "Compte mis à jour" }, errors: [400, 401, 403, 404, 409], description: "Refuse de retirer le dernier administrateur actif ou de se retirer ses propres droits." },
+  { method: "post", path: "/api/v1/users/{id}/reset-access", summary: "Réinitialiser les accès d'un utilisateur", tag: "Utilisateurs", access: "session", success: { status: 200, description: "Nouveau mot de passe provisoire ; deuxième facteur, clés d'accès et sessions effacés" }, errors: [401, 403, 404] },
+  { method: "delete", path: "/api/v1/users/{id}", summary: "Supprimer un utilisateur", tag: "Utilisateurs", access: "session", success: { status: 204, description: "Compte supprimé" }, errors: [401, 403, 404, 409] },
+
+  { method: "patch", path: "/api/v1/me/profile", summary: "Modifier mon profil", tag: "Mon compte", access: "session", body: z.object({ displayName: z.string().max(100) }), success: { status: 200, description: "Nom affiché mis à jour" }, errors: [400, 401] },
+  { method: "get", path: "/api/v1/me/security", summary: "Mes moyens de connexion", tag: "Mon compte", access: "session", success: { status: 200, description: "TOTP, clés d'accès, codes de secours restants" }, errors: [401] },
+  { method: "post", path: "/api/v1/me/totp", summary: "Commencer la configuration du code à usage unique", tag: "Mon compte", access: "session", success: { status: 200, description: "Secret et lien otpauth (à scanner) ; actif après confirmation" }, errors: [401, 409] },
+  { method: "post", path: "/api/v1/me/totp/confirm", summary: "Confirmer le code à usage unique", tag: "Mon compte", access: "session", body: z.object({ code: z.string() }), success: { status: 200, description: "TOTP activé ; codes de secours (affichés une seule fois)" }, errors: [400, 401, 409] },
+  { method: "delete", path: "/api/v1/me/totp", summary: "Désactiver le code à usage unique", tag: "Mon compte", access: "session", body: passwordOnly, success: { status: 204, description: "TOTP désactivé" }, errors: [401, 403] },
+  { method: "post", path: "/api/v1/me/recovery-codes", summary: "Régénérer les codes de secours", tag: "Mon compte", access: "session", body: passwordOnly, success: { status: 200, description: "Nouveaux codes (affichés une seule fois) ; les anciens sont invalidés" }, errors: [401, 403, 409] },
+  { method: "post", path: "/api/v1/me/step-up", summary: "Confirmer mon identité avec un code", tag: "Mon compte", access: "session", body: z.object({ code: z.string() }), success: { status: 204, description: "Deuxième facteur validé pour cette session" }, errors: [400, 401, 429], description: "Requis avant d'ouvrir un terminal (validité 10 minutes)." },
+  { method: "post", path: "/api/v1/me/step-up/passkey/options", summary: "Défi de confirmation par clé d'accès", tag: "Mon compte", access: "session", success: { status: 200, description: "Options WebAuthn et identifiant du défi" }, errors: [401, 409] },
+  { method: "post", path: "/api/v1/me/step-up/passkey", summary: "Confirmer mon identité avec une clé d'accès", tag: "Mon compte", access: "session", body: passkeyResponse, success: { status: 204, description: "Deuxième facteur validé pour cette session" }, errors: [400, 401, 409] },
+  { method: "post", path: "/api/v1/me/passkeys/options", summary: "Défi d'enregistrement d'une clé d'accès", tag: "Mon compte", access: "session", success: { status: 200, description: "Options WebAuthn et identifiant du défi" }, errors: [401, 409] },
+  { method: "post", path: "/api/v1/me/passkeys", summary: "Enregistrer une clé d'accès", tag: "Mon compte", access: "session", body: z.object({ challengeId: z.string(), name: z.string(), response: z.record(z.string(), z.unknown()) }), success: { status: 201, description: "Clé enregistrée" }, errors: [400, 401, 409] },
+  { method: "patch", path: "/api/v1/me/passkeys/{id}", summary: "Renommer une clé d'accès", tag: "Mon compte", access: "session", body: z.object({ name: z.string() }), success: { status: 200, description: "Clé renommée" }, errors: [400, 401, 404] },
+  { method: "delete", path: "/api/v1/me/passkeys/{id}", summary: "Supprimer une clé d'accès", tag: "Mon compte", access: "session", success: { status: 204, description: "Clé supprimée" }, errors: [401, 404, 409] },
+  { method: "post", path: "/api/v1/session/passkey/options", summary: "Défi de connexion par clé d'accès", tag: "Compte", access: "public", body: z.object({ email: z.string() }), success: { status: 200, description: "Options WebAuthn et identifiant du défi" }, errors: [400, 409, 429], description: "L'e-mail est obligatoire ; la réponse ne révèle pas si le compte existe." },
+  { method: "post", path: "/api/v1/session/passkey", summary: "Ouvrir une session avec une clé d'accès", tag: "Compte", access: "public", body: passkeyResponse, success: { status: 200, description: "Session ouverte (équivaut à deux facteurs)" }, errors: [400, 401, 409, 429] },
+];
+
+const terminalSettings = z.object({ enabled: z.boolean(), idleMinutes: z.number().int(), maxMinutes: z.number().int(), record: z.boolean() });
+
+/** Terminal de conteneur et enregistrements de sessions. */
+export const TERMINAL_ROUTE_DOCS: RouteDoc[] = [
+  { method: "get", path: "/api/v1/settings/terminal", summary: "Réglages du terminal", tag: "Terminal", access: "session", success: { status: 200, description: "Activation, durées limites et enregistrement" }, errors: [401] },
+  { method: "put", path: "/api/v1/settings/terminal", summary: "Modifier les réglages du terminal", tag: "Terminal", access: "session", body: terminalSettings, success: { status: 200, description: "Réglages enregistrés" }, errors: [400, 401, 403], description: "Administrateurs uniquement. Le terminal est désactivé par défaut." },
+  { method: "get", path: "/api/v1/hosts/{hostId}/containers/{containerId}/terminal", summary: "Ouvrir un terminal dans un conteneur (WebSocket)", tag: "Terminal", access: "session", query: [{ name: "cols", schema: { type: "integer", minimum: 10, maximum: 500 } }, { name: "rows", schema: { type: "integer", minimum: 2, maximum: 200 } }], success: { status: 101, description: "Connexion WebSocket : messages JSON {t:\"input\",d:base64} et {t:\"resize\",cols,rows} du navigateur ; {t:\"data\"|\"end\"|\"error\"|\"ready\"} de la console" }, errors: [401], description: "Exige le droit Terminal, le terminal activé dans les paramètres et un deuxième facteur présenté depuis moins de 10 minutes. Refusé pour les conteneurs de la console et de l'agent. Les refus sont envoyés comme message `error` avant la fermeture." },
+  { method: "get", path: "/api/v1/terminal-recordings", summary: "Lister les sessions de terminal enregistrées", tag: "Terminal", access: "session", success: { status: 200, description: "200 dernières sessions (utilisateur, conteneur, durée, état)" }, errors: [401, 403], description: "Administrateurs uniquement." },
+  { method: "get", path: "/api/v1/terminal-recordings/{id}", summary: "Enregistrement d'une session (asciinema)", tag: "Terminal", access: "session", success: { status: 200, description: "Fichier asciicast v2 (NDJSON)", contentType: "application/x-asciicast" }, errors: [401, 403, 404], description: "Peut contenir des secrets affichés à l'écran. L'accès est tracé dans l'audit." },
+  { method: "delete", path: "/api/v1/terminal-recordings/{id}", summary: "Supprimer un enregistrement", tag: "Terminal", access: "session", success: { status: 204, description: "Enregistrement supprimé" }, errors: [401, 403, 404] },
+];

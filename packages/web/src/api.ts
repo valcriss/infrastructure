@@ -530,3 +530,51 @@ export interface PruneRun {
   createdAt: string;
   finishedAt: string | null;
 }
+
+// --- Utilisateurs, rôles et moyens de connexion --------------------------------------------------------
+
+export type Role = "viewer" | "operator" | "admin";
+
+export const ROLE_LABELS: Record<Role, string> = { viewer: "Lecteur", operator: "Opérateur", admin: "Administrateur" };
+
+export interface SessionInfo {
+  username: string;
+  email: string;
+  displayName: string;
+  role: Role;
+  terminalAllowed: boolean;
+  mustChangePassword: boolean;
+  totpEnabled: boolean;
+  passkeysAvailable: boolean;
+  /** Un deuxième facteur a été présenté récemment (nécessaire pour ouvrir un terminal). */
+  mfaRecent: boolean;
+}
+
+export interface UserView {
+  id: string;
+  email: string;
+  username: string | null;
+  displayName: string;
+  role: Role;
+  terminalAllowed: boolean;
+  active: boolean;
+  hasPassword: boolean;
+  mustChangePassword: boolean;
+  totpEnabled: boolean;
+  passkeys: number;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface PasskeyView {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  transports: string[];
+}
+
+export interface SecurityInfo extends SessionInfo {
+  recoveryCodesRemaining: number;
+  passkeys: PasskeyView[];
+}

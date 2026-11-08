@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ApiError, ago, api, describeError, fmtDate, formatBytes, type Application, type ScanStateName, type StackStatus } from "../api";
 import MeterBar from "../components/MeterBar.vue";
 import SeverityBadges, { type Counts } from "../components/SeverityBadges.vue";
+import { useSession } from "../stores/session";
 
+const session = useSession();
 const apps = ref<Application[]>([]);
 const loading = ref(true);
 const error = ref("");
@@ -64,7 +66,7 @@ async function act(a: Application, action: "start" | "stop" | "deploy") {
   try {
     const body = action === "deploy" ? { revision: a.currentRevision, pullImages: false } : undefined;
     await api(`/api/v1/stacks/${a.stackId}/${action}`, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
-    notice.value = `Opération « ${label} » lancée pour ${a.name} : suivez-la dans l'onglet Opérations de l'application.`;
+    notice.value = `Opération « ${label} » lancée pour ${a.name} : suivez-la dans l'onglet Historique de l'application (section Opérations).`;
     window.setTimeout(() => void load(), 2500);
   } catch (err) {
     error.value = describeError(err);
@@ -115,7 +117,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
         <h1 class="text-2xl font-semibold">Applications</h1>
         <p class="text-sm text-slate-500">{{ totals.managed }} gérée(s) par la console · {{ totals.observed }} observée(s) (en marche sans leur fichier Compose)</p>
       </div>
-      <RouterLink to="/stacks/new" class="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+      <RouterLink v-if="session.canOperate" to="/stacks/new" class="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
         <FaIcon :icon="['fas', 'plus']" /> Nouvelle application
       </RouterLink>
     </div>
@@ -213,9 +215,9 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
           </div>
           <div class="flex items-center gap-1">
             <template v-if="a.kind === 'managed'">
-              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" title="Démarrer" aria-label="Démarrer" :disabled="busy !== null || a.hostPresence === 'offline' || a.deployedRevision === null" @click="act(a, 'start')"><FaIcon :icon="['fas', 'play']" /></button>
-              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" title="Arrêter" aria-label="Arrêter" :disabled="busy !== null || a.hostPresence === 'offline' || a.deployedRevision === null" @click="act(a, 'stop')"><FaIcon :icon="['fas', 'stop']" /></button>
-              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" :title="a.deployedRevision === a.currentRevision ? 'Redéployer la révision active' : 'Déployer la révision courante'" aria-label="Déployer" :disabled="busy !== null || a.hostPresence === 'offline'" @click="act(a, 'deploy')"><FaIcon :icon="['fas', 'rocket']" /></button>
+              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" title="Démarrer" aria-label="Démarrer" :disabled="busy !== null || !session.canOperate || a.hostPresence === 'offline' || a.deployedRevision === null" @click="act(a, 'start')"><FaIcon :icon="['fas', 'play']" /></button>
+              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" title="Arrêter" aria-label="Arrêter" :disabled="busy !== null || !session.canOperate || a.hostPresence === 'offline' || a.deployedRevision === null" @click="act(a, 'stop')"><FaIcon :icon="['fas', 'stop']" /></button>
+              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" :title="a.deployedRevision === a.currentRevision ? 'Redéployer la révision active' : 'Déployer la révision courante'" aria-label="Déployer" :disabled="busy !== null || !session.canOperate || a.hostPresence === 'offline'" @click="act(a, 'deploy')"><FaIcon :icon="['fas', 'rocket']" /></button>
             </template>
             <RouterLink v-else-if="a.importable" :to="adoptLink(a)" class="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs hover:bg-slate-100">
               <FaIcon :icon="['fas', 'download']" /> Prendre en charge
