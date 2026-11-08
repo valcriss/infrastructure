@@ -19,7 +19,7 @@ export function validateEnvironmentName(name: string): string | null {
 }
 
 /** Détecte l'indentation du document pour la conserver à la réécriture. */
-function detectStyle(text: string): { indent: number; indentSeq: boolean; singleQuote: boolean | null } {
+export function detectStyle(text: string): { indent: number; indentSeq: boolean; singleQuote: boolean | null } {
   // Limite de la bibliothèque YAML : avec une indentation de 4 espaces ET des
   // listes non indentées, les listes sont réécrites décalées de 2 espaces.
   const singles = (text.match(/(?:^|[:\-=]\s+)'/gm) ?? []).length;

@@ -269,6 +269,31 @@ describe.skipIf(!url)("CVE : corrigeables, risques acceptés, comparaison de ver
     expect((await call("POST", `${path}/preview`, { ...body, expectedRevision: rev + 1 })).status).toBe(422);
   });
 
+  it("crée une révision avec la version comparée : aperçu, validations, puis enregistrement sans déploiement", async () => {
+    // Après le test précédent le service « web » est construit localement : on repart d'une pile dédiée.
+    const fresh = (await call("POST", "/api/v1/stacks", { name: "retag", hostId, compose: `services:\n  web:\n    image: ${REF} # actuelle\n  cfg:\n    image: \${CFG_IMAGE:-x:1}\n`, variables: {} })).json.id as string;
+    const base = `/api/v1/stacks/${fresh}/services`;
+    const rev = (await call("GET", `/api/v1/stacks/${fresh}`)).json.currentRevision as number;
+
+    const preview = await call("POST", `${base}/web/image-tag/preview`, { expectedRevision: rev, tag: "2.0-alpine" });
+    expect(preview.status).toBe(200);
+    expect(preview.json).toMatchObject({ from: REF, to: "myreg.invalid/team/app:2.0-alpine" });
+    expect(preview.json.after).toContain("image: myreg.invalid/team/app:2.0-alpine # actuelle");
+
+    expect((await call("POST", `${base}/web/image-tag/preview`, { expectedRevision: rev, tag: "pas bon" })).status).toBe(422);
+    expect((await call("POST", `${base}/web/image-tag/preview`, { expectedRevision: rev, tag: "1.0" })).status).toBe(422);
+    expect((await call("POST", `${base}/cfg/image-tag/preview`, { expectedRevision: rev, tag: "2" })).status).toBe(422);
+    expect((await call("POST", `${base}/absent/image-tag/preview`, { expectedRevision: rev, tag: "2" })).status).toBe(404);
+    expect((await call("POST", `${base}/web/image-tag/preview`, { expectedRevision: rev + 3, tag: "2" })).status).toBe(409);
+
+    const saved = await call("PATCH", `${base}/web/image-tag`, { expectedRevision: rev, tag: "2.0-alpine" });
+    expect(saved.status).toBe(200);
+    expect(saved.json.revision).toBe(rev + 1);
+    const detail = (await call("GET", `/api/v1/stacks/${fresh}`)).json;
+    expect(detail.compose).toContain("image: myreg.invalid/team/app:2.0-alpine");
+    expect(detail.deployedRevision).toBeNull();
+  });
+
   it("signale l'échec d'un téléchargement refusé par le registre", async () => {
     inbox.length = 0;
     const started = await call("POST", `/api/v1/stacks/${stackId}/services/web/candidate-scans`, { tag: "9.9" });

@@ -2,6 +2,7 @@ import {
   ComposeEditError,
   PACKAGE_MANAGERS,
   editServiceBuild,
+  editServiceImageTag,
   generateDockerfile,
   validateBaseImage,
   validateFilePath,
@@ -29,6 +30,12 @@ export const CustomImageBody = z.object({
   message: z.string().max(200).optional(),
 });
 type Body = z.infer<typeof CustomImageBody>;
+
+export const ImageTagBody = z.object({
+  expectedRevision: z.number().int().positive(),
+  tag: z.string().trim().min(1).max(128),
+  message: z.string().max(200).optional(),
+});
 
 const Params = z.object({ id: z.uuid(), service: z.string().min(1).max(128) });
 
@@ -70,6 +77,37 @@ export function registerCustomImageRoutes(app: FastifyInstance, deps: { pool: Po
     if (!rows[0]) throw new HttpError(404, "stack_not_found", "Stack introuvable");
     return rows[0].name;
   };
+
+  /** Compose avec l'étiquette changée ; les refus du modèle de Compose deviennent des erreurs HTTP explicites. */
+  const retag = (compose: string, service: string, tag: string) => {
+    try {
+      return editServiceImageTag(compose, service, tag);
+    } catch (err) {
+      if (err instanceof ComposeEditError) {
+        throw new HttpError(err.code === "service_not_found" ? 404 : 422, err.code === "service_not_found" ? "service_not_found" : "unsupported_compose_structure", err.message);
+      }
+      throw err;
+    }
+  };
+
+  // Utiliser une autre version de l'image (typiquement après une comparaison) : aperçu puis révision, sans déploiement.
+  app.post("/api/v1/stacks/:id/services/:service/image-tag/preview", { preHandler: auth }, async (request) => {
+    const { id, service } = Params.parse(request.params);
+    const body = ImageTagBody.parse(request.body);
+    await stackName(id);
+    const stack = await pool.query<{ current_revision: number }>("SELECT current_revision FROM stacks WHERE id = $1", [id]);
+    if (stack.rows[0]?.current_revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "La stack a une révision plus récente : rechargez la page.");
+    const rev = await getRevision(pool, id, body.expectedRevision);
+    if (!rev) throw new Error("révision courante introuvable");
+    const out = retag(rev.compose, service, body.tag);
+    return { before: rev.compose, after: out.compose, from: out.from, to: out.to };
+  });
+
+  app.patch("/api/v1/stacks/:id/services/:service/image-tag", { preHandler: auth }, async (request) => {
+    const { id, service } = Params.parse(request.params);
+    const body = ImageTagBody.parse(request.body);
+    return changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? `Image du service ${service} : étiquette ${body.tag}`, (c) => ({ ...c, compose: retag(c.compose, service, body.tag).compose }));
+  });
 
   // Aperçu : Dockerfile généré et Compose modifié, rien n'est enregistré.
   app.post("/api/v1/stacks/:id/services/:service/custom-image/preview", { preHandler: auth }, async (request) => {

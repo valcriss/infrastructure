@@ -2,11 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { api, describeError, type CandidateView, type TagSuggestions } from "../api";
 import { useSession } from "../stores/session";
+import DiffView from "./DiffView.vue";
 import SeverityBadges from "./SeverityBadges.vue";
 
 // Compare les vulnérabilités d'une autre version de l'image avant de l'adopter : l'image est téléchargée sur
 // l'hôte, scannée puis retirée. Rien n'est déployé.
 const props = defineProps<{ stackId: string; service: string }>();
+const emit = defineEmits<{ changed: [] }>();
 const session = useSession();
 
 const suggestions = ref<TagSuggestions | null>(null);
@@ -14,6 +16,8 @@ const candidates = ref<CandidateView[]>([]);
 const tag = ref("");
 const error = ref("");
 const busy = ref(false);
+const revision = ref(0);
+const adoptUrl = (): string => `/api/v1/stacks/${props.stackId}/services/${encodeURIComponent(props.service)}/image-tag`;
 let timer: number | undefined;
 
 const mine = computed(() => candidates.value.filter((c) => c.service === props.service));
@@ -67,6 +71,45 @@ function verdict(c: CandidateView): { text: string; cls: string } | null {
   return { text: `Autant de CVE critiques/élevées (${a})`, cls: "text-slate-600" };
 }
 
+// --- Adopter la version comparée : aperçu du changement dans le Compose, puis une révision (sans déploiement) ---
+const adopt = ref<{ tag: string; before: string; after: string; from: string; to: string } | null>(null);
+const adoptMessage = ref("");
+const adoptError = ref("");
+const adoptBusy = ref(false);
+const adoptDone = ref("");
+
+async function startAdopt(c: CandidateView) {
+  adoptError.value = adoptDone.value = "";
+  adoptBusy.value = true;
+  try {
+    const stack = await api<{ currentRevision: number }>(`/api/v1/stacks/${props.stackId}`);
+    revision.value = stack.currentRevision;
+    const r = await api<{ before: string; after: string; from: string; to: string }>(`${adoptUrl()}/preview`, { method: "POST", body: JSON.stringify({ expectedRevision: revision.value, tag: c.tag }) });
+    adopt.value = { tag: c.tag, ...r };
+    adoptMessage.value = "";
+  } catch (err) {
+    error.value = describeError(err);
+  } finally {
+    adoptBusy.value = false;
+  }
+}
+
+async function confirmAdopt() {
+  if (!adopt.value) return;
+  adoptBusy.value = true;
+  adoptError.value = "";
+  try {
+    const r = await api<{ revision: number }>(adoptUrl(), { method: "PATCH", body: JSON.stringify({ expectedRevision: revision.value, tag: adopt.value.tag, ...(adoptMessage.value ? { message: adoptMessage.value } : {}) }) });
+    adoptDone.value = `Révision ${r.revision} enregistrée avec ${adopt.value.to}. Elle n'est pas déployée : utilisez « Déployer » dans la vue d'ensemble.`;
+    adopt.value = null;
+    emit("changed");
+  } catch (err) {
+    adoptError.value = describeError(err);
+  } finally {
+    adoptBusy.value = false;
+  }
+}
+
 const chips = computed(() => [
   ...(suggestions.value?.newer ?? []).map((t) => ({ tag: t, kind: "plus récente" })),
   ...(suggestions.value?.variants ?? []).map((t) => ({ tag: t, kind: "variante légère" })),
@@ -93,6 +136,7 @@ const chips = computed(() => [
       <span v-if="running" class="text-xs text-blue-700" aria-live="polite">Comparaison en cours…</span>
     </form>
     <p v-if="error" role="alert" class="text-red-700">{{ error }}</p>
+    <p v-if="adoptDone" role="status" class="text-green-700">{{ adoptDone }}</p>
 
     <ul v-if="mine.length" class="space-y-2">
       <li v-for="c in mine" :key="c.id" class="rounded border border-slate-200 p-3">
@@ -113,9 +157,26 @@ const chips = computed(() => [
             <span class="text-slate-500">dont {{ c.current.fixable }} avec correctif</span>
           </p>
           <p v-if="verdict(c)" class="font-medium" :class="verdict(c)!.cls">{{ verdict(c)!.text }}</p>
+          <p v-if="session.canOperate" class="pt-1">
+            <button class="rounded border border-blue-300 px-2.5 py-1 text-blue-700 hover:bg-blue-50 disabled:opacity-50" :disabled="adoptBusy" @click="startAdopt(c)">Utiliser cette version…</button>
+            <span class="ml-2 text-slate-500">enregistre une révision avec {{ c.tag }} ; rien n'est déployé</span>
+          </p>
           <p v-if="c.result.os?.eosl" class="text-amber-700">Le système de cette image ({{ c.result.os.family }} {{ c.result.os.name }}) n'est plus maintenu.</p>
         </div>
       </li>
     </ul>
+    <div v-if="adopt" class="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-8" @mousedown.self="adopt = null">
+      <div role="dialog" aria-modal="true" aria-label="Utiliser cette version" class="w-full max-w-2xl space-y-3 rounded-xl border border-slate-200 bg-white p-6 text-sm shadow-2xl">
+        <h2 class="text-lg font-semibold">Utiliser {{ adopt.to }}</h2>
+        <p class="text-slate-600">L'image de « {{ service }} » passe de <code>{{ adopt.from }}</code> à <code>{{ adopt.to }}</code> dans une nouvelle révision. Rien n'est déployé : vous déployez ensuite, quand vous le décidez.</p>
+        <DiffView :before="adopt.before" :after="adopt.after" />
+        <input v-model="adoptMessage" maxlength="200" placeholder="Message de révision (optionnel)" aria-label="Message de révision" class="w-full rounded border border-slate-300 px-3 py-2" />
+        <p v-if="adoptError" role="alert" class="text-red-700">{{ adoptError }}</p>
+        <div class="flex justify-end gap-3">
+          <button class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100" @click="adopt = null">Annuler</button>
+          <button :disabled="adoptBusy" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="confirmAdopt">Enregistrer une révision</button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>

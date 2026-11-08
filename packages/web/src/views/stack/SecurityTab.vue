@@ -155,7 +155,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <span class="text-xs text-slate-400">{{ policies.find((p) => p.key === draft[c.service]?.policy)?.help }}</span>
         </form>
       </section>
-      <CandidateCompare :stack-id="stack.id" :service="c.service" />
+      <CandidateCompare :stack-id="stack.id" :service="c.service" @changed="emit('changed')" />
       <div v-if="session.canOperate" class="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3 text-sm">
         <button class="rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-100 disabled:opacity-50" :disabled="!stack.containers.some((x) => x.composeService === c.service && x.state === 'running')" @click="imageTarget = c.service">Créer une image personnalisée…</button>
         <span class="text-xs text-slate-500">Ajoute des outils ou applique les mises à jour du système (corrige les CVE du système qui ont un correctif).</span>
