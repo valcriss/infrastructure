@@ -112,6 +112,16 @@ export function registerCandidateRoutes(
     return reply.code(created ? 202 : 200).send({ id: row.id, status: row.status, created });
   });
 
+  // Fermer une comparaison (ou toutes celles d'un service) : elle n'est plus proposée.
+  app.post("/api/v1/stacks/:id/candidate-scans/:scanId/dismiss", { preHandler: auth }, async (request) => {
+    const { id, scanId } = StackParams.extend({ scanId: z.uuid() }).parse(request.params);
+    return { dismissed: await candidates.dismiss({ stackId: id, scanId, actor: request.actor }) };
+  });
+  app.post("/api/v1/stacks/:id/services/:service/candidate-scans/dismiss", { preHandler: auth }, async (request) => {
+    const { id, service } = ServiceParams.parse(request.params);
+    return { dismissed: await candidates.dismiss({ stackId: id, service, actor: request.actor }) };
+  });
+
   app.get("/api/v1/stacks/:id/candidate-scans", { preHandler: auth }, async (request) => {
     const { id } = StackParams.parse(request.params);
     const settings = await getSecuritySettings(pool);

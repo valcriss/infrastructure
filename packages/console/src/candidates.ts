@@ -106,8 +106,24 @@ export class CandidateScans {
   }
 
   async list(stackId: string): Promise<CandidateRow[]> {
-    const { rows } = await this.pool.query<Db>(`SELECT ${COLUMNS} FROM candidate_scans WHERE stack_id = $1 ORDER BY created_at DESC LIMIT 30`, [stackId]);
+    const { rows } = await this.pool.query<Db>(`SELECT ${COLUMNS} FROM candidate_scans WHERE stack_id = $1 AND dismissed_at IS NULL ORDER BY created_at DESC LIMIT 30`, [stackId]);
     return rows.map(toRow);
+  }
+
+  /**
+   * Ferme des comparaisons : elles ne sont plus proposées (ni réutilisées si on compare de nouveau la même version).
+   * Sans identifiant, ferme toutes celles du service. L'image candidate est toujours nettoyée sur l'hôte.
+   */
+  async dismiss(input: { stackId: string; scanId?: string; service?: string; actor: string }): Promise<number> {
+    const r = await this.pool.query(
+      `UPDATE candidate_scans SET dismissed_at = now()
+        WHERE stack_id = $1 AND dismissed_at IS NULL AND ($2::uuid IS NULL OR id = $2) AND ($3::text IS NULL OR service = $3)`,
+      [input.stackId, input.scanId ?? null, input.service ?? null],
+    );
+    const n = r.rowCount ?? 0;
+    if (input.scanId && n === 0) throw new HttpError(404, "candidate_not_found", "Comparaison introuvable ou déjà fermée.");
+    if (n > 0) await audit(this.pool, input.actor, "candidate-scan.dismiss", `${input.stackId}${input.service ? "/" + input.service : ""}${input.scanId ? "@" + input.scanId : ""} (${n})`, "success");
+    return n;
   }
 
   async begin(input: { stackId: string; service: string; tag: string; actor: string }): Promise<{ row: CandidateRow; created: boolean }> {
@@ -127,7 +143,7 @@ export class CandidateScans {
     const recent = await this.pool.query<Db>(
       `SELECT ${COLUMNS} FROM candidate_scans
         WHERE stack_id = $1 AND service = $2 AND ref = $3 AND status IN ('pulling', 'scanning', 'succeeded')
-          AND created_at > now() - make_interval(hours => $4) ORDER BY created_at DESC LIMIT 1`,
+          AND dismissed_at IS NULL AND created_at > now() - make_interval(hours => $4) ORDER BY created_at DESC LIMIT 1`,
       [input.stackId, input.service, ref, REUSE_HOURS],
     );
     if (recent.rows[0]) return { row: toRow(recent.rows[0]), created: false };

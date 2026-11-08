@@ -58,6 +58,27 @@ async function compare(t: string) {
   }
 }
 
+async function dismiss(c: CandidateView) {
+  error.value = "";
+  try {
+    await api(`/api/v1/stacks/${props.stackId}/candidate-scans/${c.id}/dismiss`, { method: "POST" });
+    await load();
+  } catch (err) {
+    error.value = describeError(err);
+  }
+}
+
+async function dismissAll() {
+  if (!window.confirm(`Fermer les ${mine.value.length} comparaisons de « ${props.service} » ? Elles ne seront plus proposées.`)) return;
+  error.value = "";
+  try {
+    await api(`/api/v1/stacks/${props.stackId}/services/${encodeURIComponent(props.service)}/candidate-scans/dismiss`, { method: "POST" });
+    await load();
+  } catch (err) {
+    error.value = describeError(err);
+  }
+}
+
 const severe = (c: { critical: number; high: number }): number => c.critical + c.high;
 const STATUS: Record<CandidateView["status"], string> = { pulling: "téléchargement…", scanning: "scan en cours…", succeeded: "terminé", failed: "échec" };
 
@@ -138,11 +159,15 @@ const chips = computed(() => [
     <p v-if="error" role="alert" class="text-red-700">{{ error }}</p>
     <p v-if="adoptDone" role="status" class="text-green-700">{{ adoptDone }}</p>
 
+    <p v-if="mine.length > 1 && session.canOperate" class="text-right text-xs"><button class="underline" @click="dismissAll">Tout fermer ({{ mine.length }})</button></p>
     <ul v-if="mine.length" class="space-y-2">
       <li v-for="c in mine" :key="c.id" class="rounded border border-slate-200 p-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <span class="font-mono text-xs font-semibold">{{ c.tag }}</span>
-          <span class="text-xs" :class="c.status === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ STATUS[c.status] }}</span>
+          <span class="flex items-center gap-2">
+            <span class="text-xs" :class="c.status === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ STATUS[c.status] }}</span>
+            <button v-if="session.canOperate" class="rounded p-1 text-slate-500 hover:bg-slate-100" :aria-label="'Fermer la comparaison ' + c.tag" title="Fermer : ne plus proposer cette comparaison" @click="dismiss(c)"><FaIcon :icon="['fas', 'xmark']" /></button>
+          </span>
         </div>
         <p v-if="c.error" class="mt-1 text-xs text-red-700">{{ c.error }}</p>
         <div v-if="c.result" class="mt-2 space-y-1 text-xs">
