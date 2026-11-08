@@ -454,6 +454,17 @@ export class Dashboard {
     const [usedImages, scanMap, allChecks] = await Promise.all([loadUsedImages(pool, filter), this.deps.scans.latestAll(), this.deps.watcher.allChecks()]);
     const securityImages: SecurityAlertInput["images"] = [];
     const sec = { images: 0, never: 0, failed: 0, clean: 0, vulnerable: 0, critical: 0, high: 0, withCritical: 0, withHigh: 0, noSevere: 0 };
+    // Répartition des vulnérabilités par gravité : « filtered » applique le seuil des paramètres, « all » l'ignore.
+    const zero = (): SeverityCounts => ({ critical: 0, high: 0, medium: 0, low: 0, unknown: 0 });
+    const vulns = { filtered: zero(), all: zero() };
+    const addCounts = (into: SeverityCounts, from: SeverityCounts | null | undefined): void => {
+      if (!from) return;
+      into.critical += from.critical;
+      into.high += from.high;
+      into.medium += from.medium;
+      into.low += from.low;
+      into.unknown += from.unknown;
+    };
     // Les graphiques couvrent les images de tous les projets Compose (gérés ou observés) ; les alertes, seulement les gérées.
     const inCompose = new Set<string>();
     for (const h of hosts) for (const c of h.inventory ?? []) if (c.composeProject) inCompose.add(`${h.id}|${c.id}`);
@@ -477,6 +488,8 @@ export class Dashboard {
         else if ((reported?.high ?? 0) > 0) sec.withHigh++;
         else sec.noSevere++;
       }
+      addCounts(vulns.filtered, reported);
+      addCounts(vulns.all, entry?.ok?.counts ?? null);
       sec.critical += reported?.critical ?? 0;
       sec.high += reported?.high ?? 0;
       if (!managed) continue;
@@ -577,7 +590,7 @@ export class Dashboard {
       },
       usage: { top: top.slice(0, 10) },
       backup: filter.stackId || filter.hostId ? null : { state: backup.state, lastPushAt: backup.lastPushAt, pendingRevisions: backup.pendingRevisions, configured: backup.configured },
-      security: { images: sec, updates: { available: updates.length, errors: checkErrors.length } },
+      security: { images: sec, vulns, updates: { available: updates.length, errors: checkErrors.length } },
       alerts,
     };
   }

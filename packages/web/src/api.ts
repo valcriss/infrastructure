@@ -259,7 +259,7 @@ export interface Dashboard {
   containers: { total: number; running: number; stopped: number; completed: number; failed: number; unhealthy: number; noHealthcheck: number; unmanagedProjects: number };
   usage: { top: { containerId: string; name: string; project: string | null; service: string | null; cpuPercent: number | null; memBytes: number; memLimitBytes: number; hostName: string }[] };
   backup: { state: BackupState; lastPushAt: string | null; pendingRevisions: number; configured: boolean } | null;
-  security: { images: { images: number; never: number; failed: number; clean: number; vulnerable: number; critical: number; high: number; withCritical: number; withHigh: number; noSevere: number }; updates: { available: number; errors: number } };
+  security: { images: { images: number; never: number; failed: number; clean: number; vulnerable: number; critical: number; high: number; withCritical: number; withHigh: number; noSevere: number }; vulns: { filtered: VulnCounts; all: VulnCounts }; updates: { available: number; errors: number } };
   alerts: DashboardAlert[];
 }
 
@@ -324,6 +324,7 @@ export function formatBytes(n: number): string {
 // --- Sécurité des images ----------------------------------------------------------------------
 
 export type ScanStateName = "never" | "pending" | "running" | "failed" | "clean" | "vulnerable";
+export interface VulnCounts { critical: number; high: number; medium: number; low: number; unknown: number }
 export type VulnSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
 
 export interface ScanSummary {

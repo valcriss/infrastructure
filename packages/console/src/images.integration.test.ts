@@ -388,6 +388,11 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect(view.scan.current).toMatchObject({ counts: { critical: 1, high: 2, medium: 0, low: 0, unknown: 0 }, total: 3, hidden: 12 });
     const dash = (await call("GET", "/api/v1/dashboard")).json;
     expect(dash.security.images).toMatchObject({ critical: 1, high: 2, withCritical: 1 });
+    // Répartition des CVE : filtrée selon le seuil, ou complète en l'ignorant.
+    expect(dash.security.vulns).toMatchObject({
+      filtered: { critical: 1, high: 2, medium: 0, low: 0, unknown: 0 },
+      all: { critical: 1, high: 2, medium: 3, low: 4, unknown: 5 },
+    });
     const apps = (await call("GET", "/api/v1/applications")).json.applications as any[];
     expect(apps.flatMap((a) => a.images).find((i) => i.imageId === IMG_APP).counts).toMatchObject({ medium: 0, low: 0, unknown: 0 });
     const details = (await call("GET", `/api/v1/images/${IMG_APP}/scan`)).json;

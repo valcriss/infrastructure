@@ -12,6 +12,7 @@ import {
   type OverviewRange,
   type OverviewResult,
   type Severity,
+  type VulnCounts,
 } from "../api";
 import AreaChart from "../charts/AreaChart.vue";
 import DonutChart from "../charts/DonutChart.vue";
@@ -125,6 +126,17 @@ const imageItems = computed(() => {
   ];
 });
 
+// Répartition des CVE par gravité : avec le seuil des paramètres (« filtered »), ou sans (« all »).
+const vulnMode = ref<"filtered" | "all">("filtered");
+const vulnCounts = computed<VulnCounts | null>(() => data.value?.security.vulns[vulnMode.value] ?? null);
+const vulnItems = computed(() => [
+  { label: "Critiques", value: vulnCounts.value?.critical ?? 0, color: TONE.bad },
+  { label: "Élevées", value: vulnCounts.value?.high ?? 0, color: "#f97316" },
+  { label: "Moyennes", value: vulnCounts.value?.medium ?? 0, color: "#fbbf24" },
+  { label: "Faibles", value: vulnCounts.value?.low ?? 0, color: "#0ea5e9" },
+  { label: "Inconnues", value: vulnCounts.value?.unknown ?? 0, color: TONE.muted },
+]);
+
 // --- Ressources -------------------------------------------------------------------------------------
 
 const ts = (iso: string): number => Date.parse(iso);
@@ -209,10 +221,19 @@ const alertCounts = computed(() => {
         <StatCard label="Mises à jour" icon="arrows-rotate" :value="data.security.updates.available" hint="d'images disponibles" :tone="data.security.updates.available ? 'warn' : 'ok'" to="/images" />
       </section>
 
-      <section aria-label="Répartition" class="grid gap-4 xl:grid-cols-3">
+      <section aria-label="Répartition" class="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
         <PanelCard title="Applications" icon="boxes-stacked" subtitle="Gérées et observées"><DonutChart title="Applications" center-label="applications" :items="stackItems" /></PanelCard>
         <PanelCard title="Conteneurs" icon="cube" subtitle="Un conteneur terminé avec le code 0 n'est pas une erreur"><DonutChart title="Conteneurs" center-label="conteneurs" :items="containerItems" /></PanelCard>
         <PanelCard title="Images" icon="layer-group" subtitle="Seules les CVE critiques et élevées comptent"><DonutChart title="Images" center-label="images" :items="imageItems" /></PanelCard>
+        <PanelCard title="Vulnérabilités" icon="shield-halved" :subtitle="vulnMode === 'filtered' ? 'Selon le seuil de gravité des paramètres' : 'Toutes les gravités, seuil ignoré'">
+          <template #actions>
+            <div role="group" aria-label="Filtrage des vulnérabilités" class="inline-flex shrink-0 overflow-hidden rounded-md border border-slate-300 text-xs">
+              <button :aria-pressed="vulnMode === 'filtered'" :class="['px-2 py-1', vulnMode === 'filtered' ? 'bg-blue-600 text-white' : 'hover:bg-slate-100']" @click="vulnMode = 'filtered'">Filtrées</button>
+              <button :aria-pressed="vulnMode === 'all'" :class="['px-2 py-1', vulnMode === 'all' ? 'bg-blue-600 text-white' : 'hover:bg-slate-100']" @click="vulnMode = 'all'">Toutes</button>
+            </div>
+          </template>
+          <DonutChart title="Vulnérabilités" center-label="vulnérabilités" :items="vulnItems" />
+        </PanelCard>
       </section>
 
       <section aria-label="Ressources" class="space-y-4">
