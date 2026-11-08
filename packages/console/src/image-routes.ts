@@ -250,7 +250,9 @@ export function registerImageRoutes(
       for (const u of img.usedBy) {
         if (!u.service || seen.has(u.service)) continue;
         seen.add(u.service);
-        const c = byService.get(u.service);
+        // Un résultat obtenu pour une autre référence (tag modifié depuis) ne vaut plus : il est écarté.
+        const found = byService.get(u.service);
+        const c = found && (!found.detail?.ref || found.detail.ref === u.ref) ? found : undefined;
         components.push({
           service: u.service,
           ref: u.ref,

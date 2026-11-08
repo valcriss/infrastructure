@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { api, describeError, type StackDetail } from "../../api";
+import { api, describeError, type Container, type StackDetail } from "../../api";
+import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
 
 const props = defineProps<{ stack: StackDetail }>();
@@ -11,6 +12,14 @@ const force = ref(false);
 const operationId = ref("");
 const error = ref("");
 const busy = ref(false);
+const hcTarget = ref<Container | null>(null);
+const hcInfo = ref("");
+
+function onHcSaved(revision: number) {
+  hcTarget.value = null;
+  hcInfo.value = `Révision ${revision} enregistrée avec le healthcheck. Elle n'est pas déployée : utilisez « Déployer » pour l'appliquer.`;
+  emit("changed");
+}
 
 async function run(action: "deploy" | "stop" | "start") {
   error.value = "";
@@ -41,7 +50,8 @@ async function run(action: "deploy" | "stop" | "start") {
       </p>
       <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
         <button :disabled="busy || stack.hostPresence === 'offline'" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="run('deploy')">
-          Déployer la révision {{ stack.currentRevision }}
+          <template v-if="stack.deployedRevision === stack.currentRevision">Redéployer la révision {{ stack.currentRevision }} (active)</template>
+          <template v-else>Déployer la révision {{ stack.currentRevision }}</template>
         </button>
         <label class="flex items-center gap-1"><input v-model="pull" type="checkbox" /> Télécharger les images</label>
         <label class="flex items-center gap-1"><input v-model="force" type="checkbox" /> Forcer la recréation</label>
@@ -54,6 +64,17 @@ async function run(action: "deploy" | "stop" | "start") {
       </p>
       <p v-if="error" role="alert" class="mt-2 text-sm text-red-700">{{ error }}</p>
     </section>
+
+    <p v-if="hcInfo" role="status" class="text-sm text-green-700">{{ hcInfo }}</p>
+    <HealthcheckDialog
+      v-if="hcTarget && hcTarget.composeService"
+      :stack-id="stack.id"
+      :revision="stack.currentRevision"
+      :service="hcTarget.composeService"
+      :container="hcTarget"
+      @close="hcTarget = null"
+      @saved="onHcSaved"
+    />
 
     <OperationLog v-if="operationId" :operation-id="operationId" @finished="emit('changed')" />
 
@@ -73,6 +94,14 @@ async function run(action: "deploy" | "stop" | "start") {
               <span v-if="c.health === 'healthy'" class="rounded bg-green-100 px-1.5 text-xs text-green-800">sain</span>
               <span v-else-if="c.health === 'unhealthy'" class="rounded bg-red-100 px-1.5 text-xs text-red-800">en échec</span>
               <span v-else-if="c.health === 'starting'" class="rounded bg-blue-100 px-1.5 text-xs text-blue-800">démarrage</span>
+              <button
+                v-else-if="c.health === 'none' && c.composeService"
+                class="inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-1.5 text-xs text-slate-500 hover:bg-slate-100"
+                title="Proposer un healthcheck pour ce service"
+                @click="hcTarget = c"
+              >
+                non configuré <FaIcon :icon="['fas', 'circle-question']" />
+              </button>
               <span v-else-if="c.health === 'none'" class="text-xs text-slate-400">non configuré</span>
               <span v-else class="text-xs text-slate-400">—</span>
             </td>

@@ -74,6 +74,14 @@
   --color-orange-950: oklch(98% 0.016 73.684);
 }
 
+/* Listes déroulantes : le fond transparent par défaut donne du blanc sur blanc dans la liste ouverte en thème sombre. */
+.dark select,
+.dark select option,
+.dark select optgroup {
+  background-color: var(--color-white);
+  color: var(--color-slate-900);
+}
+
 /* Défilement discret et focus clavier visible dans les deux thèmes. */
 :focus-visible {
   outline: 2px solid var(--color-blue-500);

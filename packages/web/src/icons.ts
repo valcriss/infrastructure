@@ -9,6 +9,7 @@ import {
   faCircleCheck,
   faCircleHalfStroke,
   faCircleInfo,
+  faCircleQuestion,
   faCircleXmark,
   faCloudArrowUp,
   faCube,
@@ -56,7 +57,7 @@ import {
 // Seules les icônes déclarées ici sont embarquées dans l'application.
 library.add(
   faArrowRightFromBracket, faArrowsRotate, faBars, faBoxesStacked, faChevronLeft, faChevronRight, faCircleCheck,
-  faCircleHalfStroke, faCircleInfo, faCircleXmark, faCloudArrowUp, faCube, faDesktop, faEye, faGaugeHigh, faGear,
+  faCircleHalfStroke, faCircleInfo, faCircleQuestion, faCircleXmark, faCloudArrowUp, faCube, faDesktop, faEye, faGaugeHigh, faGear,
   faHardDrive, faHeartPulse, faKey, faLayerGroup, faMemory, faMicrochip, faMoon, faNetworkWired, faPlug, faServer,
   faShieldHalved, faSun, faTriangleExclamation, faUser, faXmark, faPlay, faStop, faRocket, faMagnifyingGlass, faPlus, faClock, faArrowUpRightFromSquare, faCodeBranch, faDownload,
   faFileCode, faSliders, faFolderOpen, faChartLine, faTerminal, faClockRotateLeft, faListCheck, faBroom, faTrashCan, faDatabase, faBox,

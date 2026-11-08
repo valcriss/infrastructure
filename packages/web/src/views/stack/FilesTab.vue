@@ -73,33 +73,30 @@ watch(() => props.stack.id, () => (loaded.value = false));
 </script>
 
 <template>
-  <div class="grid gap-6 md:grid-cols-[16rem_1fr]">
-    <aside class="rounded-lg border border-slate-200 bg-white">
-      <div class="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+  <div class="grid gap-4 md:grid-cols-[18rem_minmax(0,1fr)]">
+    <aside class="self-start rounded-lg border border-slate-200 bg-white">
+      <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <h2 class="text-sm font-semibold">Fichiers associés</h2>
-        <button class="text-sm underline" @click="create">Nouveau</button>
+        <button class="rounded bg-blue-600 px-2.5 py-1 text-xs text-white hover:bg-blue-700" @click="create"><FaIcon :icon="['fas', 'plus']" /> Nouveau</button>
       </div>
-      <p v-if="stack.files.length === 0" class="px-3 py-3 text-sm text-slate-500">Aucun fichier.</p>
-      <ul v-else class="text-sm">
+      <p v-if="stack.files.length === 0" class="px-4 py-4 text-sm text-slate-500">Aucun fichier.</p>
+      <ul v-else class="divide-y divide-slate-100 text-sm">
         <li v-for="f in stack.files" :key="f">
-          <button class="w-full px-3 py-2 text-left font-mono text-xs hover:bg-slate-100" :class="{ 'bg-slate-100 font-semibold': f === path && !isNew }" @click="open(f)">
+          <button class="w-full px-4 py-2 text-left font-mono text-xs hover:bg-slate-100" :class="{ 'bg-slate-100 font-semibold': f === path && !isNew }" @click="open(f)">
             {{ f }}<span v-if="stack.sensitiveFiles.includes(f)" class="ml-1 text-amber-700" title="Chiffré dans la sauvegarde Git">🔒</span>
           </button>
         </li>
       </ul>
-      <p class="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
-        Ces fichiers sont écrits à côté du Compose : un chemin relatif comme <code>./nginx/default.conf</code> y est résolu.
-      </p>
     </aside>
 
-    <section v-if="loaded" class="space-y-3">
+    <section v-if="loaded" class="space-y-3 rounded-lg border border-slate-200 bg-white p-4">
       <label class="block text-sm">
         <span class="font-medium">Chemin relatif</span>
         <input v-model="path" :readonly="!isNew" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs read-only:bg-slate-100" placeholder="nginx/default.conf" />
       </label>
       <label class="block text-sm">
         <span class="font-medium">Contenu</span>
-        <textarea v-model="content" rows="16" spellcheck="false" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"></textarea>
+        <textarea v-model="content" spellcheck="false" class="mt-1 h-[calc(100dvh-26rem)] min-h-64 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"></textarea>
       </label>
       <label class="flex items-center gap-2 text-sm"><input v-model="sensitive" type="checkbox" /> Fichier sensible (chiffré dans la sauvegarde Git)</label>
       <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
@@ -109,6 +106,14 @@ watch(() => props.stack.id, () => (loaded.value = false));
         <button v-if="!isNew" :disabled="busy" class="rounded border border-red-300 px-3 py-2 text-red-700 hover:bg-red-50" @click="remove">Supprimer</button>
       </div>
     </section>
-    <p v-else class="text-sm text-slate-500">Sélectionnez un fichier ou créez-en un.</p>
+
+    <section v-else class="flex min-h-64 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+      <FaIcon :icon="['fas', 'folder-open']" class="text-2xl text-slate-400" />
+      <p class="font-medium text-slate-600">Fichiers de configuration de l'application</p>
+      <p class="max-w-md">
+        Ces fichiers sont versionnés avec la révision et écrits à côté du Compose lors du déploiement : un chemin relatif comme <code>./nginx/default.conf</code> y est résolu.
+        {{ stack.files.length === 0 ? "Aucun fichier pour l'instant : cliquez sur « Nouveau » pour en ajouter un." : "Sélectionnez un fichier dans la liste ou créez-en un." }}
+      </p>
+    </section>
   </div>
 </template>

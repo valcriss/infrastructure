@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { ago, api, fmtDate, formatBytes, type BackupState, type BackupStatus, type Dashboard, type ImageView } from "../api";
+import { ago, api, fmtDate, formatBytes, type BackupState, type BackupStatus, type Dashboard, type DashboardAlert, type ImageView } from "../api";
 import PanelCard from "../components/PanelCard.vue";
 
 const dash = ref<Dashboard | null>(null);
@@ -51,6 +51,16 @@ const trivy = computed(() => {
   return scans[0] ?? null;
 });
 
+const attention = computed(() => (dash.value?.alerts ?? []).filter((a) => a.severity !== "info"));
+
+function alertLink(a: DashboardAlert): string | null {
+  if (a.target.type === "stack") return `/stacks/${a.target.id}`;
+  if (a.target.type === "host") return "/hosts";
+  if (a.target.type === "backup") return "/settings?tab=git";
+  if (a.target.type === "image") return "/images";
+  return null;
+}
+
 const warnings = computed(() => {
   const list: string[] = [];
   const warn = dash.value?.alerts.filter((a) => a.severity === "warning").length ?? 0;
@@ -84,6 +94,21 @@ const problems = computed(() => {
           {{ problems.length ? `Problème : ${problems.join(" · ")}` : warnings.length ? `À surveiller : ${warnings.join(" · ")}` : "Tout fonctionne : agents en ligne, sauvegarde à jour." }}
         </p>
       </div>
+
+      <PanelCard v-if="attention.length" title="Points d'attention" icon="triangle-exclamation">
+        <ul class="divide-y divide-slate-200">
+          <li v-for="a in attention" :key="a.id" class="flex flex-wrap items-start gap-3 py-3 text-sm first:pt-0 last:pb-0">
+            <span :class="['mt-0.5 inline-flex items-center rounded px-2 py-0.5 text-xs text-white', a.severity === 'critical' ? 'bg-red-600' : 'bg-amber-500']">{{ a.severity === "critical" ? "critique" : "attention" }}</span>
+            <div class="min-w-0 flex-1">
+              <p class="font-medium">
+                <RouterLink v-if="alertLink(a)" :to="alertLink(a) as string" class="underline">{{ a.title }}</RouterLink>
+                <template v-else>{{ a.title }}</template>
+              </p>
+              <p class="text-slate-600">{{ a.message }}</p>
+            </div>
+          </li>
+        </ul>
+      </PanelCard>
 
       <PanelCard title="Hôtes et agents" icon="server">
         <p v-if="dash.agents.items.length === 0" class="text-sm text-slate-500">Aucun agent enrôlé.</p>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ComposeEditError, editServiceEnvironment } from "./compose-edit.js";
+import { ComposeEditError, editServiceEnvironment, editServiceHealthcheck, validateHealthcheck } from "./compose-edit.js";
 
 const MAP_FORM = `# Mon application
 services:
@@ -107,5 +107,35 @@ describe("editServiceEnvironment — refus explicites", () => {
 
   it("YAML invalide", () => {
     expect(() => editServiceEnvironment("services: [", "web", {}, [])).toThrow(ComposeEditError);
+  });
+});
+
+describe("editServiceHealthcheck", () => {
+  const spec = { test: "redis-cli ping", interval: "30s", timeout: "10s", retries: 5, startPeriod: "30s" };
+
+  it("ajoute un healthcheck en conservant le reste et les commentaires", () => {
+    const out = editServiceHealthcheck("services:\n  db:\n    image: redis # cache\n", "db", spec);
+    expect(out).toContain("image: redis # cache");
+    expect(out).toContain("healthcheck:");
+    expect(out).toContain("CMD-SHELL");
+    expect(out).toContain("start_period: 30s");
+  });
+
+  it("remplace un healthcheck existant", () => {
+    const out = editServiceHealthcheck("services:\n  db:\n    image: x\n    healthcheck:\n      test: [CMD, old]\n", "db", spec);
+    expect(out).not.toContain("old");
+    expect(out).toContain("redis-cli ping");
+  });
+
+  it("refuse un service inconnu et une clé de fusion", () => {
+    expect(() => editServiceHealthcheck("services:\n  a:\n    image: x\n", "b", spec)).toThrow(ComposeEditError);
+    expect(() => editServiceHealthcheck("services:\n  a:\n    <<: {image: x}\n", "a", spec)).toThrow(ComposeEditError);
+  });
+
+  it("valide les durées et les essais", () => {
+    expect(validateHealthcheck(spec)).toBeNull();
+    expect(validateHealthcheck({ ...spec, interval: "vite" })).not.toBeNull();
+    expect(validateHealthcheck({ ...spec, retries: 0 })).not.toBeNull();
+    expect(validateHealthcheck({ ...spec, test: " " })).not.toBeNull();
   });
 });

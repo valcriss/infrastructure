@@ -130,3 +130,73 @@ export function editServiceEnvironment(
     lineWidth: 0,
   });
 }
+
+export interface HealthcheckSpec {
+  /** Commande exécutée dans le conteneur (via `CMD-SHELL`). */
+  test: string;
+  interval: string;
+  timeout: string;
+  retries: number;
+  startPeriod: string;
+}
+
+const DURATION = /^\d+(\.\d+)?(ms|s|m|h)$/;
+
+export function validateHealthcheck(spec: HealthcheckSpec): string | null {
+  if (spec.test.trim() === "" || spec.test.length > 1000) return "Commande de test invalide.";
+  for (const [label, value] of [
+    ["intervalle", spec.interval],
+    ["délai d'expiration", spec.timeout],
+    ["période de démarrage", spec.startPeriod],
+  ] as const) {
+    if (!DURATION.test(value)) return `Durée invalide pour ${label} (ex. 30s, 1m).`;
+  }
+  if (!Number.isInteger(spec.retries) || spec.retries < 1 || spec.retries > 100) return "Nombre d'essais invalide (1 à 100).";
+  return null;
+}
+
+/**
+ * Définit le bloc `healthcheck` d'un service en conservant la forme du reste
+ * du document. Refuse les services dont la structure ne peut pas être
+ * modifiée sans ambiguïté (alias, clé de fusion `<<`).
+ */
+export function editServiceHealthcheck(text: string, service: string, spec: HealthcheckSpec): string {
+  const doc = parseDocument(text, { uniqueKeys: true });
+  if (doc.errors.length > 0) {
+    throw new ComposeEditError("unsupported_structure", "Le Compose actuel n'est pas un YAML valide.");
+  }
+  const services = doc.get("services", true);
+  if (!isMap(services)) {
+    throw new ComposeEditError("unsupported_structure", "Section « services » introuvable.");
+  }
+  const svc = services.get(service, true);
+  if (!isMap(svc)) {
+    throw new ComposeEditError("service_not_found", `Service « ${service} » introuvable.`);
+  }
+  if (isAlias(svc.get("healthcheck", true))) {
+    throw new ComposeEditError("unsupported_structure", "« healthcheck » utilise un alias YAML : modification refusée.");
+  }
+  if (!svc.has("healthcheck") && svc.has("<<")) {
+    throw new ComposeEditError(
+      "unsupported_structure",
+      "Le service utilise une clé de fusion « << » : l'ajout d'un « healthcheck » pourrait masquer des valeurs héritées.",
+    );
+  }
+  svc.set(
+    "healthcheck",
+    doc.createNode({
+      test: ["CMD-SHELL", spec.test],
+      interval: spec.interval,
+      timeout: spec.timeout,
+      retries: spec.retries,
+      start_period: spec.startPeriod,
+    }),
+  );
+  const style = detectStyle(text);
+  return doc.toString({
+    indent: style.indent,
+    indentSeq: style.indentSeq,
+    ...(style.singleQuote !== null ? { singleQuote: style.singleQuote } : {}),
+    lineWidth: 0,
+  });
+}

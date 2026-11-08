@@ -101,7 +101,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
       <section class="space-y-2 border-t border-slate-100 pt-3 text-sm" aria-label="Versions disponibles">
         <h3 class="font-medium">Mises à jour de l'image</h3>
-        <p v-if="!c.check" class="text-slate-500">Jamais vérifiée. Les registres ne sont interrogés qu'à la demande ou selon la planification.</p>
+        <p v-if="!c.check" class="text-slate-500">Aucune vérification pour cette image (jamais faite, ou l'image a changé depuis). Les registres ne sont interrogés qu'à la demande ou selon la planification.</p>
         <template v-else>
           <p v-if="c.check.status === 'error'" role="alert" class="rounded bg-red-50 p-2 text-red-800">
             Vérification impossible : {{ c.check.error }}

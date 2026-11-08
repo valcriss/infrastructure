@@ -2,6 +2,8 @@ import {
   ComposeEditError,
   RESERVED_STACK_NAMES,
   editServiceEnvironment,
+  editServiceHealthcheck,
+  validateHealthcheck,
   validateEnvironmentName,
   validateFilePath,
   validateVariableValue,
@@ -57,6 +59,15 @@ export const ServiceEnvBody = z.object({
   expectedRevision: Expected,
   set: z.record(z.string(), z.string()).optional(),
   unset: z.array(z.string()).max(200).optional(),
+  message: Message,
+});
+export const HealthcheckBody = z.object({
+  expectedRevision: Expected,
+  test: z.string().min(1).max(1000),
+  interval: z.string().max(16),
+  timeout: z.string().max(16),
+  retries: z.number().int(),
+  startPeriod: z.string().max(16),
   message: Message,
 });
 export const FileBody = z.object({
@@ -258,6 +269,51 @@ export function registerStackRoutes(
           throw err;
         }
       },
+    );
+    return { ...result, backup: await backupInfo() };
+  });
+
+  // Healthcheck d'un service : aperçu du Compose modifié, puis enregistrement d'une révision.
+  const healthcheckEdit = (compose: string, service: string, body: z.infer<typeof HealthcheckBody>): string => {
+    const err = validateHealthcheck(body);
+    if (err) throw new HttpError(400, "invalid_healthcheck", err);
+    try {
+      return editServiceHealthcheck(compose, service, body);
+    } catch (e) {
+      if (e instanceof ComposeEditError) {
+        throw new HttpError(
+          e.code === "service_not_found" ? 404 : 422,
+          e.code === "service_not_found" ? "service_not_found" : "unsupported_compose_structure",
+          e.message,
+        );
+      }
+      throw e;
+    }
+  };
+  const ServiceParams = IdParams.extend({ service: z.string().min(1).max(128) });
+
+  app.post("/api/v1/stacks/:id/services/:service/healthcheck/preview", { preHandler: auth }, async (request) => {
+    const params = ServiceParams.parse(request.params);
+    const body = HealthcheckBody.parse(request.body);
+    const stack = await loadStack(params.id);
+    if (stack.current_revision !== body.expectedRevision) {
+      throw new HttpError(409, "revision_conflict", "La stack a une révision plus récente : rechargez la page.");
+    }
+    const rev = await getRevision(pool, params.id, stack.current_revision);
+    if (!rev) throw new Error("révision courante introuvable");
+    return { before: rev.compose, after: healthcheckEdit(rev.compose, params.service, body) };
+  });
+
+  app.patch("/api/v1/stacks/:id/services/:service/healthcheck", { preHandler: auth }, async (request) => {
+    const params = ServiceParams.parse(request.params);
+    const body = HealthcheckBody.parse(request.body);
+    const result = await changeStack(
+      pool,
+      params.id,
+      body.expectedRevision,
+      request.actor,
+      body.message ?? `Healthcheck du service ${params.service} ajouté`,
+      (c) => ({ ...c, compose: healthcheckEdit(c.compose, params.service, body) }),
     );
     return { ...result, backup: await backupInfo() };
   });

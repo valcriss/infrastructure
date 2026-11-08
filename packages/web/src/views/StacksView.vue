@@ -175,7 +175,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
             <template v-if="a.kind === 'managed'">
               <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" title="Démarrer" aria-label="Démarrer" :disabled="busy !== null || a.hostPresence === 'offline' || a.deployedRevision === null" @click="act(a, 'start')"><FaIcon :icon="['fas', 'play']" /></button>
               <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" title="Arrêter" aria-label="Arrêter" :disabled="busy !== null || a.hostPresence === 'offline' || a.deployedRevision === null" @click="act(a, 'stop')"><FaIcon :icon="['fas', 'stop']" /></button>
-              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" title="Déployer la révision courante" aria-label="Déployer" :disabled="busy !== null || a.hostPresence === 'offline'" @click="act(a, 'deploy')"><FaIcon :icon="['fas', 'rocket']" /></button>
+              <button class="rounded p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-40" :title="a.deployedRevision === a.currentRevision ? 'Redéployer la révision active' : 'Déployer la révision courante'" aria-label="Déployer" :disabled="busy !== null || a.hostPresence === 'offline'" @click="act(a, 'deploy')"><FaIcon :icon="['fas', 'rocket']" /></button>
             </template>
             <RouterLink v-else-if="a.importable" :to="adoptLink(a)" class="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs hover:bg-slate-100">
               <FaIcon :icon="['fas', 'download']" /> Prendre en charge

@@ -97,7 +97,7 @@ onBeforeUnmount(stop);
         {{ status === "live" ? "● en direct" : status === "connecting" ? "connexion…" : message }}
       </span>
     </div>
-    <pre ref="box" class="h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded bg-[#0b1220] p-3 font-mono text-xs leading-5 text-[#e2e8f0]" tabindex="0" aria-label="Logs">{{ shown.join("\n") || (status === "idle" ? "Cliquez sur « Suivre les logs »." : "") }}</pre>
+    <pre ref="box" class="h-[calc(100dvh-21rem)] min-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-[#0b1220] p-3 font-mono text-xs leading-5 text-[#e2e8f0]" tabindex="0" aria-label="Logs">{{ shown.join("\n") || (status === "idle" ? "Cliquez sur « Suivre les logs »." : "") }}</pre>
     <p class="text-xs text-slate-500">
       {{ shown.length }} ligne(s) affichée(s) sur {{ lines.length }} (5 000 maximum conservées). Le flux est borné en durée et en débit ; les valeurs affichées sont celles des conteneurs, non masquées.
     </p>
