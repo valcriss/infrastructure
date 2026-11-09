@@ -151,8 +151,8 @@ export class MetricsStore {
     return true;
   }
 
-  /** Séries d'un projet Compose sur une période, regroupées par conteneur. */
-  async series(hostId: string, project: string, rangeSec: number, service?: string): Promise<MetricsQueryResult> {
+  /** Séries d'un projet Compose (ou, avec `containerId`, d'un seul conteneur quel qu'il soit) sur une période, regroupées par conteneur. */
+  async series(hostId: string, project: string | null, rangeSec: number, service?: string, containerId?: string): Promise<MetricsQueryResult> {
     // Pas de regroupement : multiple de la période de collecte, ≤ MAX_POINTS points.
     const stepSec = Math.max(this.intervalSec, Math.ceil(rangeSec / MAX_POINTS / this.intervalSec) * this.intervalSec);
     const { rows } = await this.pool.query<{
@@ -170,11 +170,11 @@ export class MetricsStore {
               avg(cpu_percent) AS cpu, avg(mem_bytes) AS mem, max(mem_limit) AS mem_limit,
               max(net_rx) AS rx, max(net_tx) AS tx
          FROM metric_samples
-        WHERE host_id = $1 AND project = $2 AND observed_at >= now() - make_interval(secs => $3)
-          AND ($5::text IS NULL OR service = $5)
+        WHERE host_id = $1 AND ($2::text IS NULL OR project = $2) AND observed_at >= now() - make_interval(secs => $3)
+          AND ($5::text IS NULL OR service = $5) AND ($6::text IS NULL OR container_id = $6)
         GROUP BY container_name, service, bucket
         ORDER BY container_name, bucket`,
-      [hostId, project, rangeSec, stepSec, service ?? null],
+      [hostId, project, rangeSec, stepSec, service ?? null, containerId ?? null],
     );
 
     const byContainer = new Map<string, MetricSeries>();

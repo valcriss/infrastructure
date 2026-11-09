@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useSession } from "./stores/session";
 import AccountView from "./views/AccountView.vue";
+import ContainersView from "./views/ContainersView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import HostsView from "./views/HostsView.vue";
 import ImagesView from "./views/ImagesView.vue";
@@ -22,6 +23,7 @@ export const router = createRouter({
     { path: "/login", component: LoginView, meta: { public: true } },
     { path: "/hosts", component: HostsView },
     { path: "/images", component: ImagesView },
+    { path: "/containers", component: ContainersView },
     { path: "/stacks", component: StacksView },
     { path: "/stacks/new", component: StackNewView },
     { path: "/stacks/:id", component: StackView },

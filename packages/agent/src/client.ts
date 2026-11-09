@@ -11,6 +11,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { AGENT_VERSION, TRIVY_CACHE_VOLUME, type AgentConfig } from "./config.js";
 import { collectInventory, dockerGet } from "./docker.js";
+import { ContainerActions } from "./container-actions.js";
 import { Executor } from "./executor.js";
 import { ReplayGuard, SelfProtection } from "./guard.js";
 import { HostMetricsCollector } from "./host-metrics.js";
@@ -75,6 +76,7 @@ export class AgentClient {
   private readonly logs: LogStreamer;
   private readonly terminals: TerminalManager;
   private readonly prober: Prober;
+  private readonly containerActions: ContainerActions;
   private readonly scanner: TrivyScanner;
   /** Écart entre l'horloge de la console et celle de l'hôte (mesuré à la connexion), pour l'échéance des demandes. */
   private clockOffsetMs = 0;
@@ -107,6 +109,7 @@ export class AgentClient {
     });
     this.prober = new Prober(config.dockerSocket, (project) => this.protection.isProtected(project));
     this.terminals = new TerminalManager(config.dockerSocket, (project) => this.protection.isProtected(project));
+    this.containerActions = new ContainerActions(config.dockerSocket, (project) => this.protection.isProtected(project));
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
     this.scanner = new TrivyScanner({
       workspaceDir: config.workspaceDir,
@@ -337,6 +340,20 @@ export class AgentClient {
             case "image_remove":
               void this.prober.remove(msg.imageId);
               break;
+            case "container_action": {
+              const verdict = this.guard.check(msg.actionId, msg.expiresAt);
+              // Rejouée : ignorée sans réponse (un « échec » écraserait le vrai résultat).
+              if (verdict === "replayed") break;
+              if (verdict === "expired") {
+                this.emit({ type: "container_action_result", actionId: msg.actionId, status: "failed", error: "Demande expirée avant exécution." });
+                break;
+              }
+              void this.containerActions
+                .run(msg, (m) => this.emit(m))
+                .then(inventoryAfterOperation)
+                .catch((err: unknown) => this.emit({ type: "container_action_result", actionId: msg.actionId, status: "failed", error: `Erreur de l'agent : ${(err as Error).message}`.slice(0, 300) }));
+              break;
+            }
             case "removal_plan": {
               const failed = (error: string): void =>
                 this.emit({ type: "removal_plan_result", planId: msg.planId, error: error.slice(0, 300), containers: [], running: 0, networks: [], volumes: [], images: [], binds: [], workspace: false });

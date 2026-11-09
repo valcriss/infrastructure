@@ -490,6 +490,33 @@ export interface Application {
   importable: boolean;
 }
 
+// --- Conteneurs ---------------------------------------------------------------------------------------
+
+/** Un conteneur d'un hôte, rattaché ou non à une application Compose. */
+export interface ContainerRow {
+  hostId: string;
+  hostName: string;
+  hostPresence: "online" | "offline";
+  id: string;
+  name: string;
+  service: string | null;
+  project: string | null;
+  appKind: "managed" | "observed" | null;
+  stackId: string | null;
+  image: string;
+  state: string;
+  status: string;
+  health: "healthy" | "unhealthy" | "starting" | "none" | null;
+  restartCount: number;
+  exitCode: number | null;
+  startedAt: string | null;
+  created: number;
+  ports: { privatePort: number; publicPort?: number; type: string; ip?: string }[];
+  usage: { cpuPercent: number; memBytes: number; memLimitBytes: number } | null;
+  /** Conteneur de la console ou de son agent : ni action de cycle de vie, ni terminal. */
+  protected: boolean;
+}
+
 // --- Espace disque Docker et nettoyage ----------------------------------------------------------------
 
 export interface DiskUsageEntry {

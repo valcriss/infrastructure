@@ -205,6 +205,15 @@ export const ToolsResultSchema = z.object({
   shell: z.boolean().default(false),
 });
 
+/** Résultat d'une action sur un conteneur isolé (démarrer, arrêter, redémarrer). */
+export const ContainerActionResultSchema = z.object({
+  type: z.literal("container_action_result"),
+  actionId: z.uuid(),
+  status: z.enum(["succeeded", "failed"]),
+  /** Présent seulement en cas d'échec. */
+  error: z.string().max(300).optional(),
+});
+
 /** Ce que la suppression d'une application retirerait de l'hôte, observé par l'agent (rien n'est modifié). */
 export const RemovalPlanResultSchema = z.object({
   type: z.literal("removal_plan_result"),
@@ -405,6 +414,7 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   ToolsResultSchema,
   ImagePullResultSchema,
   RemovalPlanResultSchema,
+  ContainerActionResultSchema,
 ]);
 export type AgentMessage = z.infer<typeof AgentMessageSchema>;
 
@@ -555,6 +565,19 @@ export const ImagePullSchema = z.object({
 });
 export type ImagePullMessage = z.infer<typeof ImagePullSchema>;
 
+/**
+ * Démarre, arrête ou redémarre un conteneur précis (API Docker), hors cycle Compose. L'agent répond par
+ * `container_action_result` et refuse les conteneurs de la console et de l'agent.
+ */
+export const ContainerActionSchema = z.object({
+  type: z.literal("container_action"),
+  actionId: z.uuid(),
+  expiresAt: z.iso.datetime().optional(),
+  containerId: z.string().regex(/^[0-9a-f]{12,64}$/),
+  action: z.enum(["start", "stop", "restart"]),
+});
+export type ContainerActionMessage = z.infer<typeof ContainerActionSchema>;
+
 /** Demande ce que la suppression d'une application retirerait de l'hôte ; l'agent répond par `removal_plan_result`. */
 export const RemovalPlanSchema = z.object({
   type: z.literal("removal_plan"),
@@ -595,6 +618,7 @@ export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   ImagePullSchema,
   ImageRemoveSchema,
   RemovalPlanSchema,
+  ContainerActionSchema,
 ]);
 export type ConsoleMessage = z.infer<typeof ConsoleMessageSchema>;
 

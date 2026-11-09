@@ -10,6 +10,7 @@ export interface NavItem {
 export const MAIN_NAV: NavItem[] = [
   { to: "/dashboard", label: "Tableau de bord", icon: "gauge-high" },
   { to: "/stacks", label: "Applications", icon: "boxes-stacked", match: ["/stacks"] },
+  { to: "/containers", label: "Conteneurs", icon: "cube" },
   { to: "/images", label: "Images", icon: "layer-group" },
   { to: "/statut", label: "Statut", icon: "heart-pulse" },
 ];
