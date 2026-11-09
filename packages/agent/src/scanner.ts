@@ -31,6 +31,18 @@ export interface ScannerConfig {
 const RANK: Record<Severity, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
 const MAX_REPORT_BYTES = 200 * 1024 * 1024;
 
+export function trivyProxyEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const proxy: NodeJS.ProcessEnv = {};
+  for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
+    if (env[name] !== undefined) proxy[name] = env[name];
+  }
+  return proxy;
+}
+
+function proxyArgs(env: NodeJS.ProcessEnv): string[] {
+  return Object.keys(trivyProxyEnv(env)).flatMap((name) => ["-e", name]);
+}
+
 interface RawVuln {
   VulnerabilityID?: unknown;
   PkgName?: unknown;
@@ -108,13 +120,14 @@ export function parseTrivyVersion(raw: unknown): NonNullable<ScanResult["trivy"]
  * privé), système de fichiers en lecture seule, mémoire et processus bornés. Les fichiers temporaires volumineux sont
  * dirigés vers le dossier du scan (sur disque) et non vers /tmp (mémoire).
  */
-export function trivyRunArgs(cfg: Pick<ScannerConfig, "trivyImage" | "cacheVolume" | "memory">, dir: string, container: string): string[] {
+export function trivyRunArgs(cfg: Pick<ScannerConfig, "trivyImage" | "cacheVolume" | "memory">, dir: string, container: string, env: NodeJS.ProcessEnv = process.env): string[] {
   return [
     "run", "--rm", "--name", container,
     // Seule capacité conservée : lire/écrire le dossier privé (0700) d'un agent qui n'est pas root.
     "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE", "--security-opt", "no-new-privileges",
     "--read-only", "--tmpfs", "/tmp:rw,size=512m",
     "-e", "TMPDIR=/scan/tmp",
+    ...proxyArgs(env),
     "--memory", cfg.memory, "--pids-limit", "512",
     "-v", `${dir}:/scan`,
     "-v", `${cfg.cacheVolume}:/cache`,
@@ -171,7 +184,7 @@ export class TrivyScanner {
   private async docker(args: string[], timeoutMs: number): Promise<{ stdout: string; code: number | null; timedOut: boolean; tail: string }> {
     let tail = "";
     const res = await runCommand("docker", args, {
-      env: dockerEnv(this.cfg.dockerSocket),
+      env: { ...dockerEnv(this.cfg.dockerSocket), ...trivyProxyEnv() },
       timeoutMs,
       onOutput: (chunk) => {
         tail = (tail + chunk).slice(-1500);
@@ -246,7 +259,7 @@ export class TrivyScanner {
       // 5. Version de Trivy et fraîcheur de la base (le cache vient d'être mis à jour par le scan).
       let trivy: ScanResult["trivy"];
       try {
-        const v = await this.docker(["run", "--rm", "--cap-drop", "ALL", "--read-only", "-v", `${this.cfg.cacheVolume}:/cache`, this.cfg.trivyImage, "version", "--format", "json", "--cache-dir", "/cache"], 60_000);
+        const v = await this.docker(["run", "--rm", "--cap-drop", "ALL", "--read-only", ...proxyArgs(process.env), "-v", `${this.cfg.cacheVolume}:/cache`, this.cfg.trivyImage, "version", "--format", "json", "--cache-dir", "/cache"], 60_000);
         if (v.code === 0) trivy = parseTrivyVersion(JSON.parse(v.stdout));
       } catch {
         /* informations de base indisponibles : le scan reste valable */
