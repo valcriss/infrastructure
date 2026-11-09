@@ -95,7 +95,7 @@ export function parseChallenge(header: string | null): { scheme: string; params:
 /** Politique TLS appliquée à chaque connexion, y compris après une redirection. */
 export async function createFetch(caFile: string | null, skipHosts: readonly string[] = []): Promise<typeof fetch> {
   if (!caFile && skipHosts.length === 0) return fetch;
-  const { Agent, buildConnector } = await import("undici");
+  const { Agent, buildConnector, fetch: undiciFetch } = await import("undici");
   const ca = caFile ? [...rootCertificates, readFileSync(caFile, "utf8")] : undefined;
   const secure = buildConnector({ ca, rejectUnauthorized: true });
   const insecure = buildConnector({ rejectUnauthorized: false });
@@ -105,9 +105,11 @@ export async function createFetch(caFile: string | null, skipHosts: readonly str
       connect(options, callback);
     },
   });
+  // Node 24 embarque un autre Dispatcher ; les types Web d'Undici ont aussi leurs propres iterateurs.
+  const registryFetch = undiciFetch as unknown as typeof fetch;
   return (input, init) => {
     const options = { ...init, dispatcher };
-    return fetch(input, options);
+    return registryFetch(input, options);
   };
 }
 

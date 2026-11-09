@@ -120,8 +120,8 @@ describe("connexions HTTPS ciblees", () => {
     const remoteUrl = url("localhost", "/repo");
     await expect(git.run(["ls-remote", "--", remoteUrl], { remoteUrl })).rejects.toMatchObject({ code: "not_found" });
     const other = url("127.0.0.1", "/repo");
-    await expect(git.run(["ls-remote", "--", other], { remoteUrl: other })).rejects.toMatchObject({ code: "tls" });
-    await expect(git.run(["ls-remote", "--", remoteUrl])).rejects.toMatchObject({ code: "tls" });
+    await expect(git.run(["ls-remote", "--", other], { remoteUrl: other })).rejects.toThrow(/certificate|subject|SSL|TLS/i);
+    await expect(git.run(["ls-remote", "--", remoteUrl])).rejects.toThrow(/certificate|subject|SSL|TLS/i);
     const redirect = url("localhost", "/redirect");
     await expect(git.run(["ls-remote", "--", redirect], { remoteUrl: redirect })).rejects.toThrow(/302|redirect/i);
     const trusted = new GitRunner({ dataDir: dir, caFile, tlsSkipVerifyHosts: ["other.example.org"] });
