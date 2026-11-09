@@ -420,7 +420,10 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const box = new SecretBox(masterKey);
   const registries = new RegistryStore(pool, box);
   const ops = new OperationsService(pool, gateway, registries);
-  const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile) });
+  if (config.tlsSkipVerifyHosts?.length) {
+    app.log.warn({ hosts: config.tlsSkipVerifyHosts }, "Vérification TLS désactivée pour Git et les vérifications de registres sur ces hôtes uniquement.");
+  }
+  const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile, config.tlsSkipVerifyHosts) });
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const candidates = new CandidateScans(pool, scans, gateway, registries);
@@ -461,7 +464,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const backup = new BackupService({
     pool,
     box,
-    git: new GitRunner({ dataDir: config.dataDir, caFile: config.gitCaFile, allowInsecureProtocols: allowInsecureGit }),
+    git: new GitRunner({ dataDir: config.dataDir, caFile: config.gitCaFile, allowInsecureProtocols: allowInsecureGit, tlsSkipVerifyHosts: config.tlsSkipVerifyHosts }),
     dataDir: config.dataDir,
     log: {
       info: (m) => app.log.info(m),

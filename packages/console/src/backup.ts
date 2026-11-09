@@ -290,12 +290,12 @@ export class BackupService implements BackupStatusProvider {
     const { git } = this.deps;
     const tmp = await mkdtemp(join(this.deps.dataDir, "git", "test-"));
     try {
-      const heads = await git.run(["ls-remote", "--heads", "--", url], { creds, timeoutMs: 60_000 });
+      const heads = await git.run(["ls-remote", "--heads", "--", url], { creds, remoteUrl: url, timeoutMs: 60_000 });
       const names = heads.stdout.split("\n").flatMap((l) => (l.split("\t")[1]?.replace("refs/heads/", "") ? [l.split("\t")[1]!.replace("refs/heads/", "")] : []));
       if (names.length === 0) return { remote: "empty", backup: null };
       if (!names.includes(branch)) return { remote: "branch_missing", backup: null };
 
-      await git.run(["clone", "--depth", "1", "--single-branch", "--branch", branch, "--", url, tmp], { creds, timeoutMs: 120_000 });
+      await git.run(["clone", "--depth", "1", "--single-branch", "--branch", branch, "--", url, tmp], { creds, remoteUrl: url, timeoutMs: 120_000 });
       const files = await readWorkTree(tmp);
       const manifest = files.get("manifest.yaml");
       if (!manifest) return { remote: "foreign_content", backup: null };
@@ -458,7 +458,7 @@ export class BackupService implements BackupStatusProvider {
       if (remotes.includes("origin")) await git.run(["remote", "set-url", "origin", "--", s.repo_url], { cwd: this.workDir });
       else await git.run(["remote", "add", "origin", "--", s.repo_url], { cwd: this.workDir });
 
-      await git.run(["fetch", "--prune", "origin"], { cwd: this.workDir, creds });
+      await git.run(["fetch", "--prune", "origin"], { cwd: this.workDir, creds, remoteUrl: s.repo_url });
       const remoteTip = await this.revParse(this.workDir, `refs/remotes/origin/${branch}`);
       let localHead = await this.revParse(this.workDir, "HEAD");
 
@@ -516,7 +516,7 @@ export class BackupService implements BackupStatusProvider {
 
       // 5. Push (jamais forcé). Le succès du commit local ne vaut pas sauvegarde distante.
       if (localHead && localHead !== remoteTip) {
-        await git.run(["push", "origin", `HEAD:refs/heads/${branch}`], { cwd: this.workDir, creds });
+        await git.run(["push", "origin", `HEAD:refs/heads/${branch}`], { cwd: this.workDir, creds, remoteUrl: s.repo_url });
       }
       await pool.query(
         `UPDATE backup_settings SET pushed_commit = $1, local_commit = $1, pushed_revision = $2,
@@ -551,7 +551,7 @@ export class BackupService implements BackupStatusProvider {
     const { s, creds } = await this.requireCredentials();
     const tmp = await mkdtemp(join(this.deps.dataDir, "git", "restore-"));
     try {
-      await this.deps.git.run(["clone", "--depth", "1", "--single-branch", "--branch", s.branch, "--", s.repo_url, tmp], { creds });
+      await this.deps.git.run(["clone", "--depth", "1", "--single-branch", "--branch", s.branch, "--", s.repo_url, tmp], { creds, remoteUrl: s.repo_url });
       const commit = (await this.deps.git.run(["rev-parse", "HEAD"], { cwd: tmp })).stdout.trim();
       const tree = await readWorkTree(tmp);
       if (!tree.has("manifest.yaml")) throw new HttpError(422, "no_backup", "Ce dépôt ne contient pas de sauvegarde de la console.");

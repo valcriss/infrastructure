@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { HttpError } from "./http-error.js";
+import { skipsTlsVerification } from "./tls-policy.js";
 
 export interface GitCredentials {
   username: string;
@@ -37,12 +38,15 @@ export interface GitRunnerOptions {
   allowInsecureProtocols?: boolean;
   /** Autorité de certification supplémentaire (serveur Git interne). */
   caFile?: string | null;
+  tlsSkipVerifyHosts?: readonly string[];
 }
 
 export interface GitRunOptions {
   cwd?: string;
   creds?: GitCredentials;
   timeoutMs?: number;
+  /** URL effective du serveur pour les commandes réseau, y compris via origin. */
+  remoteUrl?: string;
   /** Retourne le résultat au lieu de lever une erreur quand le code de sortie est non nul. */
   allowFail?: boolean;
 }
@@ -107,8 +111,10 @@ export class GitRunner {
     return env;
   }
 
-  private globalArgs(): string[] {
+  private globalArgs(remoteUrl?: string): string[] {
     const insecure = this.opts.allowInsecureProtocols === true;
+    const url = remoteUrl && /^https:\/\//i.test(remoteUrl) ? new URL(remoteUrl) : null;
+    const skip = url && skipsTlsVerification(url.hostname, this.opts.tlsSkipVerifyHosts ?? []);
     return [
       "-c", "credential.helper=",
       "-c", "core.symlinks=false",
@@ -119,6 +125,11 @@ export class GitRunner {
       "-c", "safe.directory=*",
       "-c", "protocol.allow=never",
       "-c", "protocol.https.allow=always",
+      ...(skip ? [
+        "-c", `http.${url.origin}/.sslVerify=false`,
+        // Git choisit la configuration TLS avant les redirections : ne pas étendre l'exception.
+        "-c", `http.${url.origin}/.followRedirects=false`,
+      ] : []),
       ...(insecure ? ["-c", "protocol.file.allow=always", "-c", "protocol.http.allow=always"] : []),
     ];
   }
@@ -128,7 +139,7 @@ export class GitRunner {
     return new Promise((resolve, reject) => {
       execFile(
         "git",
-        [...this.globalArgs(), ...args],
+        [...this.globalArgs(opts.remoteUrl), ...args],
         {
           cwd: opts.cwd,
           env: this.env(opts.creds),

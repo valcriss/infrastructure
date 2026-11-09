@@ -45,6 +45,8 @@ services:
       METRICS_RETENTION_DAYS: ${METRICS_RETENTION_DAYS:-7}
       # Autorité de certification d'un registre d'images interne (optionnel) : fichier monté dans le conteneur.
       REGISTRY_CA_FILE: ${REGISTRY_CA_FILE:-}
+      # Exceptions TLS limitees a Git et aux verifications des registres.
+      TLS_SKIP_VERIFY_HOSTS: ${TLS_SKIP_VERIFY_HOSTS:-}
     ports:
       - "${CONSOLE_PORT:-8080}:8080"
     volumes:

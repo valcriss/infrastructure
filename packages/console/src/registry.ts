@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { rootCertificates } from "node:tls";
 import type { ImageRef } from "./image-ref.js";
+import { skipsTlsVerification } from "./tls-policy.js";
 
 export type RegistryErrorCode = "auth" | "not_found" | "rate_limited" | "network" | "unsupported" | "bad_response";
 
@@ -91,12 +92,23 @@ export function parseChallenge(header: string | null): { scheme: string; params:
   return { scheme: (m[1] as string).toLowerCase(), params };
 }
 
-/** `fetch` avec une autorité de certification supplémentaire (registre interne). */
-export async function createFetch(caFile: string | null): Promise<typeof fetch> {
-  if (!caFile) return fetch;
-  const { Agent, fetch: undiciFetch } = await import("undici");
-  const dispatcher = new Agent({ connect: { ca: [...rootCertificates, readFileSync(caFile, "utf8")] } });
-  return ((input: Parameters<typeof fetch>[0], init?: RequestInit) => undiciFetch(input as never, { ...(init as object), dispatcher } as never)) as unknown as typeof fetch;
+/** Politique TLS appliquée à chaque connexion, y compris après une redirection. */
+export async function createFetch(caFile: string | null, skipHosts: readonly string[] = []): Promise<typeof fetch> {
+  if (!caFile && skipHosts.length === 0) return fetch;
+  const { Agent, buildConnector } = await import("undici");
+  const ca = caFile ? [...rootCertificates, readFileSync(caFile, "utf8")] : undefined;
+  const secure = buildConnector({ ca, rejectUnauthorized: true });
+  const insecure = buildConnector({ rejectUnauthorized: false });
+  const dispatcher = new Agent({
+    connect: (options, callback) => {
+      const connect = skipsTlsVerification(options.hostname, skipHosts) ? insecure : secure;
+      connect(options, callback);
+    },
+  });
+  return (input, init) => {
+    const options = { ...init, dispatcher };
+    return fetch(input, options);
+  };
 }
 
 export class RegistryClient {
