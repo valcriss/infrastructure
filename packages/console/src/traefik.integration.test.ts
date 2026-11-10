@@ -91,6 +91,8 @@ describe.skipIf(!url)("application Traefik (intégration)", () => {
     expect(r.hosts[0].networks).toEqual([{ name: "proxy-existant", driver: "bridge", usedBy: ["site"], suggested: true }]);
     expect(r.hosts[0].portConflicts).toEqual([{ port: 80, container: "nginx" }]);
     expect((await fetch(baseUrl + "/api/v1/settings/traefik")).status).toBe(401);
+    // Sans application Traefik, la configuration dynamique n'est pas disponible (avec la raison).
+    expect((await call("GET", "/api/v1/settings/traefik/dynamic", { cookie: admin })).json).toMatchObject({ available: false, reason: expect.stringMatching(/pas configuré/) });
   });
 
   it("refuse les saisies invalides, un réseau incohérent et les non-administrateurs", async () => {
@@ -218,5 +220,98 @@ describe.skipIf(!url)("application Traefik (intégration)", () => {
     expect(ok.json.snippet).toContain("proxy-existant");
     expect((await call("POST", "/api/v1/settings/traefik/console-snippet", { cookie: admin, body: { host: "pas un domaine" } })).json.error.code).toBe("invalid_host");
     expect((await fetch(baseUrl + "/api/v1/settings/traefik/console-snippet", { method: "POST" })).status).toBe(401);
+  });
+
+  it("édite la configuration dynamique : middlewares, routes vers un autre hôte, révisions et fichier sensible", async () => {
+    const dyn = "/api/v1/settings/traefik/dynamic";
+    const BCRYPT = `admin:$2y$05$${"a".repeat(53)}`;
+    const state = async () => (await call("GET", dyn, { cookie: admin })).json;
+    const change = (c: unknown, revision: number, extra: Record<string, unknown> = {}) => ({ expectedRevision: revision, change: c, ...extra });
+    const files = async (stackId: string, revision: number) =>
+      (await pool.query<{ files: Record<string, string>; sensitive_files: string[] }>("SELECT files, sensitive_files FROM stack_revisions WHERE stack_id = $1 AND revision = $2", [stackId, revision])).rows[0];
+
+    const s0 = await state();
+    expect(s0).toMatchObject({ available: true, path: "dynamic/dynamic.yml", entryPoint: "websecure", certResolver: "letsencrypt", fileMissing: false, sensitive: false, parseError: null, middlewares: [], routes: [] });
+    const traefikId = s0.stack.id as string;
+    let rev = s0.revision as number;
+
+    // Aperçu : rien n'est enregistré.
+    const ip = { kind: "middleware", name: "interne", spec: { type: "ipAllowList", sourceRange: ["10.0.0.0/8"] } };
+    const preview = await call("POST", `${dyn}/preview`, { cookie: admin, body: change(ip, rev) });
+    expect(preview.status).toBe(200);
+    expect(preview.json.before).toContain("# Configuration dynamique");
+    expect(preview.json.after).toContain("sourceRange");
+    expect((await state()).revision).toBe(rev);
+
+    // Enregistrement : nouvelle révision, fichier non sensible tant qu'il n'y a pas de mot de passe.
+    const saved = await call("PATCH", dyn, { cookie: admin, body: change(ip, rev) });
+    expect(saved.json).toMatchObject({ revision: rev + 1, changed: true, sensitive: false });
+    rev += 1;
+    expect((await files(traefikId, rev))?.sensitive_files).toEqual([]);
+
+    // Un middleware d'authentification rend le fichier sensible (chiffré dans la sauvegarde Git).
+    const auth = await call("PATCH", dyn, { cookie: admin, body: change({ kind: "middleware", name: "auth", spec: { type: "basicAuth", users: [BCRYPT] } }, rev) });
+    expect(auth.json).toMatchObject({ revision: rev + 1, sensitive: true });
+    rev += 1;
+    expect((await files(traefikId, rev))?.sensitive_files).toEqual(["dynamic/dynamic.yml"]);
+
+    // Route vers un service d'un autre hôte.
+    const nas = { kind: "route", name: "nas", spec: { hosts: ["nas.exemple.fr"], urls: ["http://10.0.0.5:8080"], middlewares: ["auth", "interne"] } };
+    expect((await call("PATCH", dyn, { cookie: admin, body: change(nas, rev) })).json.revision).toBe(rev + 1);
+    rev += 1;
+    const s1 = await state();
+    expect(s1.sensitive).toBe(true);
+    expect(s1.routes).toEqual([expect.objectContaining({ name: "nas", hosts: ["nas.exemple.fr"], urls: ["http://10.0.0.5:8080"], middlewares: ["auth", "interne"] })]);
+    expect(s1.middlewares.map((m: any) => [m.name, m.type, m.usedBy.routes])).toEqual([["interne", "ipAllowList", ["nas"]], ["auth", "basicAuth", ["nas"]]]);
+    expect(s1.middlewares[1].spec).toEqual({ type: "basicAuth", users: [BCRYPT] });
+
+    // Un utilisateur non administrateur lit la liste, mais sans les empreintes de mots de passe.
+    const created = await call("POST", "/api/v1/users", { cookie: admin, body: { email: "op3@example.com", role: "operator" } });
+    const first = await call("POST", "/api/v1/session", { body: { username: "op3@example.com", password: created.json.temporaryPassword } });
+    await call("PUT", "/api/v1/admin/credentials", { cookie: first.cookie, body: { currentPassword: created.json.temporaryPassword, newPassword: "mot-de-passe-solide-3" } });
+    const asOperator = await call("GET", dyn, { cookie: first.cookie });
+    expect(asOperator.status).toBe(200);
+    expect(asOperator.json.middlewares[1].spec).toEqual({ type: "basicAuth", users: ["admin:••••••••"] });
+    expect(JSON.stringify(asOperator.json)).not.toContain("$2y$");
+
+    // Refus : révision périmée, saisies invalides, mot de passe en clair, middleware inconnu.
+    expect((await call("PATCH", dyn, { cookie: admin, body: change(ip, rev - 1) })).json.error.code).toBe("revision_conflict");
+    expect((await call("PATCH", dyn, { cookie: admin, body: change({ kind: "route", name: "x", spec: { hosts: ["pas un domaine"], urls: ["http://10.0.0.5"], middlewares: [] } }, rev) })).json.error.code).toBe("invalid_change");
+    expect((await call("PATCH", dyn, { cookie: admin, body: change({ kind: "middleware", name: "clair", spec: { type: "basicAuth", users: ["bob:motdepasse"] } }, rev) })).json.error.message).toMatch(/déjà haché/);
+    expect((await call("PATCH", dyn, { cookie: admin, body: change({ kind: "route", name: "y", spec: { hosts: ["y.exemple.fr"], urls: ["http://10.0.0.6"], middlewares: ["absent"] } }, rev) })).status).toBe(400);
+    expect((await call("PATCH", dyn, { cookie: admin, body: change({ kind: "route-delete", name: "absent" }, rev) })).status).toBe(404);
+    expect((await call("PATCH", dyn, { cookie: admin, body: { expectedRevision: rev, change: { kind: "inconnu", name: "a" } } })).status).toBe(400);
+
+    // Un middleware utilisé par une route du fichier ne se supprime pas, même avec « force ».
+    const inUse = await call("PATCH", dyn, { cookie: admin, body: change({ kind: "middleware-delete", name: "auth" }, rev, { force: true }) });
+    expect(inUse.status).toBe(409);
+    expect(inUse.json.error).toMatchObject({ code: "middleware_in_use", details: { usedBy: ["nas"] } });
+
+    // Utilisé par une application (label « nom@file ») : refus sans « force », accepté avec.
+    const app2 = await call("POST", "/api/v1/stacks", { cookie: admin, body: { name: "web2", hostId, compose: 'services:\n  web:\n    image: nginx\n    labels:\n      traefik.http.routers.web2.middlewares: "interne@file"\n' } });
+    expect(app2.status).toBe(201);
+    expect((await state()).middlewares.find((m: any) => m.name === "interne").usedBy.applications).toEqual(["web2"]);
+    expect((await call("PATCH", dyn, { cookie: admin, body: change({ kind: "route-delete", name: "nas" }, rev) })).json.revision).toBe(rev + 1);
+    rev += 1;
+    const blocked = await call("PATCH", dyn, { cookie: admin, body: change({ kind: "middleware-delete", name: "interne" }, rev) });
+    expect(blocked.json.error).toMatchObject({ code: "middleware_in_use", details: { usedBy: ["web2"] } });
+    expect((await call("PATCH", dyn, { cookie: admin, body: change({ kind: "middleware-delete", name: "interne" }, rev, { force: true }) })).json.revision).toBe(rev + 1);
+    rev += 1;
+    expect((await call("PATCH", dyn, { cookie: admin, body: change({ kind: "middleware-delete", name: "auth" }, rev) })).json.revision).toBe(rev + 1);
+    rev += 1;
+    expect((await files(traefikId, rev))?.files["dynamic/dynamic.yml"]).not.toContain("http:");
+    expect((await call("GET", `/api/v1/stacks/${traefikId}/revisions`, { cookie: admin })).json.revisions[0].message).toBe("Traefik : middleware « auth » supprimé");
+
+    // Fichier modifié à la main et devenu illisible : lecture signalée, écriture refusée.
+    await call("PUT", `/api/v1/stacks/${traefikId}/files/dynamic/dynamic.yml`, { cookie: admin, body: { expectedRevision: rev, content: "http: [" } });
+    const broken = await state();
+    expect(broken).toMatchObject({ available: true, middlewares: [], routes: [] });
+    expect(broken.parseError).toEqual(expect.any(String));
+    expect((await call("PATCH", dyn, { cookie: admin, body: change(ip, broken.revision) })).json.error.code).toBe("unsupported_file");
+
+    // Réservé aux administrateurs ; lecture ouverte aux utilisateurs connectés.
+    expect((await call("PATCH", dyn, { cookie: first.cookie, body: change(ip, broken.revision) })).status).toBe(403);
+    expect((await call("GET", dyn, { cookie: first.cookie })).status).toBe(200);
+    expect((await fetch(baseUrl + dyn)).status).toBe(401);
   });
 });

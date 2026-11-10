@@ -17,6 +17,7 @@ import { BackupService } from "./backup.js";
 import { Dashboard } from "./dashboard.js";
 import { ImageWatcher } from "./image-watch.js";
 import { ObservedWatcher } from "./observed-watch.js";
+import { registerTraefikDynamicRoutes } from "./traefik-dynamic-routes.js";
 import { registerTraefikRoutes } from "./traefik-routes.js";
 import { registerImageRoutes } from "./image-routes.js";
 import { RegistryStore } from "./registries.js";
@@ -493,6 +494,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerImageRoutes(app, { pool, session: auth, apiAuth, scans, watcher, registries, registryClient, isOnline: (id) => gateway.isOnline(id) });
   registerHostDiskRoutes(app, { auth: apiAuth, session: auth, pruning });
   registerTraefikRoutes(app, { pool, auth: apiAuth, isOnline: (id) => gateway.isOnline(id) });
+  registerTraefikDynamicRoutes(app, { pool, auth: apiAuth });
   registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });

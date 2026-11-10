@@ -69,10 +69,25 @@ async function save() {
   }
 }
 
+// Middlewares définis dans la configuration dynamique de Traefik, proposés sous la forme « nom@file ».
+const known = ref<string[]>([]);
+function toggleMiddleware(name: string) {
+  const current = middlewareList.value;
+  form.middlewares = (current.includes(name) ? current.filter((m) => m !== name) : [...current, name]).join(", ");
+}
+
 const onKey = (e: KeyboardEvent) => {
   if (e.key === "Escape") emit("close");
 };
-onMounted(() => document.addEventListener("keydown", onKey));
+onMounted(async () => {
+  document.addEventListener("keydown", onKey);
+  try {
+    const r = await api<{ available: boolean; middlewares?: { name: string }[] }>("/api/v1/settings/traefik/dynamic");
+    known.value = r.available ? (r.middlewares ?? []).map((m) => `${m.name}@file`) : [];
+  } catch {
+    /* suggestions facultatives : la saisie libre reste possible */
+  }
+});
 onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
 </script>
 
@@ -110,8 +125,24 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
 
         <label class="block">
           <span class="mb-1 block font-medium">Middlewares (facultatif)</span>
-          <input v-model="form.middlewares" placeholder="auth@file, securite" aria-label="Middlewares" :class="[input, 'w-full font-mono text-xs']" />
-          <span class="mt-1 block text-xs text-slate-500">Noms séparés par des virgules, tels que Traefik les connaît (par exemple <code>auth@file</code>). Ils doivent exister dans la configuration de Traefik.</span>
+          <input v-model="form.middlewares" placeholder="auth@file, securite@file" aria-label="Middlewares" :class="[input, 'w-full font-mono text-xs']" />
+          <span v-if="known.length" class="mt-2 flex flex-wrap items-center gap-1" aria-label="Middlewares disponibles">
+            <span class="text-xs text-slate-500">Disponibles :</span>
+            <button
+              v-for="m in known"
+              :key="m"
+              type="button"
+              :aria-pressed="middlewareList.includes(m)"
+              :class="['rounded border px-2 py-0.5 font-mono text-xs', middlewareList.includes(m) ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-slate-300 hover:bg-slate-100']"
+              @click="toggleMiddleware(m)"
+            >
+              {{ m }}
+            </button>
+          </span>
+          <span class="mt-1 block text-xs text-slate-500">
+            Noms séparés par des virgules, tels que Traefik les connaît (par exemple <code>auth@file</code>). Ils doivent exister dans la configuration de Traefik :
+            <template v-if="!known.length">créez-les dans Paramètres → Traefik → Configuration dynamique.</template>
+          </span>
         </label>
 
         <dl class="grid gap-x-6 gap-y-1 rounded bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-2">

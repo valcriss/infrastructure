@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { api, describeError } from "../../api";
 import CopyButton from "../../components/CopyButton.vue";
 import PanelCard from "../../components/PanelCard.vue";
+import TraefikDynamic from "../../components/TraefikDynamic.vue";
 
 // Traefik (reverse proxy) : création d'une application préconfigurée, puis rappel des noms choisis.
 interface Candidate { name: string; driver: string; usedBy: string[]; suggested: boolean }
@@ -133,7 +134,8 @@ async function create() {
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
     <p v-if="!state && !error" class="text-slate-500">Chargement…</p>
 
-    <PanelCard v-if="application && state?.settings" title="Application Traefik" icon="route" subtitle="Reverse proxy créé par la console">
+    <template v-if="application && state?.settings">
+    <PanelCard title="Application Traefik" icon="route" subtitle="Reverse proxy créé par la console">
       <dl class="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
         <div><dt class="text-xs text-slate-500">Application</dt><dd><RouterLink :to="`/stacks/${application.id}`" class="text-blue-600 underline">{{ application.name }}</RouterLink> · hôte {{ application.hostName ?? "inconnu" }}</dd></div>
         <div>
@@ -173,6 +175,9 @@ async function create() {
         </div>
       </div>
     </PanelCard>
+
+    <TraefikDynamic />
+    </template>
 
     <template v-else-if="state">
       <p v-if="missing" role="note" class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
