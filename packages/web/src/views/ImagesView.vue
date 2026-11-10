@@ -27,6 +27,45 @@ const shown = computed(() => {
     return true;
   });
 });
+// Tri (un clic sur un en-tête : croissant, deuxième clic : décroissant), comme sur les autres écrans.
+type SortKey = "image" | "usedBy" | "vulns" | "scan";
+const sortKey = ref<SortKey>("image");
+const sortDir = ref<1 | -1>(1);
+function sortBy(k: SortKey) {
+  if (sortKey.value === k) sortDir.value = sortDir.value === 1 ? -1 : 1;
+  else {
+    sortKey.value = k;
+    sortDir.value = k === "image" || k === "usedBy" ? 1 : -1;
+  }
+}
+const label = (i: ImageView): string => (i.refs[0] ?? shortId(i.imageId)).toLowerCase();
+function sortValue(i: ImageView, k: SortKey): string | number {
+  switch (k) {
+    case "image": return label(i);
+    case "usedBy": return i.usedBy.map((u) => (u.stackName ? `${u.stackName}/${u.service ?? ""}` : u.container)).sort()[0]?.toLowerCase() ?? "";
+    // Gravité d'abord (critiques, puis élevées…) ; jamais scannée ou en échec : tout en bas.
+    case "vulns": {
+      const c = i.scan.current?.counts;
+      return c ? c.critical * 1e9 + c.high * 1e6 + c.medium * 1e3 + c.low : -1;
+    }
+    case "scan": return i.scan.current?.finishedAt ? Date.parse(i.scan.current.finishedAt) || -1 : -1;
+  }
+}
+const sorted = computed(() =>
+  [...shown.value].sort((x, y) => {
+    const a = sortValue(x, sortKey.value);
+    const b = sortValue(y, sortKey.value);
+    const c = a < b ? -1 : a > b ? 1 : 0;
+    return c * sortDir.value || label(x).localeCompare(label(y)) || x.platform.localeCompare(y.platform);
+  }),
+);
+const columns = [
+  { key: "image", label: "Image", cls: "" },
+  { key: "usedBy", label: "Utilisée par", cls: "hidden md:table-cell" },
+  { key: "vulns", label: "Vulnérabilités", cls: "" },
+  { key: "scan", label: "Dernier scan", cls: "hidden lg:table-cell" },
+] as const;
+
 const critical = computed(() => images.value.reduce((n, i) => n + (i.scan.current?.counts?.critical ?? 0), 0));
 const high = computed(() => images.value.reduce((n, i) => n + (i.scan.current?.counts?.high ?? 0), 0));
 
@@ -144,20 +183,22 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
     <section aria-label="Images" class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
       <p v-if="shown.length === 0" class="p-6 text-sm text-slate-500">Aucune image. Elles apparaissent dès que des conteneurs sont observés sur un hôte.</p>
-      <table v-else class="w-full text-left text-sm">
-        <thead class="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+      <table v-else class="w-full min-w-[720px] text-left text-sm">
+        <thead class="border-b border-slate-200 bg-slate-50 text-xs text-slate-600">
           <tr>
-            <th class="px-4 py-3">Image</th>
-            <th class="px-4 py-3">Utilisée par</th>
-            <th class="px-4 py-3">Vulnérabilités</th>
-            <th class="px-4 py-3">Dernier scan</th>
-            <th class="px-4 py-3 text-right">Actions</th>
+            <th v-for="col in columns" :key="col.key" scope="col" :class="['px-3 py-2 font-medium', col.cls]" :aria-sort="sortKey === col.key ? (sortDir === 1 ? 'ascending' : 'descending') : 'none'">
+              <button type="button" class="inline-flex items-center gap-1 hover:text-slate-900" @click="sortBy(col.key)">
+                {{ col.label }}
+                <FaIcon v-if="sortKey === col.key" :icon="['fas', sortDir === 1 ? 'chevron-up' : 'chevron-down']" class="text-[10px]" />
+              </button>
+            </th>
+            <th scope="col" class="px-3 py-2 text-right"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
-          <template v-for="i in shown" :key="key(i)">
-            <tr class="border-t border-slate-100 align-top">
-              <td class="px-4 py-3">
+          <template v-for="i in sorted" :key="key(i)">
+            <tr class="border-b border-slate-100 align-top last:border-0 hover:bg-slate-50">
+              <td class="px-3 py-2">
                 <p class="flex items-center gap-2 break-all font-mono font-medium">
                   <FaIcon :icon="['fas', 'layer-group']" class="text-slate-400" />{{ i.refs[0] ?? shortId(i.imageId) }}
                 </p>
@@ -165,7 +206,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   {{ i.platform || "plateforme inconnue" }} · {{ shortId(i.imageId) }}<span v-if="!i.managed"> · hors application gérée</span>
                 </p>
               </td>
-              <td class="px-4 py-3 text-xs text-slate-600">
+              <td class="hidden px-3 py-2 text-xs text-slate-600 md:table-cell">
                 <template v-for="(u, n) in i.usedBy" :key="u.containerId + u.hostId">
                   <template v-if="n">, </template>
                   <RouterLink v-if="u.stackId" :to="`/stacks/${u.stackId}`" class="underline">{{ u.stackName }}/{{ u.service }}</RouterLink>
@@ -173,20 +214,20 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   <span class="text-slate-400"> ({{ u.hostName }}{{ u.state !== "running" ? ", " + u.state : "" }})</span>
                 </template>
               </td>
-              <td class="px-4 py-3">
+              <td class="px-3 py-2">
                 <SeverityBadges :state="i.scan.state" :counts="i.scan.current?.counts ?? null" :stale="i.scan.stale" :hidden="i.scan.current?.hidden" :position="i.scan.queuePosition" />
                 <p v-if="i.scan.current?.hidden" class="mt-1 text-xs text-slate-500">{{ i.scan.current.hidden }} sous le seuil, masquée(s)</p>
                 <p v-if="i.scan.state === 'failed'" class="mt-1 max-w-xs text-xs text-red-700">{{ i.scan.lastAttempt?.error }}</p>
                 <p v-if="i.scan.current?.os?.eosl" class="mt-1 text-xs text-amber-700">{{ i.scan.current.os.family }} {{ i.scan.current.os.name }} en fin de vie</p>
               </td>
-              <td class="px-4 py-3 text-xs text-slate-500">
+              <td class="hidden px-3 py-2 text-xs text-slate-500 lg:table-cell">
                 <template v-if="i.scan.current">
                   <span :title="fmtDate(i.scan.current.finishedAt)">{{ ago(i.scan.current.finishedAt) }}</span>
                   <p>Trivy {{ i.scan.current.trivyVersion ?? "?" }} · base du {{ i.scan.current.dbUpdatedAt ? new Date(i.scan.current.dbUpdatedAt).toLocaleDateString("fr-FR") : "?" }}</p>
                 </template>
                 <template v-else>—</template>
               </td>
-              <td class="px-4 py-3 text-right">
+              <td class="px-3 py-2 text-right">
                 <div class="flex justify-end gap-2 text-xs">
                   <button v-if="i.scan.current?.total" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" :aria-expanded="!!open[key(i)]" @click="open[key(i)] = !open[key(i)]">
                     {{ open[key(i)] ? "Masquer" : "Détails" }}
@@ -197,8 +238,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 </div>
               </td>
             </tr>
-            <tr v-if="open[key(i)]" class="border-t border-slate-100 bg-slate-50">
-              <td colspan="5" class="px-4 py-4"><VulnerabilityTable :image-id="i.imageId" :platform="i.platform" :image-ref="i.refs[0]" /></td>
+            <tr v-if="open[key(i)]" class="border-b border-slate-100 bg-slate-50 last:border-0">
+              <td colspan="5" class="px-3 py-4"><VulnerabilityTable :image-id="i.imageId" :platform="i.platform" :image-ref="i.refs[0]" /></td>
             </tr>
           </template>
         </tbody>
