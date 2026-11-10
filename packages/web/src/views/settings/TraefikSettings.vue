@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { api, describeError } from "../../api";
+import CopyButton from "../../components/CopyButton.vue";
 import PanelCard from "../../components/PanelCard.vue";
 
 // Traefik (reverse proxy) : création d'une application préconfigurée, puis rappel des noms choisis.
@@ -94,6 +95,21 @@ async function showPreview() {
   }
 }
 
+const snippetHost = ref("");
+const snippet = ref("");
+async function makeSnippet() {
+  error.value = info.value = "";
+  busy.value = true;
+  try {
+    snippet.value = (await api<{ snippet: string }>("/api/v1/settings/traefik/console-snippet", { method: "POST", body: JSON.stringify({ host: snippetHost.value.trim() }) })).snippet;
+  } catch (err) {
+    snippet.value = "";
+    error.value = describeError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function create() {
   error.value = info.value = "";
   busy.value = true;
@@ -137,6 +153,25 @@ async function create() {
         Les certificats viennent de l'autorité de test de Let's Encrypt : les navigateurs les refusent. Pour passer en production, modifiez <code>traefik.yml</code>
         dans les fichiers de l'application (retirez la ligne <code>caServer</code>) et redéployez.
       </p>
+
+      <div class="mt-4 border-t border-slate-100 pt-4">
+        <h3 class="text-sm font-semibold">Exposer la console elle-même</h3>
+        <p class="mt-1 text-sm text-slate-600">
+          La console ne se gère pas elle-même : générez l'extrait à ajouter au service « console » de son <code>docker-compose.yml</code>, puis redéployez la console.
+          Le tunnel SSH reste utilisable pendant ce temps.
+        </p>
+        <form class="mt-2 flex flex-wrap items-end gap-2 text-sm" @submit.prevent="makeSnippet">
+          <label>
+            <span class="block text-xs font-medium">Nom de domaine de la console</span>
+            <input v-model="snippetHost" required placeholder="console.exemple.fr" aria-label="Nom de domaine de la console" class="mt-1 w-64 rounded border border-slate-300 bg-white px-3 py-2 font-mono text-xs" />
+          </label>
+          <button :class="ghost" :disabled="busy || !snippetHost.trim()">Générer l'extrait</button>
+        </form>
+        <div v-if="snippet" class="mt-3">
+          <div class="mb-1 flex justify-end"><CopyButton :text="snippet" label="Copier l'extrait" /></div>
+          <pre class="overflow-x-auto rounded border border-slate-200 bg-slate-50 p-3 text-xs">{{ snippet }}</pre>
+        </div>
+      </div>
     </PanelCard>
 
     <template v-else-if="state">

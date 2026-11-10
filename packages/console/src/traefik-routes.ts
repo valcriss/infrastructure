@@ -3,6 +3,7 @@ import {
   TRAEFIK_DEFAULTS,
   TRAEFIK_IMAGE,
   TRAEFIK_STACK_NAME,
+  traefikConsoleSnippet,
   validateTraefikOptions,
   type Container,
   type NetworkInfo,
@@ -174,6 +175,18 @@ export function registerTraefikRoutes(app: FastifyInstance, deps: { pool: Pool; 
     }
     return { body, generated: generateTraefik(options) };
   }
+
+  // Extrait à copier dans le Compose de la console pour la placer derrière Traefik (elle ne se gère pas elle-même).
+  app.post("/api/v1/settings/traefik/console-snippet", { preHandler: auth }, async (request) => {
+    const body = z.object({ host: z.string().max(253) }).parse(request.body);
+    const settings = await getTraefikSettings(pool);
+    if (!settings) throw new HttpError(409, "traefik_not_configured", "Traefik n'est pas configuré : créez d'abord l'application Traefik.");
+    try {
+      return { snippet: traefikConsoleSnippet({ entryPoint: settings.httpsEntryPoint, certResolver: settings.certResolver, network: settings.network }, body.host.trim().toLowerCase()) };
+    } catch (err) {
+      throw new HttpError(400, "invalid_host", err instanceof Error ? err.message : "Nom de domaine invalide.");
+    }
+  });
 
   // Aperçu des fichiers qui seraient créés : même validation que la création, rien n'est enregistré.
   app.post("/api/v1/settings/traefik/preview", { preHandler: auth }, async (request) => {

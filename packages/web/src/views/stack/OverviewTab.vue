@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { findActiveOperation } from "../../active-operation";
 import { healthApplies } from "../../container-health";
@@ -10,6 +10,7 @@ import DeployDialog from "../../components/DeployDialog.vue";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
 import RevisionDiff from "../../components/RevisionDiff.vue";
+import TraefikExposeDialog, { type TraefikService, type TraefikSettingsView } from "../../components/TraefikExposeDialog.vue";
 import { useSession } from "../../stores/session";
 
 const props = defineProps<{ stack: StackDetail }>();
@@ -88,6 +89,26 @@ onMounted(() => {
   void router.replace({ query: rest });
   if (!blocked.value) deployTarget.value = props.stack.currentRevision;
 });
+
+// Exposition par Traefik : visible dès que Traefik est configuré ; les actions demandent le même hôte.
+interface TraefikState { available: boolean; reason: string | null; settings: TraefikSettingsView | null; services: TraefikService[] }
+const traefik = ref<TraefikState | null>(null);
+const traefikTarget = ref<TraefikService | null>(null);
+async function loadTraefik() {
+  try {
+    traefik.value = await api<TraefikState>(`/api/v1/stacks/${props.stack.id}/traefik`);
+  } catch {
+    traefik.value = null;
+  }
+}
+onMounted(loadTraefik);
+watch(() => props.stack.currentRevision, loadTraefik);
+
+function onTraefikSaved(revision: number, removed: boolean) {
+  traefikTarget.value = null;
+  hcInfo.value = `Révision ${revision} enregistrée (${removed ? "exposition retirée" : "service exposé par Traefik"}). Elle n'est pas déployée : utilisez « Déployer » pour l'appliquer.`;
+  emit("changed");
+}
 
 function onHcSaved(revision: number) {
   hcTarget.value = null;
@@ -285,5 +306,45 @@ Supprimer…
         </tbody>
       </table>
     </section>
+
+    <section v-if="traefik?.settings" class="rounded-lg border border-slate-200 bg-white">
+      <h2 class="flex items-center gap-2 border-b border-slate-200 px-4 py-2 font-semibold"><FaIcon :icon="['fas', 'route']" class="text-slate-400" /> Exposition par Traefik</h2>
+      <p v-if="!traefik.available" class="px-4 py-3 text-sm text-slate-500">{{ traefik.reason }}</p>
+      <template v-else>
+        <p v-if="traefik.services.length === 0" class="px-4 py-3 text-sm text-slate-500">Aucun service dans le Compose.</p>
+        <ul v-else class="divide-y divide-slate-100 text-sm">
+          <li v-for="s in traefik.services" :key="s.service" class="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+            <div class="min-w-0">
+              <span class="font-medium">{{ s.service }}</span>
+              <template v-if="s.exposure">
+                <span v-for="h in s.exposure.hosts" :key="h" class="ml-2 rounded bg-green-100 px-1.5 py-0.5 font-mono text-xs text-green-800">{{ h }}</span>
+                <span class="ml-2 text-xs text-slate-500">port {{ s.exposure.port || "?" }}<template v-if="s.exposure.middlewares.length"> · {{ s.exposure.middlewares.join(", ") }}</template></span>
+              </template>
+              <span v-else class="ml-2 text-xs text-slate-400">non exposé</span>
+            </div>
+            <button
+              v-if="session.canOperate"
+              class="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
+              @click="traefikTarget = s"
+            >
+              {{ s.exposure ? "Modifier" : "Exposer…" }}
+            </button>
+          </li>
+        </ul>
+        <p class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+          Les labels sont écrits dans une révision du Compose ; le routage ne change qu'après le déploiement. Le service est rattaché au réseau « {{ traefik.settings.network }} ».
+        </p>
+      </template>
+    </section>
+
+    <TraefikExposeDialog
+      v-if="traefikTarget && traefik?.settings"
+      :stack-id="stack.id"
+      :revision="stack.currentRevision"
+      :item="traefikTarget"
+      :settings="traefik.settings"
+      @close="traefikTarget = null"
+      @saved="onTraefikSaved"
+    />
   </div>
 </template>

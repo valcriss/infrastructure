@@ -150,4 +150,73 @@ describe.skipIf(!url)("application Traefik (intégration)", () => {
     expect((await settings()).application).toEqual({ missing: true });
     expect((await call("POST", "/api/v1/settings/traefik/application", { cookie: admin, body: body({ network: { mode: "existing", name: "proxy-existant" } }) })).status).toBe(201);
   });
+
+  it("expose un service par Traefik : aperçu, révision, relecture, retrait, et refus hors périmètre", async () => {
+    const compose = 'services:\n  web:\n    image: ghost:5\n    ports:\n      - "2368"\n  db:\n    image: mysql:8\n';
+    const stack = await call("POST", "/api/v1/stacks", { cookie: admin, body: { name: "blog", hostId, compose } });
+    expect(stack.status).toBe(201);
+    const id = stack.json.id as string;
+    const base = `/api/v1/stacks/${id}`;
+    const exposeBody = (over: Record<string, unknown> = {}) => ({ expectedRevision: 1, hosts: ["Blog.Exemple.fr"], port: 2368, middlewares: ["auth@file"], ...over });
+
+    const before = (await call("GET", `${base}/traefik`, { cookie: admin })).json;
+    expect(before).toMatchObject({ available: true, reason: null, settings: { httpsEntryPoint: "websecure", certResolver: "letsencrypt", network: "proxy-existant" } });
+    expect(before.services).toEqual([
+      { service: "web", routerName: "blog-web", exposure: null, customRule: false, ports: [] },
+      { service: "db", routerName: "blog-db", exposure: null, customRule: false, ports: [] },
+    ]);
+
+    // Aperçu : rien n'est enregistré.
+    const preview = await call("POST", `${base}/services/web/traefik/preview`, { cookie: admin, body: exposeBody() });
+    expect(preview.status).toBe(200);
+    expect(preview.json.before).toBe(compose);
+    expect(preview.json.after).toContain("traefik.http.routers.blog-web.rule: Host(`blog.exemple.fr`)");
+    expect((await pool.query("SELECT current_revision FROM stacks WHERE id = $1", [id])).rows[0]?.current_revision).toBe(1);
+
+    // Enregistrement : une révision non déployée, avec le rattachement au réseau de Traefik.
+    const saved = await call("PATCH", `${base}/services/web/traefik`, { cookie: admin, body: exposeBody() });
+    expect(saved.status).toBe(200);
+    expect(saved.json).toMatchObject({ revision: 2, changed: true });
+    const rev = (await pool.query<{ compose: string; message: string }>("SELECT compose, message FROM stack_revisions WHERE stack_id = $1 AND revision = 2", [id])).rows[0];
+    expect(rev?.compose).toContain("traefik.http.routers.blog-web.middlewares: auth@file");
+    expect(rev?.compose).toContain("name: proxy-existant");
+    expect(rev?.message).toBe("Service web exposé par Traefik");
+    const after = (await call("GET", `${base}/traefik`, { cookie: admin })).json;
+    expect(after.services[0]).toMatchObject({ service: "web", exposure: { hosts: ["blog.exemple.fr"], port: 2368, middlewares: ["auth@file"] } });
+    expect(after.services[1].exposure).toBeNull();
+
+    // Erreurs : révision périmée, saisie invalide, service inconnu.
+    expect((await call("PATCH", `${base}/services/web/traefik`, { cookie: admin, body: exposeBody() })).json.error.code).toBe("revision_conflict");
+    expect((await call("PATCH", `${base}/services/web/traefik`, { cookie: admin, body: exposeBody({ expectedRevision: 2, hosts: ["pas un domaine"] }) })).json.error.code).toBe("invalid_exposure");
+    expect((await call("PATCH", `${base}/services/web/traefik`, { cookie: admin, body: exposeBody({ expectedRevision: 2, port: 0 }) })).status).toBe(400);
+    expect((await call("PATCH", `${base}/services/absent/traefik`, { cookie: admin, body: exposeBody({ expectedRevision: 2 }) })).status).toBe(404);
+
+    // Retrait.
+    const removed = await call("PATCH", `${base}/services/web/traefik`, { cookie: admin, body: { expectedRevision: 2, expose: false } });
+    expect(removed.json).toMatchObject({ revision: 3 });
+    const last = (await pool.query<{ compose: string }>("SELECT compose FROM stack_revisions WHERE stack_id = $1 AND revision = 3", [id])).rows[0];
+    expect(last?.compose).not.toContain("traefik.http.routers");
+    expect((await call("GET", `${base}/traefik`, { cookie: admin })).json.services[0].exposure).toBeNull();
+
+    // Hors périmètre : application sur un autre hôte, et Traefik lui-même.
+    const other = (await pool.query<{ id: string }>("INSERT INTO hosts (name, secret_hash) VALUES ('autre-hote', 'x') RETURNING id")).rows[0]?.id as string;
+    const remote = await call("POST", "/api/v1/stacks", { cookie: admin, body: { name: "distant", hostId: other, compose } });
+    const unavailable = (await call("GET", `/api/v1/stacks/${remote.json.id}/traefik`, { cookie: admin })).json;
+    expect(unavailable).toMatchObject({ available: false });
+    expect(unavailable.reason).toMatch(/autre hôte/);
+    expect((await call("PATCH", `/api/v1/stacks/${remote.json.id}/services/web/traefik`, { cookie: admin, body: exposeBody() })).json.error.code).toBe("traefik_unavailable");
+    const traefikStack = (await settings()).settings.stackId as string;
+    expect((await call("GET", `/api/v1/stacks/${traefikStack}/traefik`, { cookie: admin })).json.reason).toMatch(/Traefik lui-même/);
+    expect((await fetch(baseUrl + `${base}/traefik`)).status).toBe(401);
+  });
+
+  it("produit l'extrait pour exposer la console avec les noms mémorisés", async () => {
+    const ok = await call("POST", "/api/v1/settings/traefik/console-snippet", { cookie: admin, body: { host: "Console.Exemple.fr" } });
+    expect(ok.status).toBe(200);
+    expect(ok.json.snippet).toContain("Host(`console.exemple.fr`)");
+    expect(ok.json.snippet).toContain("SECURE_COOKIES");
+    expect(ok.json.snippet).toContain("proxy-existant");
+    expect((await call("POST", "/api/v1/settings/traefik/console-snippet", { cookie: admin, body: { host: "pas un domaine" } })).json.error.code).toBe("invalid_host");
+    expect((await fetch(baseUrl + "/api/v1/settings/traefik/console-snippet", { method: "POST" })).status).toBe(401);
+  });
 });

@@ -11,3 +11,4 @@ export * from "./compose-analyze.js";
 export * from "./compose-clean.js";
 export * from "./dotenv-parse.js";
 export * from "./traefik.js";
+export * from "./compose-traefik.js";

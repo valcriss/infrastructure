@@ -3,7 +3,12 @@ import {
   RESERVED_STACK_NAMES,
   editServiceEnvironment,
   editServiceHealthcheck,
+  editServiceTraefik,
+  listComposeServices,
+  readServiceTraefik,
+  traefikRouterName,
   validateHealthcheck,
+  validateTraefikExposure,
   validateEnvironmentName,
   validateFilePath,
   validateVariableValue,
@@ -13,6 +18,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
+import { getTraefikSettings, type TraefikSettings } from "./traefik-routes.js";
 import { Group as ExtractGroup, planCreationExtraction } from "./variable-extract-routes.js";
 import { serveLogStream } from "./log-sse.js";
 import type { LogStreams } from "./log-streams.js";
@@ -73,6 +79,15 @@ export const HealthcheckBody = z.object({
   timeout: z.string().max(16),
   retries: z.number().int(),
   startPeriod: z.string().max(16),
+  message: Message,
+});
+export const TraefikBody = z.object({
+  expectedRevision: Expected,
+  /** Faux : retire l'exposition de ce service (hosts et port sont alors ignorés). */
+  expose: z.boolean().default(true),
+  hosts: z.array(z.string().max(253)).max(5).default([]),
+  port: z.number().int().default(0),
+  middlewares: z.array(z.string().max(100)).max(10).default([]),
   message: Message,
 });
 export const FileBody = z.object({
@@ -301,6 +316,89 @@ export function registerStackRoutes(
     }
   };
   const ServiceParams = IdParams.extend({ service: z.string().min(1).max(128) });
+
+  // --- Exposition par Traefik (labels) -----------------------------------------------------------------
+
+  /** Traefik peut exposer cette application si le réglage existe et si elle est sur le même hôte (fournisseur Docker local). */
+  const traefikAvailability = (stack: StackListRow, settings: TraefikSettings | null): { available: boolean; reason: string | null } => {
+    if (!settings) return { available: false, reason: "Traefik n'est pas configuré : créez l'application Traefik dans Paramètres → Traefik." };
+    if (stack.id === settings.stackId) return { available: false, reason: "Cette application est Traefik lui-même." };
+    if (stack.host_id !== settings.hostId) {
+      return { available: false, reason: "Traefik tourne sur un autre hôte : il ne voit pas les conteneurs de celui-ci (le fournisseur Docker est local à chaque hôte)." };
+    }
+    return { available: true, reason: null };
+  };
+
+  const traefikEdit = (compose: string, stack: StackListRow, settings: TraefikSettings | null, service: string, body: z.infer<typeof TraefikBody>): string => {
+    const avail = traefikAvailability(stack, settings);
+    if (!avail.available || !settings) throw new HttpError(409, "traefik_unavailable", avail.reason ?? "Traefik indisponible.");
+    const exposure = { hosts: body.hosts.map((h) => h.trim().toLowerCase()), port: body.port, middlewares: body.middlewares.map((m) => m.trim()).filter(Boolean) };
+    if (body.expose) {
+      const invalid = validateTraefikExposure(exposure);
+      if (invalid) throw new HttpError(400, "invalid_exposure", invalid);
+    }
+    const ctx = { routerName: traefikRouterName(stack.name, service), entryPoint: settings.httpsEntryPoint, certResolver: settings.certResolver, network: settings.network };
+    try {
+      return editServiceTraefik(compose, service, ctx, body.expose ? exposure : null);
+    } catch (e) {
+      if (e instanceof ComposeEditError) {
+        throw new HttpError(
+          e.code === "service_not_found" ? 404 : 422,
+          e.code === "service_not_found" ? "service_not_found" : "unsupported_compose_structure",
+          e.message,
+        );
+      }
+      throw e;
+    }
+  };
+
+  app.get("/api/v1/stacks/:id/traefik", { preHandler: auth }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const stack = await loadStack(id);
+    const settings = await getTraefikSettings(pool);
+    const rev = await getRevision(pool, id, stack.current_revision);
+    if (!rev) throw new Error("révision courante introuvable");
+    const avail = traefikAvailability(stack, settings);
+    const mine = (stack.inventory ?? []).filter((c) => c.composeProject === stack.name);
+    return {
+      ...avail,
+      settings: settings ? { httpsEntryPoint: settings.httpsEntryPoint, certResolver: settings.certResolver, network: settings.network } : null,
+      services: listComposeServices(rev.compose).map((s) => {
+        const routerName = traefikRouterName(stack.name, s.name);
+        const read = readServiceTraefik(rev.compose, s.name, routerName);
+        const ports = [...new Set(mine.filter((c) => c.composeService === s.name).flatMap((c) => (c.ports ?? []).map((p) => p.privatePort)))].sort((a, b) => a - b);
+        return { service: s.name, routerName, exposure: read?.exposure ?? null, customRule: read?.customRule ?? false, ports };
+      }),
+    };
+  });
+
+  app.post("/api/v1/stacks/:id/services/:service/traefik/preview", { preHandler: auth }, async (request) => {
+    const params = IdParams.extend({ service: z.string().min(1).max(128) }).parse(request.params);
+    const body = TraefikBody.parse(request.body);
+    const stack = await loadStack(params.id);
+    if (stack.current_revision !== body.expectedRevision) {
+      throw new HttpError(409, "revision_conflict", "La stack a une révision plus récente : rechargez la page.");
+    }
+    const rev = await getRevision(pool, params.id, stack.current_revision);
+    if (!rev) throw new Error("révision courante introuvable");
+    return { before: rev.compose, after: traefikEdit(rev.compose, stack, await getTraefikSettings(pool), params.service, body) };
+  });
+
+  app.patch("/api/v1/stacks/:id/services/:service/traefik", { preHandler: auth }, async (request) => {
+    const params = IdParams.extend({ service: z.string().min(1).max(128) }).parse(request.params);
+    const body = TraefikBody.parse(request.body);
+    const stack = await loadStack(params.id);
+    const settings = await getTraefikSettings(pool);
+    const result = await changeStack(
+      pool,
+      params.id,
+      body.expectedRevision,
+      request.actor,
+      body.message ?? (body.expose ? `Service ${params.service} exposé par Traefik` : `Service ${params.service} retiré de Traefik`),
+      (c) => ({ ...c, compose: traefikEdit(c.compose, stack, settings, params.service, body) }),
+    );
+    return { ...result, backup: await backupInfo() };
+  });
 
   app.post("/api/v1/stacks/:id/services/:service/healthcheck/preview", { preHandler: auth }, async (request) => {
     const params = ServiceParams.parse(request.params);
