@@ -1,4 +1,4 @@
-import type { Container, HostInfo, ImageInfo, Inventory } from "@infra/shared";
+import type { Container, HostInfo, ImageInfo, Inventory, NetworkInfo } from "@infra/shared";
 import { request } from "node:http";
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -269,11 +269,34 @@ export function parseImage(raw: unknown): ImageInfo | null {
   };
 }
 
+const PREDEFINED_NETWORKS = new Set(["bridge", "host", "none"]);
+
+/**
+ * Réseaux de l'hôte à partir de `GET /networks` : les réseaux prédéfinis de Docker sont écartés. La liste n'indique pas
+ * les conteneurs attachés (la console les déduit de l'inventaire des conteneurs).
+ */
+export function parseNetworks(raw: unknown): NetworkInfo[] {
+  if (!Array.isArray(raw)) return [];
+  const out: NetworkInfo[] = [];
+  for (const n of raw.slice(0, 300)) {
+    if (!n || typeof n !== "object") continue;
+    const o = n as { Name?: unknown; Driver?: unknown; Scope?: unknown; Internal?: unknown; Labels?: unknown };
+    const name = str(o.Name).slice(0, 128);
+    if (!name || PREDEFINED_NETWORKS.has(name)) continue;
+    const labels = o.Labels && typeof o.Labels === "object" ? (o.Labels as Record<string, unknown>) : {};
+    const project = str(labels["com.docker.compose.project"]).slice(0, 128);
+    out.push({ name, driver: str(o.Driver).slice(0, 40), scope: str(o.Scope).slice(0, 20), internal: o.Internal === true, ...(project ? { project } : {}) });
+  }
+  return out;
+}
+
 export async function collectInventory(socketPath: string): Promise<Inventory> {
-  const [version, containers, info] = await Promise.all([
+  const [version, containers, info, networksRaw] = await Promise.all([
     dockerGet(socketPath, "/version"),
     dockerGet(socketPath, "/containers/json?all=1"),
     dockerGet(socketPath, "/info").catch(() => null),
+    // Facultatif : un échec n'empêche pas l'inventaire (le champ reste absent).
+    dockerGet(socketPath, "/networks").catch(() => null),
   ]);
   const dockerVersion =
     version && typeof version === "object" ? str((version as { Version?: unknown }).Version) : "";
@@ -306,5 +329,6 @@ export async function collectInventory(socketPath: string): Promise<Inventory> {
     containers: enriched,
     ...(hostInfo ? { hostInfo } : {}),
     images,
+    ...(networksRaw !== null ? { networks: parseNetworks(networksRaw) } : {}),
   };
 }

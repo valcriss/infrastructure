@@ -202,6 +202,8 @@ export interface CreateStackInput {
   description: string;
   compose: string;
   variables: Record<string, VariableInput>;
+  /** Fichiers associés de la révision 1 (chemin relatif → contenu), par exemple la configuration d'un service. */
+  files?: Record<string, string>;
   /** Reprend un projet Compose existant non géré (import d'une stack observée). */
   adopt?: boolean;
   /** Chiffre le Compose dans la sauvegarde Git. */
@@ -216,7 +218,7 @@ export async function createStack(pool: Pool, input: CreateStackInput): Promise<
   const content: RevisionContent = {
     compose: input.compose,
     variables: applyVariableChanges({}, input.variables, undefined),
-    files: {},
+    files: input.files ?? {},
     sensitiveFiles: [],
     composeSensitive: input.composeSensitive === true,
   };

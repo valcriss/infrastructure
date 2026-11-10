@@ -10,3 +10,4 @@ export * from "./stack.js";
 export * from "./compose-analyze.js";
 export * from "./compose-clean.js";
 export * from "./dotenv-parse.js";
+export * from "./traefik.js";

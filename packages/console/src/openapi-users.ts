@@ -32,6 +32,23 @@ export const USER_ROUTE_DOCS: RouteDoc[] = [
 
 const terminalSettings = z.object({ enabled: z.boolean(), idleMinutes: z.number().int(), maxMinutes: z.number().int(), record: z.boolean(), requireSecondFactor: z.boolean() });
 
+const traefikApplication = z.object({
+  hostId: z.uuid(),
+  email: z.string(),
+  production: z.boolean().optional(),
+  httpEntryPoint: z.string().optional(),
+  httpsEntryPoint: z.string().optional(),
+  certResolver: z.string().optional(),
+  network: z.object({ mode: z.enum(["create", "existing"]), name: z.string() }),
+});
+
+/** Application Traefik préconfigurée (reverse proxy). */
+export const TRAEFIK_ROUTE_DOCS: RouteDoc[] = [
+  { method: "get", path: "/api/v1/settings/traefik", summary: "Réglage Traefik et réseaux candidats", tag: "Traefik", access: "session", success: { status: 200, description: "Noms mémorisés (entrypoints, résolveur, réseau), état de l'application Traefik, valeurs par défaut, et pour chaque hôte : réseaux candidats (null si l'agent ne les remonte pas) et ports 80/443 déjà publiés" }, errors: [401], description: "Aucun secret n'est renvoyé." },
+  { method: "post", path: "/api/v1/settings/traefik/preview", summary: "Aperçu des fichiers de l'application Traefik", tag: "Traefik", access: "session", body: traefikApplication, success: { status: 200, description: "Compose et fichiers de configuration qui seraient créés (rien n'est enregistré)" }, errors: [400, 401, 403, 404, 409], description: "Administrateurs uniquement. Même validation que la création." },
+  { method: "post", path: "/api/v1/settings/traefik/application", summary: "Créer l'application Traefik", tag: "Traefik", access: "session", body: traefikApplication, success: { status: 201, description: "Application créée (révision 1, non déployée) et noms mémorisés" }, errors: [400, 401, 403, 404, 409], description: "Administrateurs uniquement. Génère le Compose et les fichiers de configuration (défi HTTP-01, tableau de bord désactivé, version de l'image fixée) ; l'application se relit puis se déploie comme les autres. 409 : une application Traefik est déjà configurée, le nom est pris ou le réseau à créer existe déjà." },
+];
+
 /** Terminal de conteneur et enregistrements de sessions. */
 export const TERMINAL_ROUTE_DOCS: RouteDoc[] = [
   { method: "get", path: "/api/v1/settings/terminal", summary: "Réglages du terminal", tag: "Terminal", access: "session", success: { status: 200, description: "Activation, durées limites et enregistrement" }, errors: [401] },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapContainers } from "./docker.js";
+import { mapContainers, parseNetworks } from "./docker.js";
 
 describe("mapContainers : détails en lecture seule", () => {
   it("reprend ports, réseaux, montages et libellés Compose, sans rien d'autre", () => {
@@ -78,5 +78,29 @@ describe("mapContainers", () => {
   it("n'invente pas de projet pour un conteneur hors Compose", () => {
     const [c] = mapContainers([{ Id: "x", Names: [], Labels: {} }]);
     expect(c?.composeProject).toBeUndefined();
+  });
+});
+
+describe("parseNetworks", () => {
+  it("écarte les réseaux prédéfinis et lit le pilote, la portée et le projet Compose", () => {
+    const raw = [
+      { Name: "bridge", Driver: "bridge", Scope: "local" },
+      { Name: "host", Driver: "host", Scope: "local" },
+      { Name: "none", Driver: "null", Scope: "local" },
+      { Name: "traefik-public", Driver: "bridge", Scope: "local", Internal: false, Labels: {} },
+      { Name: "blog_default", Driver: "bridge", Scope: "local", Labels: { "com.docker.compose.project": "blog" } },
+      { Name: "isole", Driver: "bridge", Scope: "local", Internal: true },
+    ];
+    expect(parseNetworks(raw)).toEqual([
+      { name: "traefik-public", driver: "bridge", scope: "local", internal: false },
+      { name: "blog_default", driver: "bridge", scope: "local", internal: false, project: "blog" },
+      { name: "isole", driver: "bridge", scope: "local", internal: true },
+    ]);
+  });
+
+  it("ignore les entrées invalides et plafonne la liste", () => {
+    expect(parseNetworks(null)).toEqual([]);
+    expect(parseNetworks([null, 3, { Driver: "bridge" }, { Name: "" }])).toEqual([]);
+    expect(parseNetworks(Array.from({ length: 500 }, (_, i) => ({ Name: `n${i}`, Driver: "bridge", Scope: "local" })))).toHaveLength(300);
   });
 });

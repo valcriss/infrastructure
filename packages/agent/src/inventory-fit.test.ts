@@ -52,3 +52,14 @@ describe("fitInventory", () => {
     expect(small.inventory.containers.length).toBeLessThan(300);
   });
 });
+
+describe("fitInventory : réseaux de l'hôte", () => {
+  it("abandonne la liste des réseaux après celle des images, avant de retirer des conteneurs", () => {
+    const networks = Array.from({ length: 300 }, (_, i) => ({ name: `reseau-${i}`.padEnd(100, "x"), driver: "bridge", scope: "local", internal: false }));
+    const inv: Inventory = { ...inventory(3, 1), networks };
+    const limit = bytes({ ...inv, networks: undefined as never }) - 1; // trop petit : il faut retirer des champs
+    const r = fitInventory(inv, Math.max(limit, 1));
+    expect(r.dropped).toContain("réseaux de l'hôte");
+    expect(r.inventory.networks).toBeUndefined();
+  });
+});

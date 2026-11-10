@@ -86,12 +86,26 @@ export const ImageInfoSchema = z.object({
 });
 export type ImageInfo = z.infer<typeof ImageInfoSchema>;
 
+/** Réseau Docker de l'hôte (liste, sans les conteneurs attachés : la console les déduit des conteneurs). */
+export const NetworkInfoSchema = z.object({
+  name: z.string().min(1).max(128),
+  driver: z.string().max(40),
+  scope: z.string().max(20),
+  /** Réseau sans accès à l'extérieur (option « internal »). */
+  internal: z.boolean().default(false),
+  /** Projet Compose qui a créé ce réseau, s'il y en a un. */
+  project: z.string().max(128).optional(),
+});
+export type NetworkInfo = z.infer<typeof NetworkInfoSchema>;
+
 export const InventorySchema = z.object({
   observedAt: z.iso.datetime(),
   dockerVersion: z.string(),
   containers: z.array(ContainerSchema).max(5000),
   hostInfo: HostInfoSchema.optional(),
   images: z.array(ImageInfoSchema).max(2000).optional(),
+  /** Réseaux de l'hôte ; absent si l'agent ne sait pas les lister (ancienne version). */
+  networks: z.array(NetworkInfoSchema).max(300).optional(),
 });
 export type Inventory = z.infer<typeof InventorySchema>;
 

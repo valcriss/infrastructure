@@ -261,7 +261,7 @@ export class AgentGateway {
     await this.pool.query(
       // L'horodatage d'observation est celui de la console : il ne dépend pas de l'horloge de l'hôte.
       `UPDATE hosts SET inventory = $2, inventory_observed_at = now(),
-              docker_version = $3, host_info = $4, images = $5, last_seen_at = now()
+              docker_version = $3, host_info = $4, images = $5, networks = $6, last_seen_at = now()
        WHERE id = $1`,
       [
         hostId,
@@ -269,6 +269,8 @@ export class AgentGateway {
         inventory.dockerVersion,
         inventory.hostInfo ? JSON.stringify(inventory.hostInfo) : null,
         inventory.images ? JSON.stringify(inventory.images) : null,
+        // Absent (ancien agent ou échec de lecture) : NULL, distinct de « aucun réseau ».
+        inventory.networks ? JSON.stringify(inventory.networks) : null,
       ],
     );
     // L'historique des versions ne doit jamais empêcher l'enregistrement de l'inventaire.
