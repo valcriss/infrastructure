@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, shallowRef } from "vue";
 import { useRoute } from "vue-router";
 import type { Container, ProjectRef } from "../../api";
+import LogPane from "../../components/LogPane.vue";
+import { appendEntries, filterEntries, type LogEntry } from "../../log-entries";
 
 // `project` : projet observé (non géré) ; on choisit alors un conteneur précis au lieu de « tous les services ».
 const props = defineProps<{ stack: { id: string; containers: Container[] }; project?: ProjectRef }>();
@@ -13,10 +15,9 @@ const service = ref(String(props.project ? (route.query.container ?? "") : (rout
 const tail = ref(100);
 const filter = ref("");
 const follow = ref(true);
-const lines = ref<string[]>([]);
+const lines = shallowRef<LogEntry[]>([]);
 const status = ref<"idle" | "connecting" | "live" | "ended">("idle");
 const message = ref("");
-const box = ref<HTMLElement | null>(null);
 let source: EventSource | null = null;
 
 const services = computed(() => [...new Set(props.stack.containers.map((c) => c.composeService).filter((s): s is string => !!s))].sort());
@@ -26,10 +27,7 @@ const choices = computed(() =>
     : services.value.map((s) => ({ value: s, label: s })),
 );
 if (props.project && !service.value) service.value = props.stack.containers[0]?.id ?? "";
-const shown = computed(() => {
-  const f = filter.value.trim().toLowerCase();
-  return f ? lines.value.filter((l) => l.toLowerCase().includes(f)) : lines.value;
-});
+const shown = computed(() => filterEntries(lines.value, filter.value));
 
 function stop() {
   source?.close();
@@ -50,8 +48,7 @@ function start() {
   source.onopen = () => (status.value = "live");
   source.addEventListener("lines", (e) => {
     const batch = JSON.parse((e as MessageEvent<string>).data) as string[];
-    lines.value = [...lines.value, ...batch].slice(-MAX_LINES);
-    if (follow.value) void nextTick(() => box.value && (box.value.scrollTop = box.value.scrollHeight));
+    lines.value = appendEntries(lines.value, batch, MAX_LINES);
   });
   source.addEventListener("end", (e) => {
     message.value = JSON.parse((e as MessageEvent<string>).data) as string;
@@ -100,7 +97,7 @@ onBeforeUnmount(stop);
         {{ status === "live" ? "● en direct" : status === "connecting" ? "connexion…" : message }}
       </span>
     </div>
-    <pre ref="box" class="h-[calc(100dvh-21rem)] min-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-[#0b1220] p-3 font-mono text-xs leading-5 text-[#e2e8f0]" tabindex="0" aria-label="Logs">{{ shown.join("\n") || (status === "idle" ? "Cliquez sur « Suivre les logs »." : "") }}</pre>
+    <LogPane class="h-[calc(100dvh-21rem)] min-h-64" :entries="shown" :follow="follow" label="Logs" :empty="status === 'idle' ? 'Cliquez sur « Suivre les logs ».' : ''" />
     <p class="text-xs text-slate-500">
       {{ shown.length }} ligne(s) affichée(s) sur {{ lines.length }} (5 000 maximum conservées). Le flux est borné en durée et en débit ; les valeurs affichées sont celles des conteneurs, non masquées.
     </p>

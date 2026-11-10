@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
+import { appendEntries, filterEntries, type LogEntry } from "../log-entries";
+import LogPane from "./LogPane.vue";
 
 // Logs en direct d'un conteneur (Server-Sent Events), sans application ni projet : suit un conteneur précis.
 const props = defineProps<{ hostId: string; containerId: string }>();
@@ -8,16 +10,12 @@ const MAX_LINES = 5000;
 const tail = ref(100);
 const filter = ref("");
 const follow = ref(true);
-const lines = ref<string[]>([]);
+const lines = shallowRef<LogEntry[]>([]);
 const status = ref<"idle" | "connecting" | "live" | "ended">("idle");
 const message = ref("");
-const box = ref<HTMLElement | null>(null);
 let source: EventSource | null = null;
 
-const shown = computed(() => {
-  const f = filter.value.trim().toLowerCase();
-  return f ? lines.value.filter((l) => l.toLowerCase().includes(f)) : lines.value;
-});
+const shown = computed(() => filterEntries(lines.value, filter.value));
 
 function stop() {
   source?.close();
@@ -37,8 +35,7 @@ function start() {
   source.onopen = () => (status.value = "live");
   source.addEventListener("lines", (e) => {
     const batch = JSON.parse((e as MessageEvent<string>).data) as string[];
-    lines.value = [...lines.value, ...batch].slice(-MAX_LINES);
-    if (follow.value) void nextTick(() => box.value && (box.value.scrollTop = box.value.scrollHeight));
+    lines.value = appendEntries(lines.value, batch, MAX_LINES);
   });
   source.addEventListener("end", (e) => {
     message.value = JSON.parse((e as MessageEvent<string>).data) as string;
@@ -79,7 +76,7 @@ onBeforeUnmount(stop);
       <label class="flex items-center gap-1"><input v-model="follow" type="checkbox" /> Défilement automatique</label>
       <span class="text-xs text-slate-500" aria-live="polite">{{ status === "live" ? "● en direct" : status === "connecting" ? "connexion…" : message }}</span>
     </div>
-    <pre ref="box" class="min-h-64 flex-1 overflow-auto whitespace-pre-wrap break-all rounded bg-[#0b1220] p-3 font-mono text-xs leading-5 text-[#e2e8f0]" tabindex="0" aria-label="Logs du conteneur">{{ shown.join("\n") || (status === "connecting" ? "Connexion…" : "") }}</pre>
+    <LogPane class="min-h-64 flex-1" :entries="shown" :follow="follow" label="Logs du conteneur" :empty="status === 'connecting' ? 'Connexion…' : ''" />
     <p class="text-xs text-slate-500">
       {{ shown.length }} ligne(s) affichée(s) sur {{ lines.length }} (5 000 maximum conservées). Le flux est borné en durée et en débit ; les valeurs affichées sont celles du conteneur, non masquées.
     </p>
