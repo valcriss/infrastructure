@@ -113,6 +113,11 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
 
   const deployedAt = new Map(deploys.rows.map((d) => [d.stack_id, d.finished_at]));
   const stackByKey = new Map(stackRows.rows.map((s) => [`${s.host_id}|${s.name}`, s]));
+  const observedUpdates = new Map<string, number>();
+  const observedRows = await pool.query<{ host_id: string; project: string; n: string }>(
+    "SELECT host_id, project, count(*) AS n FROM observed_image_checks WHERE kind = 'update_available' GROUP BY host_id, project",
+  );
+  for (const r of observedRows.rows) observedUpdates.set(`${r.host_id}|${r.project}`, Number(r.n));
   const updates = new Map<string, number>();
   for (const c of checks) if (c.kind === "update_available") updates.set(c.stackId, (updates.get(c.stackId) ?? 0) + 1);
 
@@ -203,7 +208,7 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
         services: [...new Set(containers.map((c) => c.composeService).filter((x): x is string => Boolean(x)))].sort(),
         usage: u ? { cpuPercent: Math.round(u.cpu * 100) / 100, memBytes: u.mem } : null,
         images: imagesOf(h.id, containers),
-        updatesAvailable: 0,
+        updatesAvailable: observedUpdates.get(`${h.id}|${name}`) ?? 0,
         currentRevision: null,
         deployedRevision: null,
         pendingDeploy: false,

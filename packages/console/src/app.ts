@@ -488,7 +488,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     watcher.close();
     observedWatcher.close();
   });
-  const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, isOnline: (id) => gateway.isOnline(id) });
+  const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, observedWatcher, isOnline: (id) => gateway.isOnline(id) });
   registerImageRoutes(app, { pool, session: auth, apiAuth, scans, watcher, registries, registryClient, isOnline: (id) => gateway.isOnline(id) });
   registerHostDiskRoutes(app, { auth: apiAuth, session: auth, pruning });
   registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });

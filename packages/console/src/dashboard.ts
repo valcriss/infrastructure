@@ -2,6 +2,7 @@ import { INVENTORY_INTERVAL_SEC, listComposeServices, type ComposeService, type 
 import type { SeverityCounts } from "@infra/shared";
 import type { BackupService, BackupStatus } from "./backup.js";
 import type { CheckDetail, ImageWatcher } from "./image-watch.js";
+import type { ObservedWatcher } from "./observed-watch.js";
 import { hiddenProjects } from "./display.js";
 import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
 import type { ScanService } from "./scans.js";
@@ -153,8 +154,9 @@ export interface SecurityAlertInput {
     error: string | null;
     since: Date | null;
   }[];
-  updates: { stackId: string; stackName: string; service: string; detail: CheckDetail; since: Date }[];
-  checkErrors: { stackId: string; stackName: string; service: string; error: string; since: Date }[];
+  /** `observed` : projet Compose non géré (pas de stack) ; `stackId` contient alors le nom du projet. */
+  updates: { stackId: string; stackName: string; service: string; detail: CheckDetail; since: Date; observed?: { hostId: string; project: string } }[];
+  checkErrors: { stackId: string; stackName: string; service: string; error: string; since: Date; observed?: { hostId: string; project: string } }[];
 }
 
 export interface AlertContext {
@@ -324,23 +326,23 @@ export function deriveAlerts(ctx: AlertContext): Alert[] {
     if (u.detail.contentChanged) parts.push(`le tag « ${u.detail.tag} » a un nouveau contenu`);
     if (u.detail.candidates.length > 0) parts.push(`versions plus récentes : ${u.detail.candidates.join(", ")}${u.detail.uncertain ? " (incertain)" : ""}`);
     alerts.push({
-      id: `image_update:${u.stackId}:${u.service}`,
+      id: u.observed ? `image_update:${u.observed.hostId}:${u.observed.project}:${u.service}` : `image_update:${u.stackId}:${u.service}`,
       severity: "info",
       kind: "image_update",
       title: `Mise à jour d'image disponible : ${u.stackName}/${u.service}`,
       message: `${parts.join(" ; ")}. Rien n'est déployé automatiquement.`,
-      target: { type: "stack", id: u.stackId, name: u.stackName },
+      target: u.observed ? { type: "stack", id: u.stackId, name: u.stackName, hostId: u.observed.hostId, project: u.observed.project, stackId: null } : { type: "stack", id: u.stackId, name: u.stackName },
       since: u.since.toISOString(),
     });
   }
   for (const e of ctx.security?.checkErrors ?? []) {
     alerts.push({
-      id: `image_check_failed:${e.stackId}:${e.service}`,
+      id: e.observed ? `image_check_failed:${e.observed.hostId}:${e.observed.project}:${e.service}` : `image_check_failed:${e.stackId}:${e.service}`,
       severity: "info",
       kind: "image_check_failed",
       title: `Vérification de version impossible : ${e.stackName}/${e.service}`,
       message: `${e.error} (la dernière observation réussie est conservée).`,
-      target: { type: "stack", id: e.stackId, name: e.stackName },
+      target: e.observed ? { type: "stack", id: e.stackId, name: e.stackName, hostId: e.observed.hostId, project: e.observed.project, stackId: null } : { type: "stack", id: e.stackId, name: e.stackName },
       since: e.since.toISOString(),
     });
   }
@@ -401,6 +403,8 @@ export class Dashboard {
       isOnline: (hostId: string) => boolean;
       scans: ScanService;
       watcher: ImageWatcher;
+      /** Projets Compose non gérés ; absent : seules les stacks gérées alimentent les mises à jour. */
+      observedWatcher?: ObservedWatcher;
     },
   ) {}
 
@@ -523,12 +527,23 @@ export class Dashboard {
     }
     const visibleStacks = new Set(stackViews.map((v) => v.s.id));
     const checks = allChecks.filter((c) => visibleStacks.has(c.stackId));
-    const updates = checks
-      .filter((c) => c.kind === "update_available" && c.detail)
-      .map((c) => ({ stackId: c.stackId, stackName: c.stackName, service: c.service, detail: c.detail as CheckDetail, since: c.checkedAt }));
-    const checkErrors = checks
-      .filter((c) => c.status === "error" && (!c.lastSuccessAt || now - c.lastSuccessAt.getTime() > 3 * 24 * 3600_000))
-      .map((c) => ({ stackId: c.stackId, stackName: c.stackName, service: c.service, error: c.error ?? "Erreur inconnue", since: c.checkedAt }));
+    // Projets non gérés (hors console, hors stack) : filtrés par hôte comme le reste, absents d'une vue par application.
+    const observedChecks = filter.stackId ? [] : (await (this.deps.observedWatcher?.allChecks() ?? Promise.resolve([]))).filter(
+      (c) => hostById.has(c.hostId) && !hidden.includes(c.project) && !managedProjects.has(`${c.hostId}:${c.project}`),
+    );
+    const staleError = (c: { status: string; lastSuccessAt: Date | null }): boolean => c.status === "error" && (!c.lastSuccessAt || now - c.lastSuccessAt.getTime() > 3 * 24 * 3600_000);
+    const updates: SecurityAlertInput["updates"] = [
+      ...checks
+        .filter((c) => c.kind === "update_available" && c.detail)
+        .map((c) => ({ stackId: c.stackId, stackName: c.stackName, service: c.service, detail: c.detail as CheckDetail, since: c.checkedAt })),
+      ...observedChecks
+        .filter((c) => c.kind === "update_available" && c.detail)
+        .map((c) => ({ stackId: c.project, stackName: c.project, service: c.service, detail: c.detail as CheckDetail, since: c.checkedAt, observed: { hostId: c.hostId, project: c.project } })),
+    ];
+    const checkErrors: SecurityAlertInput["checkErrors"] = [
+      ...checks.filter(staleError).map((c) => ({ stackId: c.stackId, stackName: c.stackName, service: c.service, error: c.error ?? "Erreur inconnue", since: c.checkedAt })),
+      ...observedChecks.filter(staleError).map((c) => ({ stackId: c.project, stackName: c.project, service: c.service, error: c.error ?? "Erreur inconnue", since: c.checkedAt, observed: { hostId: c.hostId, project: c.project } })),
+    ];
 
     const alerts = deriveAlerts({
       now,

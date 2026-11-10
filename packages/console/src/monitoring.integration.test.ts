@@ -332,6 +332,31 @@ describe.skipIf(!url)("supervision (intégration)", () => {
     });
     expect((await call("DELETE", `/api/v1/hosts/${hostId}/projects/legacy/services/old/ignored-tags/9.9.9`)).status).toBe(204);
     expect((await call("GET", `/api/v1/hosts/${hostId}/projects/inconnu/updates`)).status).toBe(404);
+    // Une mise à jour trouvée sur un projet non géré : compteur de l'application, alerte et total du tableau de bord.
+    // Le « DELETE » ci-dessus relance une vérification en arrière-plan : on attend qu'elle ait fini avant d'écrire.
+    await waitFor(() => !built.observedWatcher.isChecking(hostId, "legacy"));
+    const detail1 = { ref: "img", tag: "1.0", candidates: ["1.1"], contentChanged: false, uncertain: false, notes: [], ignored: [] };
+    await pool.query(
+      `INSERT INTO observed_image_checks (host_id, project, service, checked_at, status, kind, detail) VALUES ($1, 'legacy', 'old', now(), 'ok', 'update_available', $2)
+       ON CONFLICT (host_id, project, service) DO UPDATE SET kind = 'update_available', detail = $2, status = 'ok'`,
+      [hostId, JSON.stringify(detail1)],
+    );
+    try {
+      const apps2 = (await call("GET", "/api/v1/applications")).json.applications as any[];
+      expect(apps2.find((a) => a.name === "legacy")).toMatchObject({ kind: "observed", updatesAvailable: 1 });
+      const dash = (await call("GET", "/api/v1/dashboard")).json;
+      expect(dash.security.updates.available).toBeGreaterThanOrEqual(1);
+      expect(dash.alerts.find((a: any) => a.kind === "image_update" && a.target.project === "legacy")).toMatchObject({
+        id: `image_update:${hostId}:legacy:old`,
+        severity: "info",
+        target: { hostId, project: "legacy", stackId: null },
+      });
+      // Filtré sur une application gérée : les projets non gérés n'y figurent pas.
+      const only = (await call("GET", `/api/v1/dashboard?stackId=${stackId}`)).json;
+      expect(only.alerts.some((a: any) => a.target.project === "legacy")).toBe(false);
+    } finally {
+      await pool.query("DELETE FROM observed_image_checks");
+    }
     // Logs : le conteneur doit être précisé et appartenir au projet.
     expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/logs`)).status).toBe(400);
     expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/logs?container=ffffffffffff`)).status).toBe(404);

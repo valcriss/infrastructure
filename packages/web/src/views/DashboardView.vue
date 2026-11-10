@@ -232,6 +232,8 @@ function actionFor(a: DashboardAlert): AlertAction | null {
     }
     case "image_update":
     case "image_check_failed":
+      // Projet non géré : l'onglet « Versions » de sa fiche ; application gérée : son onglet Sécurité.
+      if (t.hostId && t.project && !t.stackId) return { label: "Voir les versions", to: observed("?tab=versions") };
       return { label: "Voir les versions", to: stack(t.id, "?tab=security") };
     case "operation_unknown": {
       const id = stackIdByName(t.stackName);

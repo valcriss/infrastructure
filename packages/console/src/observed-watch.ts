@@ -79,6 +79,14 @@ export class ObservedWatcher {
     return rows.map((r) => ({ service: r.service, checkedAt: r.checked_at, status: r.status, kind: r.kind, detail: r.detail, error: r.error, lastSuccessAt: r.last_success_at }));
   }
 
+  /** Dernières vérifications de tous les projets observés (tableau de bord et alertes). */
+  async allChecks(): Promise<(ObservedCheckRow & { hostId: string; project: string })[]> {
+    const { rows } = await this.pool.query<{
+      host_id: string; project: string; service: string; checked_at: Date; status: "ok" | "error"; kind: CheckKind | null; detail: CheckDetail | null; error: string | null; last_success_at: Date | null;
+    }>("SELECT host_id, project, service, checked_at, status, kind, detail, error, last_success_at FROM observed_image_checks");
+    return rows.map((r) => ({ hostId: r.host_id, project: r.project, service: r.service, checkedAt: r.checked_at, status: r.status, kind: r.kind, detail: r.detail, error: r.error, lastSuccessAt: r.last_success_at }));
+  }
+
   async setPolicy(hostId: string, project: string, service: string, policy: UpdatePolicy, pattern: string | null, actor: string): Promise<void> {
     if (!POLICIES.includes(policy)) throw new HttpError(400, "invalid_policy", "Politique inconnue.");
     if (policy === "pattern") {
