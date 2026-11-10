@@ -128,6 +128,32 @@ describe.skipIf(!url)("terminal de conteneur (intégration)", () => {
     expect((await call("POST", "/api/v1/me/step-up", { cookie: u.cookie, body: { code: totpCode(u.secret, u.step + 1) } })).status).toBe(204);
   });
 
+  it("n'exige plus le deuxième facteur quand l'administrateur le désactive, mais garde le droit Terminal", async () => {
+    const u = await terminalUser("term-nomfa@example.com");
+    const put = (requireSecondFactor: boolean) =>
+      call("PUT", "/api/v1/settings/terminal", { cookie: admin, body: { enabled: true, idleMinutes: 10, maxMinutes: 60, record: true, requireSecondFactor } });
+    expect((await put(false)).status).toBe(200);
+    try {
+      await pool.query("UPDATE sessions SET mfa_at = now() - interval '11 minutes' WHERE user_id = (SELECT id FROM users WHERE email = $1)", [u.email]);
+      // Confirmation périmée : la session s'ouvre quand même.
+      agentInbox.length = 0;
+      let t = await openTerminal(u.cookie);
+      await waitFor(() => t.msgs.some((m) => m.t === "ready" || m.t === "error"));
+      expect(reasons(t.msgs)).toEqual([]);
+      expect(t.msgs.some((m) => m.t === "ready")).toBe(true);
+      await waitFor(() => agentInbox.some((m) => m.type === "terminal_open"));
+      const open = agentInbox.find((m) => m.type === "terminal_open") as Record<string, any>;
+      agent.send(JSON.stringify({ type: "terminal_end", sessionId: open.sessionId, reason: "Shell terminé.", exitCode: 0 }));
+      await t.closed;
+      // Sans le droit, toujours refusé.
+      t = await openTerminal(admin);
+      await t.closed;
+      expect(reasons(t.msgs)).toEqual(["terminal_forbidden"]);
+    } finally {
+      expect((await put(true)).status).toBe(200);
+    }
+  });
+
   it("refuse les conteneurs de la console, inconnus ou sans session", async () => {
     const u = await terminalUser("term2@example.com");
     let t = await openTerminal(u.cookie, PROTECTED);

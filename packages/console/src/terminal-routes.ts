@@ -22,8 +22,10 @@ export interface TerminalSettings {
   maxMinutes: number;
   /** Enregistrer la sortie écran des sessions (format asciinema). */
   record: boolean;
+  /** Exiger un deuxième facteur récent pour ouvrir un terminal. Le droit Terminal reste obligatoire. */
+  requireSecondFactor: boolean;
 }
-export const DEFAULT_TERMINAL: TerminalSettings = { enabled: false, idleMinutes: 10, maxMinutes: 60, record: true };
+export const DEFAULT_TERMINAL: TerminalSettings = { enabled: false, idleMinutes: 10, maxMinutes: 60, record: true, requireSecondFactor: true };
 
 export async function getTerminalSettings(pool: Pick<Pool, "query">): Promise<TerminalSettings> {
   const { rows } = await pool.query<{ value: Partial<TerminalSettings> }>("SELECT value FROM app_settings WHERE key = 'terminal'");
@@ -35,6 +37,7 @@ export const TerminalSettingsBody = z.object({
   idleMinutes: z.number().int().min(1).max(240),
   maxMinutes: z.number().int().min(1).max(480),
   record: z.boolean(),
+  requireSecondFactor: z.boolean().default(true),
 });
 
 // --- Limites ------------------------------------------------------------------------------------------
@@ -264,7 +267,7 @@ export function registerTerminalRoutes(
        ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`,
       [JSON.stringify(body)],
     );
-    await audit(pool, request.actor, "settings.terminal", body.enabled ? "activé" : "désactivé", "success");
+    await audit(pool, request.actor, "settings.terminal", `${body.enabled ? "activé" : "désactivé"}, deuxième facteur ${body.requireSecondFactor ? "exigé" : "NON exigé"}`, "success");
     return body;
   });
 
@@ -337,8 +340,10 @@ export function registerTerminalRoutes(
       const settings = await getTerminalSettings(pool);
       if (!settings.enabled) return refuse("terminal_disabled", "Le terminal est désactivé : un administrateur doit l'activer dans les paramètres.");
       if (!user.terminalAllowed) return refuse("terminal_forbidden", "Vous n'avez pas le droit d'utiliser le terminal.");
-      if (!user.totpEnabled && !(await deps.hasFactor(user.id))) return refuse("mfa_not_enrolled", "Configurez d'abord un code à usage unique ou une clé d'accès dans « Mon compte ».");
-      if (!user.mfaAt || Date.now() - user.mfaAt.getTime() > STEP_UP_MAX_AGE_MS) return refuse("step_up_required", "Confirmez votre identité avec un deuxième facteur.");
+      if (settings.requireSecondFactor) {
+        if (!user.totpEnabled && !(await deps.hasFactor(user.id))) return refuse("mfa_not_enrolled", "Configurez d'abord un code à usage unique ou une clé d'accès dans « Mon compte ».");
+        if (!user.mfaAt || Date.now() - user.mfaAt.getTime() > STEP_UP_MAX_AGE_MS) return refuse("step_up_required", "Confirmez votre identité avec un deuxième facteur.");
+      }
 
       const { hostId, containerId } = Params.parse(request.params);
       const { rows } = await pool.query<HostRow>("SELECT id, name, inventory FROM hosts WHERE id = $1 AND revoked_at IS NULL", [hostId]);

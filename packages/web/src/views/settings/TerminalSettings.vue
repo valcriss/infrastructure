@@ -5,7 +5,7 @@ import CastPlayer from "../../components/CastPlayer.vue";
 import PanelCard from "../../components/PanelCard.vue";
 
 // Réglages du terminal de conteneur (administrateurs) et rejeu des sessions enregistrées.
-interface Settings { enabled: boolean; idleMinutes: number; maxMinutes: number; record: boolean }
+interface Settings { enabled: boolean; idleMinutes: number; maxMinutes: number; record: boolean; requireSecondFactor: boolean }
 interface Recording {
   id: string;
   userEmail: string;
@@ -22,7 +22,7 @@ interface Recording {
   active: boolean;
 }
 
-const form = reactive<Settings>({ enabled: false, idleMinutes: 10, maxMinutes: 60, record: true });
+const form = reactive<Settings>({ enabled: false, idleMinutes: 10, maxMinutes: 60, record: true, requireSecondFactor: true });
 const sessions = ref<Recording[]>([]);
 const error = ref("");
 const ok = ref("");
@@ -90,14 +90,18 @@ const size = (b: number): string => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toF
 
 <template>
   <div class="space-y-4">
-    <PanelCard title="Terminal de conteneur" icon="terminal" subtitle="Désactivé par défaut. L'utilisateur doit avoir le droit Terminal et un deuxième facteur récent (moins de 10 minutes).">
+    <PanelCard title="Terminal de conteneur" icon="terminal" subtitle="Désactivé par défaut. L'utilisateur doit avoir le droit Terminal et, sauf réglage contraire, un deuxième facteur récent (moins de 10 minutes).">
       <form class="flex flex-wrap items-end gap-4 text-sm" @submit.prevent="save">
         <label class="flex items-center gap-2 pb-2"><input v-model="form.enabled" type="checkbox" /> Activer le terminal</label>
         <label><span class="block font-medium">Inactivité (min)</span><input v-model.number="form.idleMinutes" type="number" min="1" max="240" :class="input" /></label>
         <label><span class="block font-medium">Durée maximale (min)</span><input v-model.number="form.maxMinutes" type="number" min="1" max="480" :class="input" /></label>
         <label class="flex items-center gap-2 pb-2"><input v-model="form.record" type="checkbox" /> Enregistrer les sessions</label>
+        <label class="flex items-center gap-2 pb-2"><input v-model="form.requireSecondFactor" type="checkbox" /> Exiger un deuxième facteur</label>
         <button class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">Enregistrer</button>
       </form>
+      <p v-if="!form.requireSecondFactor" role="note" class="mt-2 text-sm text-amber-700">
+        Attention : sans deuxième facteur, une session volée suffit pour obtenir un shell dans les conteneurs. Le droit Terminal reste obligatoire et les sessions restent journalisées.
+      </p>
       <p v-if="ok" role="status" class="mt-2 text-sm text-green-700">{{ ok }}</p>
       <p v-if="error" role="alert" class="mt-2 text-sm text-red-700">{{ error }}</p>
       <p class="mt-3 text-xs text-slate-500">

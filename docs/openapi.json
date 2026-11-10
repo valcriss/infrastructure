@@ -1503,13 +1503,17 @@
                   },
                   "record": {
                     "type": "boolean"
+                  },
+                  "requireSecondFactor": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
                   "enabled",
                   "idleMinutes",
                   "maxMinutes",
-                  "record"
+                  "record",
+                  "requireSecondFactor"
                 ]
               }
             }

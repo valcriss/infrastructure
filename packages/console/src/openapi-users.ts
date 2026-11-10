@@ -30,7 +30,7 @@ export const USER_ROUTE_DOCS: RouteDoc[] = [
   { method: "post", path: "/api/v1/session/passkey", summary: "Ouvrir une session avec une clé d'accès", tag: "Compte", access: "public", body: passkeyResponse, success: { status: 200, description: "Session ouverte (équivaut à deux facteurs)" }, errors: [400, 401, 409, 429] },
 ];
 
-const terminalSettings = z.object({ enabled: z.boolean(), idleMinutes: z.number().int(), maxMinutes: z.number().int(), record: z.boolean() });
+const terminalSettings = z.object({ enabled: z.boolean(), idleMinutes: z.number().int(), maxMinutes: z.number().int(), record: z.boolean(), requireSecondFactor: z.boolean() });
 
 /** Terminal de conteneur et enregistrements de sessions. */
 export const TERMINAL_ROUTE_DOCS: RouteDoc[] = [
