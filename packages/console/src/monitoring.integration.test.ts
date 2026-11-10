@@ -317,6 +317,21 @@ describe.skipIf(!url)("supervision (intégration)", () => {
     expect((await call("GET", "/api/v1/hosts/00000000-0000-4000-8000-000000000000/projects/legacy")).status).toBe(404);
     expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/metrics?range=1h`)).status).toBe(200);
     expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/metrics?range=1an`)).status).toBe(400);
+    // Versions et mises à jour d'un projet observé : règle de suivi, version écartée, erreurs.
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/versions`)).json.versions).toEqual(expect.any(Array));
+    const upd = (await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/updates`)).json;
+    expect(upd.components[0]).toMatchObject({ service: "old", policy: { policy: "same_tag", pattern: null }, check: null, ignoredTags: [] });
+    const policyUrl = `/api/v1/hosts/${hostId}/projects/legacy/services/old/update-policy`;
+    expect((await call("PUT", policyUrl, { policy: "minor" })).json).toMatchObject({ service: "old", policy: "minor", pattern: null });
+    expect((await call("PUT", policyUrl, { policy: "inconnue" })).status).toBe(400);
+    expect((await call("PUT", `/api/v1/hosts/${hostId}/projects/legacy/services/absent/update-policy`, { policy: "minor" })).status).toBe(404);
+    expect((await call("POST", `/api/v1/hosts/${hostId}/projects/legacy/services/old/ignored-tags`, { tag: "9.9.9", reason: "test" })).status).toBe(201);
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/updates`)).json.components[0]).toMatchObject({
+      policy: { policy: "minor" },
+      ignoredTags: [{ tag: "9.9.9", reason: "test" }],
+    });
+    expect((await call("DELETE", `/api/v1/hosts/${hostId}/projects/legacy/services/old/ignored-tags/9.9.9`)).status).toBe(204);
+    expect((await call("GET", `/api/v1/hosts/${hostId}/projects/inconnu/updates`)).status).toBe(404);
     // Logs : le conteneur doit être précisé et appartenir au projet.
     expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/logs`)).status).toBe(400);
     expect((await call("GET", `/api/v1/hosts/${hostId}/projects/legacy/logs?container=ffffffffffff`)).status).toBe(404);

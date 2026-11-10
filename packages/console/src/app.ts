@@ -16,6 +16,7 @@ import { z, ZodError } from "zod";
 import { BackupService } from "./backup.js";
 import { Dashboard } from "./dashboard.js";
 import { ImageWatcher } from "./image-watch.js";
+import { ObservedWatcher } from "./observed-watch.js";
 import { registerImageRoutes } from "./image-routes.js";
 import { RegistryStore } from "./registries.js";
 import { RegistryClient, createFetch } from "./registry.js";
@@ -91,6 +92,7 @@ export interface BuiltApp {
   candidates: CandidateScans;
   pruning: PruneService;
   watcher: ImageWatcher;
+  observedWatcher: ObservedWatcher;
   /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
   routes: string[];
 }
@@ -427,6 +429,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile, config.tlsSkipVerifyHosts) });
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
+  const observedWatcher = new ObservedWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const candidates = new CandidateScans(pool, scans, gateway, registries);
   const logStreams = new LogStreams(gateway);
   const terminals = new TerminalService(pool, gateway);
@@ -483,11 +486,12 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     scans.close();
     candidates.close();
     watcher.close();
+    observedWatcher.close();
   });
   const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, isOnline: (id) => gateway.isOnline(id) });
   registerImageRoutes(app, { pool, session: auth, apiAuth, scans, watcher, registries, registryClient, isOnline: (id) => gateway.isOnline(id) });
   registerHostDiskRoutes(app, { auth: apiAuth, session: auth, pruning });
-  registerProjectRoutes(app, { pool, auth: apiAuth, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
+  registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
@@ -519,5 +523,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, scans, candidates, pruning, watcher, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, candidates, pruning, watcher, observedWatcher, routes };
 }
