@@ -7898,6 +7898,84 @@
         }
       }
     },
+    "/api/v1/hosts/{id}/projects/{name}/versions": {
+      "get": {
+        "summary": "Historique des versions d'un projet Compose observé",
+        "description": "Une entrée est ajoutée à chaque changement de l'image (étiquette ou contenu) d'un service d'un projet non géré ; l'historique est conservé après la prise en charge. 100 versions par service au plus.",
+        "tags": [
+          "Supervision"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changements d'image ou de contenu par service, du plus récent au plus ancien (500 au plus)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hosts/{id}/projects/{name}/metrics": {
       "get": {
         "summary": "Métriques d'un projet Compose",

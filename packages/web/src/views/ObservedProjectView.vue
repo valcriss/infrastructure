@@ -9,6 +9,7 @@ import PanelCard from "../components/PanelCard.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
 import VulnerabilityTable from "../components/VulnerabilityTable.vue";
 import LogsTab from "./stack/LogsTab.vue";
+import VersionsTab from "./stack/VersionsTab.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import { useSession } from "../stores/session";
 import MetricsTab from "./stack/MetricsTab.vue";
@@ -24,7 +25,7 @@ const error = ref("");
 const info = ref("");
 const now = ref(Date.now());
 // ?tab=… ouvre directement un onglet (lien d'alerte du tableau de bord).
-const tab = ref(["overview", "security", "metrics", "logs", "terminal"].includes(String(route.query.tab)) ? String(route.query.tab) : "overview");
+const tab = ref(["overview", "security", "versions", "metrics", "logs", "terminal"].includes(String(route.query.tab)) ? String(route.query.tab) : "overview");
 const open = reactive<Record<string, boolean>>({});
 let timer: number | undefined;
 
@@ -32,6 +33,7 @@ const session = useSession();
 const TABS = computed(() => [
   { key: "overview", label: "Vue d'ensemble", icon: "gauge-high" },
   { key: "security", label: "Sécurité", icon: "shield-halved" },
+  { key: "versions", label: "Versions", icon: "code-branch" },
   { key: "metrics", label: "Métriques", icon: "chart-line" },
   { key: "logs", label: "Logs", icon: "terminal" },
   ...(session.info?.terminalAllowed ? [{ key: "terminal", label: "Terminal", icon: "terminal" }] : []),
@@ -219,6 +221,7 @@ async function scan(imageId: string, platform: string, ref: string) {
         <p class="text-xs text-slate-500" :title="fmtDate(new Date(now).toISOString())">Actualisé {{ ago(new Date(now).toISOString()) }}.</p>
       </template>
 
+      <VersionsTab v-else-if="tab === 'versions'" :project="project" />
       <MetricsTab v-else-if="tab === 'metrics'" :stack="stackLike" :project="project" />
       <LogsTab v-else-if="tab === 'logs'" :stack="stackLike" :project="project" />
       <TerminalPanel v-else-if="tab === 'terminal'" :host-id="hostId" :containers="containers" />

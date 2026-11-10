@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Application } from "./applications.js";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
+import { listObservedVersions } from "./observed-versions.js";
 import { serveLogStream } from "./log-sse.js";
 import type { LogStreams } from "./log-streams.js";
 import { RANGES, type MetricsStore } from "./metrics-store.js";
@@ -45,6 +46,14 @@ export function registerProjectRoutes(
     const application = (await deps.applications()).find((a) => a.hostId === id && a.name === name);
     if (!application) throw new HttpError(404, "project_not_found", "Projet introuvable sur cet hôte");
     return { application, containers };
+  });
+
+  // Historique des changements de version d'image des services (projets non gérés ; conservé après la prise en charge).
+  app.get("/api/v1/hosts/:id/projects/:name/versions", { preHandler: auth }, async (request) => {
+    const { id, name } = Params.parse(request.params);
+    const host = await pool.query("SELECT 1 FROM hosts WHERE id = $1 AND revoked_at IS NULL", [id]);
+    if (!host.rows[0]) throw new HttpError(404, "host_not_found", "Hôte introuvable");
+    return { versions: await listObservedVersions(pool, id, name) };
   });
 
   app.get("/api/v1/hosts/:id/projects/:name/metrics", { preHandler: auth }, async (request) => {

@@ -24,6 +24,7 @@ import type { WebSocket } from "ws";
 import { removeBootstrapFile } from "./bootstrap.js";
 import { randomToken, safeEqualHex, sha256 } from "./crypto.js";
 import { audit, type Pool } from "./db.js";
+import { recordObservedVersions } from "./observed-versions.js";
 
 const HELLO_TIMEOUT_MS = 10_000;
 
@@ -269,6 +270,10 @@ export class AgentGateway {
         inventory.hostInfo ? JSON.stringify(inventory.hostInfo) : null,
         inventory.images ? JSON.stringify(inventory.images) : null,
       ],
+    );
+    // L'historique des versions ne doit jamais empêcher l'enregistrement de l'inventaire.
+    await recordObservedVersions(this.pool, hostId, inventory).catch((err: unknown) =>
+      this.log.error({ err, hostId }, "erreur d'enregistrement de l'historique des versions"),
     );
   }
 
