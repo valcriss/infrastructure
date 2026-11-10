@@ -47,6 +47,14 @@ describe("generateTraefik", () => {
     expect(staticOf({ ...base, production: true }).certificatesResolvers.letsencrypt.acme).not.toHaveProperty("caServer");
   });
 
+  it("supprime les en-têtes qui en imitent un autre sur les deux entrypoints, sans perdre la redirection ni le TLS", () => {
+    const s = staticOf({ ...base, httpEntryPoint: "http", httpsEntryPoint: "https" });
+    expect(s.entryPoints.http.http.aliasHeadersStrategy).toBe("delete");
+    expect(s.entryPoints.https.http.aliasHeadersStrategy).toBe("delete");
+    expect(s.entryPoints.http.http.redirections.entryPoint.to).toBe("https");
+    expect(s.entryPoints.https.http.tls.certResolver).toBe("letsencrypt");
+  });
+
   it("garde le tableau de bord désactivé, n'expose rien par défaut et recharge le dossier dynamique", () => {
     const s = staticOf(base);
     expect(s.api.dashboard).toBe(false);

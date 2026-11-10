@@ -122,6 +122,9 @@ entryPoints:
   ${o.httpEntryPoint}:
     address: ":80"
     http:
+      # Supprime les en-têtes dont le nom en imite un autre (X_Auth_User pour X-Auth-User) : un client ne peut pas
+      # falsifier les en-têtes que Traefik gère auprès des backends qui les confondent (PHP, CGI, NGINX…).
+      aliasHeadersStrategy: delete
       redirections:
         entryPoint:
           to: ${o.httpsEntryPoint}
@@ -129,6 +132,7 @@ entryPoints:
   ${o.httpsEntryPoint}:
     address: ":443"
     http:
+      aliasHeadersStrategy: delete
       tls:
         # Les routes de cet entrypoint demandent leur certificat à ce résolveur.
         certResolver: ${o.certResolver}
