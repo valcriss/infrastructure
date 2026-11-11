@@ -388,6 +388,8 @@ export interface ImageView {
   managed: boolean;
   usedBy: ImageUserView[];
   scan: ImageScanView;
+  /** Mises à jour disponibles pour les services qui utilisent cette image. */
+  updates: { service: string; stackId: string | null; tag: string | null; contentChanged: boolean; candidates: string[]; uncertain: boolean }[];
 }
 
 export interface Vulnerability {

@@ -3,7 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
-import type { ImageWatcher } from "./image-watch.js";
+import type { CheckDetail, ImageWatcher } from "./image-watch.js";
+import { currentObservedChecks } from "./observed-watch.js";
 import { POLICIES } from "./image-tags.js";
 import { briefOf, loadUsedImages, isScanStale, scanState, type UsedImage } from "./images.js";
 import { normalizeRegistry } from "./image-ref.js";
@@ -16,6 +17,16 @@ import { hiddenProjects } from "./display.js";
 import { MIN_SEVERITIES, getSecuritySettings, isReported, reportedCounts, setSecuritySettings, type SecuritySettings } from "./settings.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+
+interface ImageUpdate {
+  service: string;
+  stackId: string | null;
+  tag: string | null;
+  /** Même tag, nouveau contenu côté registre. */
+  contentChanged: boolean;
+  candidates: string[];
+  uncertain: boolean;
+}
 
 const ImageId = z.string().regex(/^(sha256:)?[0-9a-f]{12,64}$/);
 export const ImageListQuery = z.object({ hostId: z.uuid().optional(), stackId: z.uuid().optional() });
@@ -96,10 +107,12 @@ export function registerImageRoutes(
   const { pool, session, apiAuth, scans, watcher, registries, registryClient } = deps;
 
   /** Vue d'un contenu d'image : état du scan (jamais confondu avec « sain »), utilisateurs, dernier résultat réussi. */
-  const view = async (img: UsedImage, queuePosition: number | null = null) => {
+  const view = async (img: UsedImage, queuePosition: number | null = null, updates: ImageUpdate[] = []) => {
     const [attempt, ok, settings] = await Promise.all([scans.latest(img.imageId, img.platform), scans.latestSucceeded(img.imageId, img.platform), getSecuritySettings(pool)]);
     const state = scanState(attempt ? briefOf(attempt, settings) : null);
     return {
+      /** Mises à jour disponibles pour les services qui utilisent cette image (mêmes vérifications que le tableau de bord). */
+      updates,
       imageId: img.imageId,
       platform: img.platform,
       refs: img.refs,
@@ -124,9 +137,32 @@ export function registerImageRoutes(
     const images = await loadUsedImages(pool, { ...q, excludeProjects: await hiddenProjects(pool) });
     const queue = await scans.queue();
     const position = new Map(queue.pending.map((p, i) => [`${p.imageId}|${p.platform}`, i + 1]));
+    // Mises à jour disponibles, rattachées aux services (stack gérée ou projet observé) qui utilisent chaque image.
+    const managed = new Map<string, CheckDetail>();
+    for (const c of await watcher.allChecks()) if (c.kind === "update_available" && c.detail) managed.set(`${c.stackId}|${c.service}`, c.detail);
+    const observed = new Map<string, CheckDetail>();
+    for (const c of await currentObservedChecks(pool, images)) if (c.kind === "update_available" && c.detail) observed.set(`${c.hostId}|${c.project}|${c.service}`, c.detail);
+    const updatesOf = (img: UsedImage): ImageUpdate[] => {
+      const out = new Map<string, ImageUpdate>();
+      for (const u of img.usedBy) {
+        if (!u.service) continue;
+        const d = u.stackId ? managed.get(`${u.stackId}|${u.service}`) : u.project ? observed.get(`${u.hostId}|${u.project}|${u.service}`) : undefined;
+        if (!d) continue;
+        const name = u.stackName ?? u.project ?? "";
+        out.set(`${name}/${u.service}`, {
+          service: `${name}/${u.service}`,
+          stackId: u.stackId,
+          tag: d.tag,
+          contentChanged: d.contentChanged === true,
+          candidates: d.candidates,
+          uncertain: d.uncertain,
+        });
+      }
+      return [...out.values()];
+    };
     return {
       queue: { pending: queue.pending.length, running: queue.running, current: queue.current },
-      images: await Promise.all(images.map((img) => view(img, position.get(`${img.imageId}|${img.platform}`) ?? null))),
+      images: await Promise.all(images.map((img) => view(img, position.get(`${img.imageId}|${img.platform}`) ?? null, updatesOf(img)))),
     };
   });
 

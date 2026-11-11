@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { useRoute } from "vue-router";
 import { ago, api, describeError, fmtDate, shortId, type ImageView } from "../api";
 import ScanAllDialog, { type BatchResult } from "../components/ScanAllDialog.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
@@ -8,7 +9,8 @@ import VulnerabilityTable from "../components/VulnerabilityTable.vue";
 const images = ref<ImageView[]>([]);
 const error = ref("");
 const info = ref("");
-const filter = ref<"" | "managed" | "never" | "vulnerable" | "failed">("");
+const route = useRoute();
+const filter = ref<"" | "managed" | "never" | "vulnerable" | "failed" | "updates">(route.query.filter === "updates" ? "updates" : "");
 const search = ref("");
 const open = reactive<Record<string, boolean>>({});
 const queue = ref<{ pending: number; running: number; current: { imageRef: string; startedAt: string } | null }>({ pending: 0, running: 0, current: null });
@@ -23,6 +25,7 @@ const shown = computed(() => {
   return images.value.filter((i) => {
     if (q && !i.refs.some((r) => r.toLowerCase().includes(q)) && !i.imageId.includes(q)) return false;
     if (filter.value === "managed") return i.managed;
+    if (filter.value === "updates") return i.updates.length > 0;
     if (filter.value) return i.scan.state === filter.value;
     return true;
   });
@@ -67,6 +70,7 @@ const columns = [
 ] as const;
 
 const critical = computed(() => images.value.reduce((n, i) => n + (i.scan.current?.counts?.critical ?? 0), 0));
+const updatesCount = computed(() => images.value.filter((i) => i.updates.length > 0).length);
 const high = computed(() => images.value.reduce((n, i) => n + (i.scan.current?.counts?.high ?? 0), 0));
 
 async function load() {
@@ -138,6 +142,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <h1 class="text-2xl font-semibold">Images</h1>
         <p class="text-sm text-slate-500">
           {{ images.length }} image(s) · <span :class="critical ? 'font-medium text-red-600' : ''">{{ critical }} critique(s)</span> · {{ high }} élevée(s)
+          · <span :class="updatesCount ? 'font-medium text-amber-700' : ''">{{ updatesCount }} avec mise à jour</span>
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-3 text-sm">
@@ -151,6 +156,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </label>
         <select v-model="filter" aria-label="Filtre" class="rounded-md border border-slate-300 bg-white px-3 py-1.5">
           <option value="">Toutes les images</option>
+          <option value="updates">Avec mise à jour disponible</option>
           <option value="managed">Images d'applications gérées</option>
           <option value="never">Jamais scannées</option>
           <option value="failed">Scan en échec</option>
@@ -205,6 +211,18 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <p class="mt-0.5 text-xs text-slate-400">
                   {{ i.platform || "plateforme inconnue" }} · {{ shortId(i.imageId) }}<span v-if="!i.managed"> · hors application gérée</span>
                 </p>
+                <div v-if="i.updates.length" class="mt-1.5 space-y-0.5 text-xs">
+                  <p class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
+                    <FaIcon :icon="['fas', 'arrows-rotate']" /> Mise à jour disponible
+                  </p>
+                  <p v-for="u in i.updates" :key="u.service" class="text-amber-800">
+                    {{ u.service }} :
+                    <template v-if="u.contentChanged">nouveau contenu pour le tag « {{ u.tag }} »</template>
+                    <template v-if="u.contentChanged && u.candidates.length"> ; </template>
+                    <template v-if="u.candidates.length">plus récent : {{ u.candidates.join(", ") }}{{ u.uncertain ? " (incertain)" : "" }}</template>
+                    <RouterLink v-if="u.stackId" :to="`/stacks/${u.stackId}`" class="ml-1 underline">Voir</RouterLink>
+                  </p>
+                </div>
               </td>
               <td class="hidden px-3 py-2 text-xs text-slate-600 md:table-cell">
                 <template v-for="(u, n) in i.usedBy" :key="u.containerId + u.hostId">

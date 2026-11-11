@@ -313,7 +313,7 @@ const alertCounts = computed(() => {
           :tone="data.security.images.critical ? 'bad' : data.security.images.high ? 'warn' : 'ok'"
           to="/images"
         />
-        <StatCard label="Mises à jour" icon="arrows-rotate" :value="data.security.updates.available" hint="d'images disponibles" :tone="data.security.updates.available ? 'warn' : 'ok'" to="/images" />
+        <StatCard label="Mises à jour" icon="arrows-rotate" :value="data.security.updates.available" hint="d'images disponibles" :tone="data.security.updates.available ? 'warn' : 'ok'" to="/images?filter=updates" />
       </section>
 
       <PanelCard v-model:collapsed="todoCollapsed" title="À traiter" icon="triangle-exclamation" :collapsible="todo.length > 0" :subtitle="todo.length ? `${alertCounts.critical} critique(s) · ${alertCounts.warning} attention` : undefined">
