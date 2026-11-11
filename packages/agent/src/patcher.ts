@@ -95,9 +95,10 @@ export function buildkitRunArgs(cfg: Pick<PatcherConfig, "buildkitImage" | "buil
   }
   return [
     "run", "-d", "--name", container,
-    // BuildKit rootless : pas de --privileged. seccomp/apparmor « unconfined » et l'absence de sandbox de processus sont
-    // exigés par ses espaces de noms utilisateur ; le conteneur est éphémère, plafonné et seul dans son réseau.
-    "--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined",
+    // BuildKit rootless : pas de --privileged. seccomp/apparmor « unconfined », les chemins de /proc non masqués (sans
+    // quoi runc ne peut pas monter /proc pour les étapes de construction, constaté sur Ubuntu 24.04) et l'absence de
+    // sandbox de processus sont exigés par ses espaces de noms utilisateur ; le conteneur est éphémère et plafonné.
+    "--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined", "--security-opt", "systempaths=unconfined",
     "-e", "BUILDKITD_FLAGS=--oci-worker-no-process-sandbox",
     "--memory", cfg.buildkitMemory, "--pids-limit", "2048",
     ...(cfg.buildkitExtraArgs ?? []),

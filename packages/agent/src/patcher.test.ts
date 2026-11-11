@@ -34,7 +34,7 @@ describe("arguments des conteneurs", () => {
   it("BuildKit est rootless, sans --privileged, avec mémoire plafonnée", () => {
     const a = buildkitRunArgs(cfg, "bk");
     expect(a).not.toContain("--privileged");
-    expect(a).toEqual(expect.arrayContaining(["--security-opt", "seccomp=unconfined", "--memory", "3g", "moby/buildkit:v0.35.0-rootless"]));
+    expect(a).toEqual(expect.arrayContaining(["--security-opt", "seccomp=unconfined", "systempaths=unconfined", "--memory", "3g", "moby/buildkit:v0.35.0-rootless"]));
     expect(a.join(" ")).toContain("--oci-worker-no-process-sandbox");
     expect(a.join(" ")).toContain("--addr tcp://0.0.0.0:1234");
   });
