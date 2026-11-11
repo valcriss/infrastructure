@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import ToolsMenu, { type ToolItem } from "../../components/ToolsMenu.vue";
+import TrackingRuleDialog from "../../components/TrackingRuleDialog.vue";
+import UpdateBadge from "../../components/UpdateBadge.vue";
 import { ago, api, describeError, fmtDate, shortId, type StackDetail, type StackImageComponent, type UpdatePolicyName } from "../../api";
 import CandidateCompare from "../../components/CandidateCompare.vue";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
@@ -24,23 +27,15 @@ const checking = ref(false);
 const error = ref("");
 const info = ref("");
 const open = reactive<Record<string, boolean>>({});
-const draft = reactive<Record<string, { policy: UpdatePolicyName; pattern: string }>>({});
 let timer: number | undefined;
 
-const policies: { key: UpdatePolicyName; label: string; help: string }[] = [
-  { key: "same_tag", label: "Même tag uniquement", help: "Détecte seulement un nouveau contenu derrière le tag actuel." },
-  { key: "patch", label: "Correctifs (1.2.x)", help: "Propose les versions plus récentes de même mineure." },
-  { key: "minor", label: "Mineures (1.x)", help: "Propose les versions plus récentes de même majeure." },
-  { key: "major", label: "Majeures", help: "Propose toute version plus récente." },
-  { key: "pattern", label: "Expression libre", help: "Tags correspondant à une expression régulière (sans groupe répété)." },
-];
+const POLICY_LABELS: Record<UpdatePolicyName, string> = { same_tag: "même tag uniquement", patch: "correctifs", minor: "mineures", major: "majeures", pattern: "expression libre" };
 
 async function load() {
   try {
     const r = await api<{ checking: boolean; components: StackImageComponent[] }>(`/api/v1/stacks/${props.stack.id}/images`);
     components.value = r.components;
     checking.value = r.checking;
-    for (const c of r.components) draft[c.service] ??= { policy: c.policy.policy, pattern: c.policy.pattern ?? "" };
     error.value = "";
   } catch (err) {
     error.value = describeError(err);
@@ -77,31 +72,26 @@ Motif (facultatif, ex. incompatible avec les données) :`, "");
   }
 }
 
-async function unignoreTag(service: string, tag: string) {
-  error.value = info.value = "";
-  try {
-    await api(`/api/v1/stacks/${props.stack.id}/services/${encodeURIComponent(service)}/ignored-tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
-    info.value = `La version « ${tag} » sera de nouveau proposée (vérification relancée).`;
-    await load();
-  } catch (err) {
-    error.value = describeError(err);
-  }
-}
+const policyLabel = (p: UpdatePolicyName): string => POLICY_LABELS[p];
 
-async function savePolicy(service: string) {
-  error.value = info.value = "";
-  const d = draft[service];
-  if (!d) return;
-  try {
-    await api(`/api/v1/stacks/${props.stack.id}/services/${encodeURIComponent(service)}/update-policy`, {
-      method: "PUT",
-      body: JSON.stringify({ policy: d.policy, pattern: d.policy === "pattern" ? d.pattern : null }),
-    });
-    info.value = `Règle de suivi de « ${service} » enregistrée (sauvegardée dans Git avec la stack).`;
-    await load();
-  } catch (err) {
-    error.value = describeError(err);
-  }
+// Menu « … » d'un service : règle de suivi et image personnalisée.
+const ruleTarget = ref<string | null>(null);
+const ruleComponent = computed(() => components.value.find((c) => c.service === ruleTarget.value) ?? null);
+const isRunning = (service: string): boolean => props.stack.containers.some((x) => x.composeService === service && x.state === "running");
+function menuItems(service: string): ToolItem[] {
+  return [
+    { id: "rule", label: "Règle de suivi…", description: "Choisir quelles versions plus récentes proposer ; gérer les versions ignorées." },
+    {
+      id: "image",
+      label: "Créer une image personnalisée…",
+      description: "Ajoute des outils ou applique les mises à jour du système (corrige les CVE du système qui ont un correctif).",
+      ...(isRunning(service) ? {} : { disabledReason: "Le service doit être en cours d'exécution." }),
+    },
+  ];
+}
+function onMenu(service: string, id: string) {
+  if (id === "rule") ruleTarget.value = service;
+  else if (id === "image") imageTarget.value = service;
 }
 
 onMounted(() => {
@@ -128,14 +118,17 @@ onBeforeUnmount(() => window.clearInterval(timer));
     </section>
     <p v-if="components.length === 0" class="text-sm text-slate-500">Aucune image observée : la stack n'est pas déployée ou l'hôte n'a pas encore remonté d'inventaire.</p>
 
-    <article v-for="c in components" :key="c.service" class="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+    <article v-for="c in components" :key="c.service" class="space-y-4 rounded-lg border border-slate-300 bg-white p-4 shadow-sm">
       <header class="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h2 class="font-semibold">{{ c.service }}</h2>
-          <p class="font-mono text-xs text-slate-600">{{ c.ref }}</p>
-          <p class="text-xs text-slate-400">{{ c.image.platform || "plateforme inconnue" }} · {{ shortId(c.image.imageId) }}</p>
+        <div class="flex items-start gap-2">
+          <ToolsMenu v-if="session.canOperate" compact :label="`Actions de ${c.service}`" :items="menuItems(c.service)" @select="onMenu(c.service, $event)" />
+          <div>
+            <h2 class="font-semibold">{{ c.service }}</h2>
+            <p class="font-mono text-xs text-slate-600">{{ c.ref }}</p>
+            <p class="text-xs text-slate-400">{{ c.image.platform || "plateforme inconnue" }} · {{ shortId(c.image.imageId) }}</p>
+          </div>
         </div>
-        <div><ScanBadge :scan="c.image.scan" /></div>
+        <div class="flex flex-wrap items-center gap-2"><UpdateBadge :check="c.check" /><ScanBadge :scan="c.image.scan" /></div>
       </header>
 
       <div v-if="c.image.scan.current?.total" class="text-sm">
@@ -188,40 +181,27 @@ onBeforeUnmount(() => window.clearInterval(timer));
           </template>
         </template>
 
-        <div v-if="c.ignoredTags.length" class="border-t border-slate-100 pt-3 text-xs text-slate-600">
-          <p class="font-medium">Versions ignorées (plus proposées)</p>
-          <ul class="mt-1 space-y-1">
-            <li v-for="i in c.ignoredTags" :key="i.tag" class="flex flex-wrap items-center gap-2">
-              <span class="rounded bg-slate-100 px-2 py-0.5 font-mono">{{ i.tag }}</span>
-              <span v-if="i.reason">{{ i.reason }}</span>
-              <span class="text-slate-400">par {{ i.createdBy }}, {{ ago(i.createdAt) }}</span>
-              <button v-if="session.canOperate" class="underline" @click="unignoreTag(c.service, i.tag)">Proposer de nouveau</button>
-            </li>
-          </ul>
-        </div>
-
-        <form class="flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3" @submit.prevent="savePolicy(c.service)">
-          <label class="text-xs">
-            <span class="block font-medium">Règle de suivi</span>
-            <select v-model="draft[c.service]!.policy" class="mt-1 rounded border border-slate-300 bg-white px-2 py-1.5 text-sm" :aria-label="`Règle de suivi de ${c.service}`">
-              <option v-for="p in policies" :key="p.key" :value="p.key" :title="p.help">{{ p.label }}</option>
-            </select>
-          </label>
-          <label v-if="draft[c.service]?.policy === 'pattern'" class="text-xs">
-            <span class="block font-medium">Expression</span>
-            <input v-model="draft[c.service]!.pattern" placeholder="^v\d+\.\d+$" class="mt-1 rounded border border-slate-300 px-2 py-1.5 font-mono text-sm" />
-          </label>
-          <button class="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">Enregistrer la règle</button>
-          <span class="text-xs text-slate-400">{{ policies.find((p) => p.key === draft[c.service]?.policy)?.help }}</span>
-        </form>
+        <p class="text-xs text-slate-500">
+          Règle de suivi : {{ policyLabel(c.policy.policy) }}<template v-if="c.policy.policy === 'pattern' && c.policy.pattern"> (<code class="font-mono">{{ c.policy.pattern }}</code>)</template>
+          <template v-if="c.ignoredTags.length"> · {{ c.ignoredTags.length }} version(s) ignorée(s)</template>
+          — modifiable depuis le menu « … ».
+        </p>
       </section>
-      <CandidateCompare :stack-id="stack.id" :service="c.service" @changed="emit('changed')" />
-      <div v-if="session.canOperate" class="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3 text-sm">
-        <button class="rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-100 disabled:opacity-50" :disabled="!stack.containers.some((x) => x.composeService === c.service && x.state === 'running')" @click="imageTarget = c.service">Créer une image personnalisée…</button>
-        <span class="text-xs text-slate-500">Ajoute des outils ou applique les mises à jour du système (corrige les CVE du système qui ont un correctif).</span>
-      </div>
+      <CandidateCompare :stack-id="stack.id" :service="c.service" :refresh-key="c.check?.checkedAt ?? null" @changed="emit('changed')" />
       <p class="text-[11px] text-slate-400">Dernière tentative : {{ c.image.scan.lastAttempt ? fmtDate(c.image.scan.lastAttempt.finishedAt ?? c.image.scan.lastAttempt.createdAt) : "aucune" }}</p>
     </article>
+    <TrackingRuleDialog
+      v-if="ruleComponent"
+      :key="ruleComponent.service"
+      :service="ruleComponent.service"
+      :service-path="`/api/v1/stacks/${stack.id}/services/${encodeURIComponent(ruleComponent.service)}`"
+      :policy="ruleComponent.policy.policy"
+      :pattern="ruleComponent.policy.pattern"
+      :ignored-tags="ruleComponent.ignoredTags"
+      :can-operate="session.canOperate"
+      @close="ruleTarget = null"
+      @changed="load"
+    />
     <CustomImageDialog
       v-if="imageTarget && imageContainer"
       :stack-id="stack.id"

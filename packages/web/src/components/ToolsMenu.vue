@@ -10,7 +10,8 @@ export interface ToolItem {
   /** Raison affichée quand l'outil est indisponible (il reste visible, grisé). */
   disabledReason?: string;
 }
-defineProps<{ items: ToolItem[]; label?: string }>();
+/** `compact` : simple bouton « … » (menu d'une carte), le menu s'ouvre vers la droite ; `label` sert alors de nom accessible. */
+defineProps<{ items: ToolItem[]; label?: string; compact?: boolean }>();
 const emit = defineEmits<{ select: [id: string] }>();
 
 const open = ref(false);
@@ -56,10 +57,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="root" class="relative">
-    <button type="button" class="inline-flex items-center gap-2 rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100" aria-haspopup="menu" :aria-expanded="open" @click="toggle">
+    <button v-if="compact" type="button" class="rounded px-2 py-1 text-slate-500 hover:bg-slate-100" aria-haspopup="menu" :aria-expanded="open" :aria-label="label ?? 'Actions'" :title="label ?? 'Actions'" @click="toggle">
+      <FaIcon :icon="['fas', 'ellipsis']" />
+    </button>
+    <button v-else type="button" class="inline-flex items-center gap-2 rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100" aria-haspopup="menu" :aria-expanded="open" @click="toggle">
       <FaIcon :icon="['fas', 'wrench']" /> {{ label ?? "Outils" }} <FaIcon :icon="['fas', 'chevron-down']" class="text-xs" />
     </button>
-    <div v-if="open" ref="list" role="menu" class="absolute right-0 z-20 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+    <div v-if="open" ref="list" role="menu" class="absolute z-20 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-1 shadow-lg" :class="compact ? 'left-0' : 'right-0'">
       <button
         v-for="i in items"
         :key="i.id"

@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import ToolsMenu, { type ToolItem } from "../../components/ToolsMenu.vue";
+import TrackingRuleDialog from "../../components/TrackingRuleDialog.vue";
+import UpdateBadge from "../../components/UpdateBadge.vue";
 import { ago, api, describeError, fmtDate, shortId, type StackImageComponent, type UpdatePolicyName } from "../../api";
 import PanelCard from "../../components/PanelCard.vue";
 import { useSession } from "../../stores/session";
@@ -20,16 +23,12 @@ const checking = ref(false);
 const loaded = ref(false);
 const error = ref("");
 const info = ref("");
-const draft = reactive<Record<string, { policy: UpdatePolicyName; pattern: string }>>({});
 let timer: number | undefined;
 
-const policies: { key: UpdatePolicyName; label: string; help: string }[] = [
-  { key: "same_tag", label: "Même tag uniquement", help: "Détecte seulement un nouveau contenu derrière le tag actuel." },
-  { key: "patch", label: "Correctifs (1.2.x)", help: "Propose les versions plus récentes de même mineure." },
-  { key: "minor", label: "Mineures (1.x)", help: "Propose les versions plus récentes de même majeure." },
-  { key: "major", label: "Majeures", help: "Propose toute version plus récente." },
-  { key: "pattern", label: "Expression libre", help: "Tags correspondant à une expression régulière (sans groupe répété)." },
-];
+const POLICY_LABELS: Record<UpdatePolicyName, string> = { same_tag: "même tag uniquement", patch: "correctifs", minor: "mineures", major: "majeures", pattern: "expression libre" };
+const ruleTarget = ref<string | null>(null);
+const ruleComponent = computed(() => components.value.find((c) => c.service === ruleTarget.value) ?? null);
+const menuItems: ToolItem[] = [{ id: "rule", label: "Règle de suivi…", description: "Choisir quelles versions plus récentes proposer ; gérer les versions ignorées." }];
 
 async function load() {
   try {
@@ -40,7 +39,6 @@ async function load() {
     versions.value = v.versions;
     components.value = u.components;
     checking.value = u.checking;
-    for (const c of u.components) draft[c.service] ??= { policy: c.policy.policy, pattern: c.policy.pattern ?? "" };
   } catch (err) {
     error.value = describeError(err);
   }
@@ -66,18 +64,6 @@ function ignoreTag(service: string, tag: string) {
   void act(
     () => api(`${base.value}/services/${encodeURIComponent(service)}/ignored-tags`, { method: "POST", body: JSON.stringify({ tag, ...(reason.trim() ? { reason: reason.trim() } : {}) }) }),
     `La version « ${tag} » n'est plus proposée pour « ${service} ».`,
-  );
-}
-
-const unignoreTag = (service: string, tag: string) =>
-  act(() => api(`${base.value}/services/${encodeURIComponent(service)}/ignored-tags/${encodeURIComponent(tag)}`, { method: "DELETE" }), `La version « ${tag} » sera de nouveau proposée (vérification relancée).`);
-
-function savePolicy(service: string) {
-  const d = draft[service];
-  if (!d) return;
-  void act(
-    () => api(`${base.value}/services/${encodeURIComponent(service)}/update-policy`, { method: "PUT", body: JSON.stringify({ policy: d.policy, pattern: d.policy === "pattern" ? d.pattern : null }) }),
-    `Règle de suivi de « ${service} » enregistrée.`,
   );
 }
 
@@ -108,8 +94,14 @@ const short = (id: string): string => (id.startsWith("sha256:") ? id.slice(7, 19
       </template>
       <p v-if="loaded && components.length === 0" class="text-sm text-slate-500">Aucun service en cours d'exécution dans ce projet.</p>
       <div class="space-y-4">
-        <section v-for="c in components" :key="c.service" class="space-y-2 border-t border-slate-100 pt-3 text-sm first:border-0 first:pt-0">
-          <h3 class="flex flex-wrap items-baseline gap-2 font-medium">{{ c.service }} <span class="font-mono text-xs font-normal text-slate-500">{{ c.ref }}</span></h3>
+        <section v-for="c in components" :key="c.service" class="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div class="flex items-start gap-2">
+              <ToolsMenu v-if="session.canOperate" compact :label="`Actions de ${c.service}`" :items="menuItems" @select="ruleTarget = c.service" />
+              <h3 class="flex flex-wrap items-baseline gap-2 font-medium">{{ c.service }} <span class="font-mono text-xs font-normal text-slate-500">{{ c.ref }}</span></h3>
+            </div>
+            <UpdateBadge :check="c.check" />
+          </div>
           <p v-if="!c.check" class="text-slate-500">Aucune vérification pour cette image (jamais faite, ou l'image a changé depuis).</p>
           <template v-else>
             <p v-if="c.check.status === 'error'" role="alert" class="rounded bg-red-50 p-2 text-red-800">
@@ -140,35 +132,26 @@ const short = (id: string): string => (id.startsWith("sha256:") ? id.slice(7, 19
             </template>
           </template>
 
-          <div v-if="c.ignoredTags.length" class="text-xs text-slate-600">
-            <p class="font-medium">Versions ignorées (plus proposées)</p>
-            <ul class="mt-1 space-y-1">
-              <li v-for="i in c.ignoredTags" :key="i.tag" class="flex flex-wrap items-center gap-2">
-                <span class="rounded bg-slate-100 px-2 py-0.5 font-mono">{{ i.tag }}</span>
-                <span v-if="i.reason">{{ i.reason }}</span>
-                <span class="text-slate-400">par {{ i.createdBy }}, {{ ago(i.createdAt) }}</span>
-                <button v-if="session.canOperate" class="underline" @click="unignoreTag(c.service, i.tag)">Proposer de nouveau</button>
-              </li>
-            </ul>
-          </div>
-
-          <form v-if="session.canOperate && draft[c.service]" class="flex flex-wrap items-end gap-2" @submit.prevent="savePolicy(c.service)">
-            <label class="text-xs">
-              <span class="block font-medium">Règle de suivi</span>
-              <select v-model="draft[c.service]!.policy" class="mt-1 rounded border border-slate-300 bg-white px-2 py-1.5 text-sm" :aria-label="`Règle de suivi de ${c.service}`">
-                <option v-for="p in policies" :key="p.key" :value="p.key" :title="p.help">{{ p.label }}</option>
-              </select>
-            </label>
-            <label v-if="draft[c.service]?.policy === 'pattern'" class="text-xs">
-              <span class="block font-medium">Expression</span>
-              <input v-model="draft[c.service]!.pattern" placeholder="^v\d+\.\d+$" class="mt-1 rounded border border-slate-300 px-2 py-1.5 font-mono text-sm" />
-            </label>
-            <button class="rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">Enregistrer la règle</button>
-            <span class="text-xs text-slate-400">{{ policies.find((p) => p.key === draft[c.service]?.policy)?.help }}</span>
-          </form>
+          <p class="text-xs text-slate-500">
+            Règle de suivi : {{ POLICY_LABELS[c.policy.policy] }}<template v-if="c.policy.policy === 'pattern' && c.policy.pattern"> (<code class="font-mono">{{ c.policy.pattern }}</code>)</template>
+            <template v-if="c.ignoredTags.length"> · {{ c.ignoredTags.length }} version(s) ignorée(s)</template>
+            <template v-if="session.canOperate"> — modifiable depuis le menu « … ».</template>
+          </p>
         </section>
       </div>
     </PanelCard>
+    <TrackingRuleDialog
+      v-if="ruleComponent"
+      :key="ruleComponent.service"
+      :service="ruleComponent.service"
+      :service-path="`${base}/services/${encodeURIComponent(ruleComponent.service)}`"
+      :policy="ruleComponent.policy.policy"
+      :pattern="ruleComponent.policy.pattern"
+      :ignored-tags="ruleComponent.ignoredTags"
+      :can-operate="session.canOperate"
+      @close="ruleTarget = null"
+      @changed="load"
+    />
 
     <p v-if="loaded && groups.length === 0" class="text-sm text-slate-500">Aucune version enregistrée pour le moment : l'historique commence à la première observation du projet.</p>
     <PanelCard v-for="[service, list] in groups" :key="service" :title="`Historique — ${service}`" icon="code-branch" :subtitle="`${list.length} version(s) observée(s) — la plus récente est la version actuelle`">

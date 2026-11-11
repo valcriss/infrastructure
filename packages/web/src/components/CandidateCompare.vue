@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, describeError, type CandidateView, type TagSuggestions } from "../api";
 import { useSession } from "../stores/session";
 import DiffView from "./DiffView.vue";
@@ -7,7 +7,7 @@ import SeverityBadges from "./SeverityBadges.vue";
 
 // Compare les vulnérabilités d'une autre version de l'image avant de l'adopter : l'image est téléchargée sur
 // l'hôte, scannée puis retirée. Rien n'est déployé.
-const props = defineProps<{ stackId: string; service: string }>();
+const props = defineProps<{ stackId: string; service: string; refreshKey?: string | null }>();
 const emit = defineEmits<{ changed: [] }>();
 const session = useSession();
 
@@ -31,15 +31,21 @@ async function load() {
   }
 }
 
-onMounted(async () => {
-  void load();
-  timer = window.setInterval(() => void load(), 4000);
+async function loadSuggestions() {
   try {
     suggestions.value = await api<TagSuggestions>(`/api/v1/stacks/${props.stackId}/services/${encodeURIComponent(props.service)}/tag-suggestions`);
   } catch (err) {
     error.value = describeError(err);
   }
+}
+
+onMounted(() => {
+  void load();
+  timer = window.setInterval(() => void load(), 4000);
+  void loadSuggestions();
 });
+// Une nouvelle vérification des mises à jour change les versions proposées : on recharge les suggestions.
+watch(() => props.refreshKey, () => void loadSuggestions());
 onBeforeUnmount(() => window.clearInterval(timer));
 
 async function compare(t: string) {
