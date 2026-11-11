@@ -130,7 +130,7 @@ export function registerCustomImageRoutes(app: FastifyInstance, deps: { pool: Po
   app.patch("/api/v1/stacks/:id/services/:service/image-tag", { preHandler: auth }, async (request) => {
     const { id, service } = Params.parse(request.params);
     const body = ImageTagBody.parse(request.body);
-    return changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? `Image du service ${service} : étiquette ${body.tag}`, (c) => retagService(c, service, body.tag).next);
+    return changeStack(pool, id, body.expectedRevision, request.actor, body.message ?? `Image du service ${service} : étiquette ${body.tag}`, (c) => retagService(c, service, body.tag).next, { allowManaged: true });
   });
 
   // Aperçu : Dockerfile généré et Compose modifié, rien n'est enregistré.

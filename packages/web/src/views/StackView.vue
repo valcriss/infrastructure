@@ -91,6 +91,11 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </p>
       </div>
 
+      <p v-if="stack.managedBy" role="note" class="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+        Cette application est générée et entretenue par la console ({{ stack.managedBy }}) : son Compose, ses variables et ses fichiers ne se modifient pas à la main.
+        <RouterLink to="/settings?tab=registry" class="underline">Ouvrir ses paramètres</RouterLink> pour renouveler son mot de passe ou la détacher de la gestion automatique.
+      </p>
+
       <div role="tablist" aria-label="Sections de la stack" class="flex flex-wrap gap-1 border-b border-slate-200">
         <button
           v-for="t in tabs"

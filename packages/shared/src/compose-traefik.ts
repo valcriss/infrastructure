@@ -114,6 +114,9 @@ function labelEntries(ctx: TraefikContext, e: TraefikExposure): [string, string]
   return out;
 }
 
+/** Labels d'un routeur Traefik, pour les applications générées par la console (registry). */
+export const traefikLabelEntries = labelEntries;
+
 /** Clé d'un élément de `labels` (mapping ou liste « clé=valeur »). */
 function keyOfSeqItem(item: unknown): string | null {
   if (!isScalar(item) || typeof item.value !== "string") return null;

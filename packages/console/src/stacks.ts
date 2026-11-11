@@ -208,6 +208,10 @@ export interface CreateStackInput {
   adopt?: boolean;
   /** Chiffre le Compose dans la sauvegarde Git. */
   composeSensitive?: boolean;
+  /** Fichiers à chiffrer dans la sauvegarde Git (sous-ensemble de `files`). */
+  sensitiveFiles?: string[];
+  /** Module qui génère et entretient cette stack : son contenu n'est plus modifiable à la main. */
+  managedBy?: string;
   author: string;
 }
 
@@ -219,7 +223,7 @@ export async function createStack(pool: Pool, input: CreateStackInput): Promise<
     compose: input.compose,
     variables: applyVariableChanges({}, input.variables, undefined),
     files: input.files ?? {},
-    sensitiveFiles: [],
+    sensitiveFiles: input.sensitiveFiles ?? [],
     composeSensitive: input.composeSensitive === true,
   };
   assertValidContent(content);
@@ -248,9 +252,9 @@ export async function createStack(pool: Pool, input: CreateStackInput): Promise<
     let id: string;
     try {
       const ins = await c.query<{ id: string }>(
-        `INSERT INTO stacks (name, host_id, description, current_revision, adopt_pending)
-         VALUES ($1, $2, $3, 1, $4) RETURNING id`,
-        [input.name, input.hostId, input.description, input.adopt === true],
+        `INSERT INTO stacks (name, host_id, description, current_revision, adopt_pending, managed_by)
+         VALUES ($1, $2, $3, 1, $4, $5) RETURNING id`,
+        [input.name, input.hostId, input.description, input.adopt === true, input.managedBy ?? null],
       );
       id = ins.rows[0]?.id ?? "";
     } catch (err) {
@@ -285,6 +289,19 @@ export interface ChangeResult {
   changed: boolean;
 }
 
+export interface ChangeOptions {
+  /**
+   * Autorise la modification d'une stack gérée par la console (registry). Réservé au module qui la gère et aux mises
+   * à jour d'étiquette d'image ; toute modification à la main d'une stack gérée est refusée (423).
+   */
+  allowManaged?: boolean;
+}
+
+/** Refuse (423) la modification manuelle d'une stack générée et entretenue par la console. */
+export function managedError(managedBy: string): HttpError {
+  return new HttpError(423, "stack_managed", `Cette application est générée et entretenue par la console (${managedBy}) : modifiez-la depuis les paramètres, ou détachez-la de la gestion automatique.`, { managedBy });
+}
+
 /**
  * Crée une nouvelle révision à partir de la révision courante, avec contrôle
  * de concurrence optimiste : `expectedRevision` doit être la révision courante.
@@ -296,14 +313,16 @@ export async function changeStack(
   author: string,
   message: string,
   mutate: (current: RevisionContent) => RevisionContent,
+  options: ChangeOptions = {},
 ): Promise<ChangeResult> {
   return withTx(pool, async (c) => {
-    const stack = await c.query<{ current_revision: number }>(
-      "SELECT current_revision FROM stacks WHERE id = $1 FOR UPDATE",
+    const stack = await c.query<{ current_revision: number; managed_by: string | null }>(
+      "SELECT current_revision, managed_by FROM stacks WHERE id = $1 FOR UPDATE",
       [stackId],
     );
     const row = stack.rows[0];
     if (!row) throw new HttpError(404, "stack_not_found", "Stack introuvable");
+    if (row.managed_by !== null && !options.allowManaged) throw managedError(row.managed_by);
     if (row.current_revision !== expectedRevision) {
       throw new HttpError(409, "revision_conflict", "La stack a été modifiée entre-temps", {
         currentRevision: row.current_revision,

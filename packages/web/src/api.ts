@@ -94,6 +94,8 @@ export interface StackSummary {
   hostName: string;
   hostPresence: "online" | "offline";
   description: string;
+  /** Module qui génère et entretient l'application (contenu non modifiable à la main), ou null. */
+  managedBy: string | null;
   currentRevision: number;
   deployedRevision: number | null;
   pendingDeploy: boolean;

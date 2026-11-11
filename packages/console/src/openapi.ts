@@ -5,7 +5,7 @@ import { BackupConfigBody, BackupTestBody, RestoreApplyBody, RestorePreviewBody 
 import { BatchScanBody, ManualScanBody, PolicyBody, RegistryBody, SecuritySettingsBody } from "./image-routes.js";
 import { PreviewBody, PruneBody } from "./host-disk-routes.js";
 import { CreateTokenBody } from "./token-routes.js";
-import { IMAGE_ROUTE_DOCS, REMOVAL_ROUTE_DOCS, SECURITY_ROUTE_DOCS, TERMINAL_ROUTE_DOCS, TRAEFIK_ROUTE_DOCS, USER_ROUTE_DOCS } from "./openapi-users.js";
+import { IMAGE_ROUTE_DOCS, REGISTRY_APP_ROUTE_DOCS, REMOVAL_ROUTE_DOCS, SECURITY_ROUTE_DOCS, TERMINAL_ROUTE_DOCS, TRAEFIK_ROUTE_DOCS, USER_ROUTE_DOCS } from "./openapi-users.js";
 
 /** Qui peut appeler la route. */
 type Access = "public" | "session" | "any";
@@ -43,6 +43,7 @@ export const ROUTE_DOCS: RouteDoc[] = [
   ...USER_ROUTE_DOCS,
   ...TERMINAL_ROUTE_DOCS,
   ...TRAEFIK_ROUTE_DOCS,
+  ...REGISTRY_APP_ROUTE_DOCS,
   ...IMAGE_ROUTE_DOCS,
   ...SECURITY_ROUTE_DOCS,
   ...REMOVAL_ROUTE_DOCS,
@@ -70,13 +71,13 @@ export const ROUTE_DOCS: RouteDoc[] = [
   { method: "get", path: "/api/v1/stacks", summary: "Lister les stacks", tag: "Stacks", access: "any", success: { status: 200, description: "Stacks, révisions et état observé" }, errors: [401] },
   { method: "post", path: "/api/v1/stacks", summary: "Créer une stack (révision 1)", tag: "Stacks", access: "any", body: CreateBody, success: { status: 201, description: "Stack créée, rien n'est déployé", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409], description: "Le Compose doit référencer des images préconstruites : `build` et `include` sont rejetés. `adopt: true` importe un projet Compose déjà présent sur l'hôte." },
   { method: "get", path: "/api/v1/stacks/{id}", summary: "Détail d'une stack (révision courante)", tag: "Stacks", access: "any", success: { status: 200, description: "Stack, Compose, variables (valeurs sensibles masquées), fichiers et conteneurs observés" }, errors: [401, 404] },
-  { method: "put", path: "/api/v1/stacks/{id}/compose", summary: "Remplacer le Compose", tag: "Stacks", access: "any", body: ComposeBody, success: { status: 200, description: "Nouvelle révision (ou inchangée)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409] },
-  { method: "patch", path: "/api/v1/stacks/{id}/variables", summary: "Modifier les variables de stack", tag: "Stacks", access: "any", body: VariablesBody, success: { status: 200, description: "Nouvelle révision (ou inchangée)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409] },
-  { method: "patch", path: "/api/v1/stacks/{id}/services/{service}/environment", summary: "Modifier les variables d'environnement d'un service", tag: "Stacks", access: "any", body: ServiceEnvBody, success: { status: 200, description: "Nouvelle révision (YAML préservé)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 422], description: "Conserve commentaires, ordre et expressions `${…}`. Refuse les alias YAML et les clés de fusion `<<`." },
+  { method: "put", path: "/api/v1/stacks/{id}/compose", summary: "Remplacer le Compose", tag: "Stacks", access: "any", body: ComposeBody, success: { status: 200, description: "Nouvelle révision (ou inchangée)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 423] },
+  { method: "patch", path: "/api/v1/stacks/{id}/variables", summary: "Modifier les variables de stack", tag: "Stacks", access: "any", body: VariablesBody, success: { status: 200, description: "Nouvelle révision (ou inchangée)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 423] },
+  { method: "patch", path: "/api/v1/stacks/{id}/services/{service}/environment", summary: "Modifier les variables d'environnement d'un service", tag: "Stacks", access: "any", body: ServiceEnvBody, success: { status: 200, description: "Nouvelle révision (YAML préservé)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 422, 423], description: "Conserve commentaires, ordre et expressions `${…}`. Refuse les alias YAML et les clés de fusion `<<`." },
   { method: "post", path: "/api/v1/stacks/{id}/services/{service}/healthcheck/preview", summary: "Aperçu de l'ajout d'un healthcheck à un service", tag: "Stacks", access: "any", body: HealthcheckBody, success: { status: 200, description: "Compose avant et après modification (rien n'est enregistré)" }, errors: [400, 401, 403, 404, 409, 422] },
-  { method: "patch", path: "/api/v1/stacks/{id}/services/{service}/healthcheck", summary: "Définir le healthcheck d'un service", tag: "Stacks", access: "any", body: HealthcheckBody, success: { status: 200, description: "Nouvelle révision (YAML préservé)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 422], description: "Écrit un bloc `healthcheck` (`CMD-SHELL`). Refuse les alias YAML et les clés de fusion `<<`. La révision n'est pas déployée." },
-  { method: "put", path: "/api/v1/stacks/{id}/files/{path}", summary: "Enregistrer un fichier associé", tag: "Stacks", access: "any", body: FileBody, success: { status: 200, description: "Nouvelle révision (ou inchangée)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409], description: "`path` est un chemin relatif pouvant contenir des `/`." },
-  { method: "delete", path: "/api/v1/stacks/{id}/files/{path}", summary: "Supprimer un fichier associé", tag: "Stacks", access: "any", query: [{ name: "expectedRevision", required: true, schema: { type: "integer", minimum: 1 } }], success: { status: 200, description: "Nouvelle révision", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409] },
+  { method: "patch", path: "/api/v1/stacks/{id}/services/{service}/healthcheck", summary: "Définir le healthcheck d'un service", tag: "Stacks", access: "any", body: HealthcheckBody, success: { status: 200, description: "Nouvelle révision (YAML préservé)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 422, 423], description: "Écrit un bloc `healthcheck` (`CMD-SHELL`). Refuse les alias YAML et les clés de fusion `<<`. La révision n'est pas déployée." },
+  { method: "put", path: "/api/v1/stacks/{id}/files/{path}", summary: "Enregistrer un fichier associé", tag: "Stacks", access: "any", body: FileBody, success: { status: 200, description: "Nouvelle révision (ou inchangée)", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 423], description: "`path` est un chemin relatif pouvant contenir des `/`." },
+  { method: "delete", path: "/api/v1/stacks/{id}/files/{path}", summary: "Supprimer un fichier associé", tag: "Stacks", access: "any", query: [{ name: "expectedRevision", required: true, schema: { type: "integer", minimum: 1 } }], success: { status: 200, description: "Nouvelle révision", ref: "ChangeResult" }, errors: [400, 401, 403, 404, 409, 423] },
   { method: "get", path: "/api/v1/stacks/{id}/revisions", summary: "Historique des révisions", tag: "Stacks", access: "any", success: { status: 200, description: "Révisions, de la plus récente à la plus ancienne" }, errors: [401, 404] },
   { method: "get", path: "/api/v1/stacks/{id}/revisions/{revision}", summary: "Contenu d'une révision", tag: "Stacks", access: "any", success: { status: 200, description: "Compose, variables (masquées) et fichiers de la révision" }, errors: [401, 404] },
   { method: "get", path: "/api/v1/stacks/{id}/logs", summary: "Logs en direct (Server-Sent Events)", tag: "Stacks", access: "any", query: [{ name: "service", schema: { type: "string" }, description: "Service Compose ; tous si absent" }, { name: "tail", schema: { type: "integer", minimum: 0, maximum: 1000, default: 100 } }], success: { status: 200, description: "Flux `text/event-stream` : événements `lines` (tableau de lignes) et `end` (raison)", contentType: "text/event-stream" }, errors: [401, 404, 409, 429], description: "Flux borné (nombre, durée, débit). Les valeurs sont celles des conteneurs, non masquées." },
@@ -140,6 +141,7 @@ const ERROR_TEXT: Record<number, string> = {
   404: "Introuvable",
   409: "Conflit (révision, opération en cours, agent hors ligne…)",
   422: "Requête comprise mais refusée",
+  423: "Application générée et entretenue par la console (registry) : modification manuelle refusée",
   429: "Trop de tentatives",
 };
 

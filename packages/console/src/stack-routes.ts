@@ -122,6 +122,7 @@ interface StackListRow {
   deployed_revision: number | null;
   deployed_at: Date | null;
   updated_at: Date;
+  managed_by: string | null;
   inventory: Container[] | null;
   inventory_observed_at: Date | null;
 }
@@ -149,6 +150,8 @@ export function registerStackRoutes(
       hostName: r.host_name,
       hostPresence: deps.isOnline(r.host_id) ? "online" : "offline",
       description: r.description,
+      // Module qui génère et entretient cette application (contenu non modifiable à la main), ou null.
+      managedBy: r.managed_by,
       currentRevision: r.current_revision,
       deployedRevision: r.deployed_revision,
       // Configuration enregistrée mais pas (encore) déployée.
@@ -167,7 +170,7 @@ export function registerStackRoutes(
   };
 
   const STACK_SELECT = `SELECT s.id, s.name, s.host_id, h.name AS host_name, s.description,
-           s.current_revision, s.deployed_revision, s.deployed_at, s.updated_at,
+           s.current_revision, s.deployed_revision, s.deployed_at, s.updated_at, s.managed_by,
            h.inventory, h.inventory_observed_at
       FROM stacks s JOIN hosts h ON h.id = s.host_id`;
 

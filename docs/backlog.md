@@ -75,6 +75,10 @@ Limites connues : la rotation de la clé de restauration n'est pas implémentée
 4. Suivi des images : même tag différent contenu, nouveaux tags selon politique
 5. Abstraction registre, tests sur registre local contrôlé
 
+### Registre d'images privé — lot A (11 novembre 2026)
+
+Premier lot de la remédiation des images (`remediation.md`) : le registre d'abord. Fait : application `registry:3` générée et déployée comme une stack gérée derrière Traefik (onglet Paramètres → Registry), stacks « gérées » protégées contre l'édition manuelle (migration 023, `423 stack_managed`, détachement), compte unique avec mot de passe généré (bcrypt dans `auth/htpasswd`, secret chiffré dans les registres d'images), renouvellement, affichage des identifiants (administrateur, audité), test d'accès (DNS, certificat, 401 / 200). Vérifié sur Docker réel (`registry:3.0.0`) : Compose généré valide, accès anonyme et mauvais mot de passe refusés (401), `docker login`, push et pull réussis. Non vérifié de bout en bout : la chaîne Traefik + Let's Encrypt avec un vrai nom de domaine public. Reste : liste des images, rétention et nettoyage, séparation lecture / publication, verrouillage de l'application Traefik sur le même principe, puis le moteur de correctifs (Copa) et le parcours de remédiation.
+
 ## Phase 6 — Livraison
 
 État (6 novembre 2026) : **en cours**. Fait : revue de sécurité du §14 (écarts corrigés : demandes rejouées ou expirées refusées par l'agent, protection de la stack de la console et de l'agent contre leur propre interface ; section « Sécurité » du README). Reste : durcissement et tests de bout en bout, guide d'exploitation, exemples d'appels API.

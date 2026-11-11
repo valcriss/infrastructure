@@ -6,6 +6,7 @@ import DisplaySettings from "./settings/DisplaySettings.vue";
 import GitSettings from "./settings/GitSettings.vue";
 import SecuritySettings from "./settings/SecuritySettings.vue";
 import TerminalSettings from "./settings/TerminalSettings.vue";
+import RegistrySettings from "./settings/RegistrySettings.vue";
 import TraefikSettings from "./settings/TraefikSettings.vue";
 import UsersSettings from "./settings/UsersSettings.vue";
 import { useSession } from "../stores/session";
@@ -18,6 +19,7 @@ const ALL_TABS = [
   { key: "users", label: "Utilisateurs", icon: "users", adminOnly: true },
   { key: "terminal", label: "Terminal", icon: "terminal", adminOnly: true },
   { key: "traefik", label: "Traefik", icon: "route", adminOnly: true },
+  { key: "registry", label: "Registry", icon: "box", adminOnly: true },
 ] as const;
 
 const route = useRoute();
@@ -52,6 +54,7 @@ const select = (key: string) => router.replace({ path: "/settings", query: { tab
     <DisplaySettings v-else-if="tab === 'display'" />
     <UsersSettings v-else-if="tab === 'users'" />
     <TerminalSettings v-else-if="tab === 'terminal'" />
+    <RegistrySettings v-else-if="tab === 'registry'" @go-traefik="select('traefik')" />
     <TraefikSettings v-else />
   </div>
 </template>
