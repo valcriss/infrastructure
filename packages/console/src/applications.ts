@@ -1,7 +1,7 @@
 import { RESERVED_STACK_NAMES, listComposeServices, type Container, type SeverityCounts } from "@infra/shared";
 import { deriveStackStatus, type StackHealth } from "./dashboard.js";
 import type { Pool } from "./db.js";
-import type { ImageWatcher } from "./image-watch.js";
+import { currentChecks, type ImageWatcher } from "./image-watch.js";
 import { hiddenProjects } from "./display.js";
 import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
 import type { MetricsStore } from "./metrics-store.js";
@@ -122,7 +122,7 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
     observedUpdates.set(k, (observedUpdates.get(k) ?? 0) + 1);
   }
   const updates = new Map<string, number>();
-  for (const c of checks) if (c.kind === "update_available") updates.set(c.stackId, (updates.get(c.stackId) ?? 0) + 1);
+  for (const c of currentChecks(checks, usedImages)) if (c.kind === "update_available") updates.set(c.stackId, (updates.get(c.stackId) ?? 0) + 1);
 
   const imagesOf = (hostId: string, containers: Container[]): ApplicationImage[] => {
     const seen = new Map<string, ApplicationImage>();

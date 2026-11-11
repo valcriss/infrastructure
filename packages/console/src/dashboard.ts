@@ -1,7 +1,7 @@
 import { INVENTORY_INTERVAL_SEC, listComposeServices, type ComposeService, type Container, type HostInfo } from "@infra/shared";
 import type { SeverityCounts } from "@infra/shared";
 import type { BackupService, BackupStatus } from "./backup.js";
-import type { CheckDetail, ImageWatcher } from "./image-watch.js";
+import { currentChecks, type CheckDetail, type ImageWatcher } from "./image-watch.js";
 import { currentObservedChecks, type ObservedWatcher } from "./observed-watch.js";
 import { hiddenProjects } from "./display.js";
 import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
@@ -526,7 +526,7 @@ export class Dashboard {
       });
     }
     const visibleStacks = new Set(stackViews.map((v) => v.s.id));
-    const checks = allChecks.filter((c) => visibleStacks.has(c.stackId));
+    const checks = currentChecks(allChecks, usedImages).filter((c) => visibleStacks.has(c.stackId));
     // Projets non gérés (hors console, hors stack) : filtrés par hôte comme le reste, absents d'une vue par application.
     const observedChecks = filter.stackId ? [] : (await (this.deps.observedWatcher ? currentObservedChecks(pool, usedImages) : Promise.resolve([]))).filter(
       (c) => hostById.has(c.hostId) && !hidden.includes(c.project) && !managedProjects.has(`${c.hostId}:${c.project}`),

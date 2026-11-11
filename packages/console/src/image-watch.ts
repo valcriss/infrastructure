@@ -1,7 +1,7 @@
 import { listComposeServices, serviceBaseImage, type ImageInfo } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
-import { findLocalImage, loadUsedImages } from "./images.js";
+import { findLocalImage, loadUsedImages, type UsedImage } from "./images.js";
 import { localRepoDigest, parseImageRef } from "./image-ref.js";
 import { POLICIES, pickCandidates, validatePattern, type UpdatePolicy } from "./image-tags.js";
 import type { ManifestHead, Platform, RegistryClient, ResolvedManifest } from "./registry.js";
@@ -211,6 +211,19 @@ export interface CheckRow {
   detail: CheckDetail | null;
   error: string | null;
   lastSuccessAt: Date | null;
+}
+
+/**
+ * Vérifications d'une stack qui valent encore : celles obtenues pour une autre référence que celle qui tourne (tag
+ * modifié depuis) sont écartées, comme dans l'onglet Versions. Un service construit garde la sienne (image de base).
+ */
+export function currentChecks<T extends { stackId: string; service: string; detail: CheckDetail | null }>(checks: T[], used: UsedImage[]): T[] {
+  const refOf = new Map<string, string>();
+  for (const img of used) for (const u of img.usedBy) if (u.stackId && u.service && !refOf.has(`${u.stackId}|${u.service}`)) refOf.set(`${u.stackId}|${u.service}`, u.ref);
+  return checks.filter((c) => {
+    const current = refOf.get(`${c.stackId}|${c.service}`);
+    return !c.detail?.ref || c.detail.built !== undefined || current === undefined || c.detail.ref === current;
+  });
 }
 
 export interface PolicyRow {

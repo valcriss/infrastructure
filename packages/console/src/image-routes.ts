@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
-import type { CheckDetail, ImageWatcher } from "./image-watch.js";
+import { currentChecks, type CheckDetail, type ImageWatcher } from "./image-watch.js";
 import { currentObservedChecks } from "./observed-watch.js";
 import { POLICIES } from "./image-tags.js";
 import { briefOf, loadUsedImages, isScanStale, scanState, type UsedImage } from "./images.js";
@@ -139,7 +139,7 @@ export function registerImageRoutes(
     const position = new Map(queue.pending.map((p, i) => [`${p.imageId}|${p.platform}`, i + 1]));
     // Mises à jour disponibles, rattachées aux services (stack gérée ou projet observé) qui utilisent chaque image.
     const managed = new Map<string, CheckDetail>();
-    for (const c of await watcher.allChecks()) if (c.kind === "update_available" && c.detail) managed.set(`${c.stackId}|${c.service}`, c.detail);
+    for (const c of currentChecks(await watcher.allChecks(), images)) if (c.kind === "update_available" && c.detail) managed.set(`${c.stackId}|${c.service}`, c.detail);
     const observed = new Map<string, CheckDetail>();
     for (const c of await currentObservedChecks(pool, images)) if (c.kind === "update_available" && c.detail) observed.set(`${c.hostId}|${c.project}|${c.service}`, c.detail);
     const updatesOf = (img: UsedImage): ImageUpdate[] => {
