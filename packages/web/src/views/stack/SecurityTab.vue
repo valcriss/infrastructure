@@ -6,6 +6,8 @@ import UpdateBadge from "../../components/UpdateBadge.vue";
 import { ago, api, describeError, fmtDate, shortId, type StackDetail, type StackImageComponent, type UpdatePolicyName } from "../../api";
 import CandidateCompare from "../../components/CandidateCompare.vue";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
+import DeployDialog from "../../components/DeployDialog.vue";
+import OperationLog from "../../components/OperationLog.vue";
 import CveHistoryChart from "../../components/CveHistoryChart.vue";
 import { useSession } from "../../stores/session";
 import ScanBadge from "../../components/ScanBadge.vue";
@@ -70,6 +72,21 @@ Motif (facultatif, ex. incompatible avec les données) :`, "");
   } catch (err) {
     error.value = describeError(err);
   }
+}
+
+// Mise à jour d'un même tag : redéploie la révision en service en téléchargeant les images (boîte de déploiement).
+const updateService = ref<string | null>(null);
+const updateOperationId = ref("");
+const canUpdate = (service: string): boolean => session.canOperate && props.stack.deployedRevision !== null && props.stack.hostPresence !== "offline" && !!service;
+function onUpdateStarted(id: string) {
+  updateService.value = null;
+  updateOperationId.value = id;
+  info.value = "";
+}
+
+function onUpdateFinished() {
+  emit("changed");
+  void load();
 }
 
 const policyLabel = (p: UpdatePolicyName): string => POLICY_LABELS[p];
@@ -157,10 +174,13 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <p v-else-if="c.check.kind === 'pinned'" class="text-slate-600">Image épinglée par digest.</p>
             <p v-else-if="c.check.kind === 'local'" class="text-slate-600">Image locale : aucune comparaison avec un registre.</p>
             <template v-else-if="c.check.kind === 'update_available'">
-              <p v-if="c.check.detail.contentChanged" class="text-amber-700">
-                Le tag « {{ c.check.detail.tag }} » pointe vers un nouveau contenu dans le registre.
-                <template v-if="c.check.detail.built">Redéployez avec « Télécharger les images » pour reconstruire l'image sur cette nouvelle base.</template>
-              </p>
+              <div v-if="c.check.detail.contentChanged" class="flex flex-wrap items-center gap-3">
+                <p class="text-amber-700">
+                  Le tag « {{ c.check.detail.tag }} » pointe vers un nouveau contenu dans le registre.
+                  <template v-if="c.check.detail.built">La mise à jour reconstruit l'image sur cette nouvelle base.</template>
+                </p>
+                <button v-if="canUpdate(c.service)" class="rounded border border-amber-400 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100" @click="updateService = c.service">Mettre à jour…</button>
+              </div>
               <div v-if="c.check.detail.candidates.length">
                 <p class="text-amber-700">Versions plus récentes{{ c.check.detail.uncertain ? " (candidats incertains)" : "" }} :</p>
                 <ul class="mt-1 flex flex-wrap gap-2">
@@ -190,6 +210,15 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <CandidateCompare :stack-id="stack.id" :service="c.service" :refresh-key="c.check?.checkedAt ?? null" @changed="emit('changed')" />
       <p class="text-[11px] text-slate-400">Dernière tentative : {{ c.image.scan.lastAttempt ? fmtDate(c.image.scan.lastAttempt.finishedAt ?? c.image.scan.lastAttempt.createdAt) : "aucune" }}</p>
     </article>
+    <DeployDialog
+      v-if="updateService && stack.deployedRevision !== null"
+      :stack="stack"
+      :target="stack.deployedRevision"
+      :update="{ service: updateService }"
+      @close="updateService = null"
+      @started="onUpdateStarted"
+    />
+    <OperationLog v-if="updateOperationId" :operation-id="updateOperationId" :stack-id="stack.id" @finished="onUpdateFinished" />
     <TrackingRuleDialog
       v-if="ruleComponent"
       :key="ruleComponent.service"

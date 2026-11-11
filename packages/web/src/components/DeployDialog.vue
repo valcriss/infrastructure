@@ -5,10 +5,11 @@ import RevisionDiff from "./RevisionDiff.vue";
 
 // Confirmation d'un déploiement : on voit exactement ce qui va être appliqué (application, hôte, révision en service,
 // révision cible, différences) et la révision confirmée est celle qui est envoyée, même si une autre est enregistrée entre-temps.
-const props = defineProps<{ stack: StackDetail; target: number }>();
+// `update` : mise à jour d'une image dont le contenu a changé derrière le même tag (téléchargement coché d'office).
+const props = defineProps<{ stack: StackDetail; target: number; update?: { service: string } }>();
 const emit = defineEmits<{ close: []; started: [operationId: string] }>();
 
-const pull = ref(false);
+const pull = ref(!!props.update);
 const force = ref(false);
 const showDiff = ref(false);
 const busy = ref(false);
@@ -20,8 +21,8 @@ const kind = computed<"first" | "apply" | "redeploy" | "rollback">(() => {
   if (props.target === deployed.value) return "redeploy";
   return props.target > deployed.value ? "apply" : "rollback";
 });
-const title = computed(() => ({ first: "Premier déploiement", apply: "Déployer", redeploy: "Redéployer", rollback: "Revenir à une révision antérieure" })[kind.value]);
-const confirmLabel = computed(() => ({ first: "Premier déploiement", apply: "Déployer", redeploy: "Redéployer", rollback: "Revenir à" })[kind.value] + ` la révision ${props.target}`);
+const title = computed(() => (props.update ? "Mettre à jour" : ({ first: "Premier déploiement", apply: "Déployer", redeploy: "Redéployer", rollback: "Revenir à une révision antérieure" })[kind.value]));
+const confirmLabel = computed(() => (props.update ? "Mettre à jour" : ({ first: "Premier déploiement", apply: "Déployer", redeploy: "Redéployer", rollback: "Revenir à" })[kind.value] + ` la révision ${props.target}`));
 // Une révision plus récente a été enregistrée depuis l'ouverture de la boîte : on le dit, la révision confirmée reste inchangée.
 const newer = computed(() => (props.stack.currentRevision > props.target ? props.stack.currentRevision : null));
 
@@ -77,7 +78,10 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
         <p v-if="kind === 'rollback'" class="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
           Vous revenez à une révision plus ancienne que celle en service : sa configuration est réappliquée, les données ne sont pas restaurées.
         </p>
-        <p v-if="kind === 'redeploy'" class="text-slate-600">
+        <p v-if="update" class="rounded border border-blue-300 bg-blue-50 p-3 text-blue-900">
+          Le tag de « {{ update.service }} » pointe vers un nouveau contenu dans le registre. Les images de l'application sont téléchargées, puis les conteneurs dont l'image a changé sont recréés : brève interruption de ces services. La configuration (révision {{ target }}) ne change pas.
+        </p>
+        <p v-else-if="kind === 'redeploy'" class="text-slate-600">
           La configuration ne change pas : Docker Compose ne recrée que les conteneurs dont la configuration ou l'image diffère (voir les options avancées).
         </p>
 
