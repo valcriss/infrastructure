@@ -25,6 +25,7 @@ import { planRemoval } from "./removal.js";
 import { MetricsCollector } from "./metrics.js";
 import { Pruner } from "./pruner.js";
 import { TrivyScanner } from "./scanner.js";
+import { StorageMeter } from "./storage.js";
 
 interface Credentials {
   agentId: string;
@@ -78,6 +79,7 @@ export class AgentClient {
   private readonly prober: Prober;
   private readonly containerActions: ContainerActions;
   private readonly scanner: TrivyScanner;
+  private readonly storage: StorageMeter;
   /** Écart entre l'horloge de la console et celle de l'hôte (mesuré à la connexion), pour l'échéance des demandes. */
   private clockOffsetMs = 0;
   private readonly guard = new ReplayGuard(() => Date.now() + this.clockOffsetMs);
@@ -111,6 +113,7 @@ export class AgentClient {
     this.terminals = new TerminalManager(config.dockerSocket, (project) => this.protection.isProtected(project));
     this.containerActions = new ContainerActions(config.dockerSocket, (project) => this.protection.isProtected(project));
     this.logs = new LogStreamer({ workspaceDir: config.workspaceDir, dockerSocket: config.dockerSocket });
+    this.storage = new StorageMeter({ socket: config.dockerSocket, selfContainer: config.selfContainer, fallbackImage: config.trivyImage });
     this.scanner = new TrivyScanner({
       workspaceDir: config.workspaceDir,
       dockerSocket: config.dockerSocket,
@@ -390,6 +393,15 @@ export class AgentClient {
             }
             case "request_disk_usage":
               void sendDiskUsage();
+              break;
+            case "request_storage":
+              // En tâche de fond : un `du` peut durer plusieurs minutes ; le résultat repasse par emit().
+              void this.storage
+                .measure(msg.requestId, msg.volumes, msg.binds)
+                .then((result) => {
+                  if (result) this.emit(result);
+                })
+                .catch((err: unknown) => this.log(`mesure des montages impossible : ${(err as Error).message}`));
               break;
             case "prune": {
               const verdict = this.guard.check(msg.operationId, msg.expiresAt);

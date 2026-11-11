@@ -59,7 +59,7 @@ const viewMode = ref<ViewMode>(readJson<unknown>(VIEW_KEY, "tiles") === "list" ?
 watch(viewMode, (v) => writeJson(VIEW_KEY, v));
 
 // Tri de la vue liste (un clic sur un en-tête : croissant, deuxième clic : décroissant).
-type SortKey = "name" | "status" | "cpu" | "mem" | "vulns" | "deploy";
+type SortKey = "name" | "status" | "cpu" | "mem" | "storage" | "vulns" | "deploy";
 const sortKey = ref<SortKey>("name");
 const sortDir = ref<1 | -1>(1);
 function sortBy(key: SortKey) {
@@ -77,6 +77,7 @@ function sortValue(a: Application, key: SortKey): string | number {
     case "status": return STATUS_ORDER[a.status];
     case "cpu": return a.usage?.cpuPercent ?? -1;
     case "mem": return a.usage?.memBytes ?? -1;
+    case "storage": return a.storageBytes ?? -1;
     case "vulns": {
       const c = vulns(a).counts;
       return c.critical * 1e9 + c.high * 1e6 + c.medium * 1e3 + c.low;
@@ -259,7 +260,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
       <table class="w-full min-w-[640px] text-left text-sm">
         <thead class="border-b border-slate-200 bg-slate-50 text-xs text-slate-600">
           <tr>
-            <th v-for="col in ([['name', 'Application', ''], ['status', 'État', ''], ['cpu', 'CPU', 'hidden md:table-cell'], ['mem', 'Mémoire', 'hidden md:table-cell'], ['vulns', 'Vulnérabilités', 'hidden lg:table-cell'], ['deploy', 'Déployée', 'hidden xl:table-cell']] as const)" :key="col[0]" scope="col" :class="['px-3 py-2 font-medium', col[2]]" :aria-sort="sortKey === col[0] ? (sortDir === 1 ? 'ascending' : 'descending') : 'none'">
+            <th v-for="col in ([['name', 'Application', ''], ['status', 'État', ''], ['cpu', 'CPU', 'hidden md:table-cell'], ['mem', 'Mémoire', 'hidden md:table-cell'], ['storage', 'Stockage', 'hidden md:table-cell'], ['vulns', 'Vulnérabilités', 'hidden lg:table-cell'], ['deploy', 'Déployée', 'hidden xl:table-cell']] as const)" :key="col[0]" scope="col" :class="['px-3 py-2 font-medium', col[2]]" :aria-sort="sortKey === col[0] ? (sortDir === 1 ? 'ascending' : 'descending') : 'none'">
               <button type="button" class="inline-flex items-center gap-1 hover:text-slate-900" @click="sortBy(col[0])">
                 {{ col[1] }}
                 <FaIcon v-if="sortKey === col[0]" :icon="['fas', sortDir === 1 ? 'chevron-up' : 'chevron-down']" class="text-[10px]" />
@@ -309,6 +310,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
               <span v-else class="text-slate-400">—</span>
             </td>
             <td class="hidden px-3 py-2 tabular-nums md:table-cell">{{ a.usage ? formatBytes(a.usage.memBytes) : "—" }}</td>
+            <td class="hidden px-3 py-2 tabular-nums md:table-cell" title="Taille sur le disque des volumes et dossiers montés (mesurée par l'agent)">{{ a.storageBytes !== null ? formatBytes(a.storageBytes) : "—" }}</td>
             <td class="hidden px-3 py-2 lg:table-cell">
               <SeverityBadges v-if="a.images.length" :state="vulns(a).state" :counts="vulns(a).counts" />
               <span v-else class="text-xs text-slate-500">Aucune image</span>
@@ -400,6 +402,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
         <div v-if="a.usage" class="mt-3 space-y-2">
           <MeterBar label="CPU" icon="microchip" :percent="Math.min(100, a.usage.cpuPercent)" :detail="`${a.usage.cpuPercent.toFixed(1)} % d'un cœur`" />
           <p class="flex items-center gap-1.5 text-xs text-slate-600"><FaIcon :icon="['fas', 'memory']" class="text-slate-400" /> Mémoire : <span class="font-medium tabular-nums">{{ formatBytes(a.usage.memBytes) }}</span></p>
+          <p v-if="a.storageBytes !== null" class="flex items-center gap-1.5 text-xs text-slate-600"><FaIcon :icon="['fas', 'hard-drive']" class="text-slate-400" /> Stockage : <span class="font-medium tabular-nums">{{ formatBytes(a.storageBytes) }}</span></p>
         </div>
 
         <div class="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs">

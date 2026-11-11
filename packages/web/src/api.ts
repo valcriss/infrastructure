@@ -485,6 +485,8 @@ export interface Application {
   usage: { cpuPercent: number; memBytes: number } | null;
   images: ApplicationImage[];
   updatesAvailable: number;
+  /** Taille sur le disque des volumes et dossiers montés ; null tant que rien n'a été mesuré. */
+  storageBytes: number | null;
   currentRevision: number | null;
   deployedRevision: number | null;
   pendingDeploy: boolean;
@@ -719,4 +721,24 @@ export interface RemovalPlanView {
   busy: boolean;
   host: RemovalHostPlan | { available: false; reason: string };
   console: { revisions: number; operations: number; imageChecks: number };
+}
+
+// --- Stockage -----------------------------------------------------------------------------------------
+
+/** Un volume ou dossier monté (distinct), avec les services qui l'utilisent et sa taille sur le disque. */
+export interface StorageItem {
+  kind: "volume" | "bind" | "tmpfs";
+  source: string | null;
+  usedBy: { service: string; container: string; destination: string; rw: boolean }[];
+  sizeBytes: number | null;
+  note: string | null;
+  measuredAt: string | null;
+}
+
+export interface StorageView {
+  items: StorageItem[];
+  totalBytes: number | null;
+  unmeasured: number;
+  measuredAt: string | null;
+  measuring: boolean;
 }

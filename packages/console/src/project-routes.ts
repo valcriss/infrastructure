@@ -6,6 +6,7 @@ import type { Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { listObservedVersions } from "./observed-versions.js";
 import type { ObservedWatcher } from "./observed-watch.js";
+import { buildStorage, loadSizes, type StorageService } from "./storage.js";
 import { loadUsedImages } from "./images.js";
 import { POLICIES } from "./image-tags.js";
 import { serveLogStream } from "./log-sse.js";
@@ -27,6 +28,7 @@ export function registerProjectRoutes(
     pool: Pool;
     auth: Guard;
     observedWatcher: ObservedWatcher;
+    storage: StorageService;
     metrics: MetricsStore;
     logStreams: LogStreams;
     applications: () => Promise<Application[]>;
@@ -50,6 +52,26 @@ export function registerProjectRoutes(
     const application = (await deps.applications()).find((a) => a.hostId === id && a.name === name);
     if (!application) throw new HttpError(404, "project_not_found", "Projet introuvable sur cet hôte");
     return { application, containers };
+  });
+
+  // Stockage : montages (volumes nommés, dossiers « bind ») avec leur taille sur le disque, mesurée par l'agent.
+  const storageView = async (id: string, name: string): Promise<unknown> => {
+    const containers = await observed(id, name);
+    const sizes = (await loadSizes(pool, id)).get(id) ?? new Map();
+    return { ...buildStorage(containers, sizes), measuring: deps.storage.isMeasuring(id) };
+  };
+
+  app.get("/api/v1/hosts/:id/projects/:name/storage", { preHandler: auth }, async (request) => {
+    const { id, name } = Params.parse(request.params);
+    return storageView(id, name);
+  });
+
+  app.post("/api/v1/hosts/:id/projects/:name/storage/measure", { preHandler: auth }, async (request, reply) => {
+    const { id, name } = Params.parse(request.params);
+    const containers = await observed(id, name);
+    // Asynchrone : un dossier volumineux peut demander plusieurs minutes ; le résultat se lit avec GET …/storage.
+    await deps.storage.request(id, containers);
+    return reply.code(202).send(await storageView(id, name));
   });
 
   // Historique des changements de version d'image des services (projets non gérés ; conservé après la prise en charge).

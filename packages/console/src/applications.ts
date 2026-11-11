@@ -6,6 +6,7 @@ import { hiddenProjects } from "./display.js";
 import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
 import type { MetricsStore } from "./metrics-store.js";
 import { currentObservedChecks } from "./observed-watch.js";
+import { buildStorage, loadSizes } from "./storage.js";
 import type { ScanService } from "./scans.js";
 import { getSecuritySettings, reportedCounts } from "./settings.js";
 
@@ -34,6 +35,8 @@ export interface Application {
   usage: { cpuPercent: number; memBytes: number } | null;
   images: ApplicationImage[];
   updatesAvailable: number;
+  /** Taille sur le disque des volumes et dossiers montés (mesurée par l'agent) ; null tant que rien n'a été mesuré. */
+  storageBytes: number | null;
   currentRevision: number | null;
   deployedRevision: number | null;
   pendingDeploy: boolean;
@@ -152,6 +155,9 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
     unhealthy: containers.filter((c) => c.state === "running" && c.health === "unhealthy").length,
   });
 
+  const allSizes = await loadSizes(pool);
+  const storageOf = (hostId: string, containers: Container[]): number | null => buildStorage(containers, allSizes.get(hostId) ?? new Map()).totalBytes;
+
   const out: Application[] = [];
   for (const h of hostRows.rows) {
     const online = deps.isOnline(h.id);
@@ -185,6 +191,7 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
         usage: u ? { cpuPercent: Math.round(u.cpu * 100) / 100, memBytes: u.mem } : null,
         images: imagesOf(h.id, containers),
         updatesAvailable: updates.get(s.id) ?? 0,
+        storageBytes: storageOf(h.id, containers),
         currentRevision: s.current_revision,
         deployedRevision: s.deployed_revision,
         pendingDeploy: s.deployed_revision !== s.current_revision,
@@ -212,6 +219,7 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
         usage: u ? { cpuPercent: Math.round(u.cpu * 100) / 100, memBytes: u.mem } : null,
         images: imagesOf(h.id, containers),
         updatesAvailable: observedUpdates.get(`${h.id}|${name}`) ?? 0,
+        storageBytes: storageOf(h.id, containers),
         currentRevision: null,
         deployedRevision: null,
         pendingDeploy: false,

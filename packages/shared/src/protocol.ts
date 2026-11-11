@@ -321,7 +321,23 @@ export const DiskUsageMessageSchema = z.object({
 });
 export type DiskUsageMessage = z.infer<typeof DiskUsageMessageSchema>;
 
-export const PRUNE_PHASES = ["containers", "networks", "images", "volumes", "buildCache"] as const;
+export const MAX_STORAGE_VOLUMES = 200;
+export const MAX_STORAGE_BINDS = 100;
+
+/**
+ * Taille sur le disque des montages d'un hôte : volumes nommés (d'après `/system/df`) et dossiers ou fichiers « bind »
+ * (mesurés par un conteneur éphémère en lecture seule). Une taille `null` = non mesurée (`note` en donne la raison).
+ */
+export const StorageUsageMessageSchema = z.object({
+  type: z.literal("storage_usage"),
+  requestId: z.string().max(80),
+  observedAt: z.iso.datetime(),
+  volumes: z.array(z.object({ name: z.string().max(255), sizeBytes: z.number().min(0).nullable() })).max(MAX_STORAGE_VOLUMES),
+  binds: z.array(z.object({ path: z.string().max(500), sizeBytes: z.number().min(0).nullable(), note: z.string().max(200).optional() })).max(MAX_STORAGE_BINDS),
+});
+export type StorageUsageMessage = z.infer<typeof StorageUsageMessageSchema>;
+
+export const PRUNE_PHASES =["containers", "networks", "images", "volumes", "buildCache"] as const;
 export type PrunePhase = (typeof PRUNE_PHASES)[number];
 
 /** Avancement d'un nettoyage : phase en cours, élément en cours de suppression, compteurs. Envoyé à intervalles réguliers. */
@@ -417,6 +433,7 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   MetricsMessageSchema,
   ScanResultSchema,
   DiskUsageMessageSchema,
+  StorageUsageMessageSchema,
   PruneProgressSchema,
   PruneResultSchema,
   OperationLogSchema,
@@ -455,6 +472,16 @@ export const ErrorMessageSchema = z.object({
 
 export const RequestInventorySchema = z.object({ type: z.literal("request_inventory") });
 export const RequestDiskUsageSchema = z.object({ type: z.literal("request_disk_usage") });
+/**
+ * Mesure de montages. L'agent ne mesure un chemin que s'il est la source d'un montage « bind » d'un conteneur existant :
+ * la console ne peut pas lui faire parcourir un dossier quelconque.
+ */
+export const RequestStorageSchema = z.object({
+  type: z.literal("request_storage"),
+  requestId: z.string().max(80),
+  volumes: z.array(z.string().max(255)).max(MAX_STORAGE_VOLUMES),
+  binds: z.array(z.string().max(500)).max(MAX_STORAGE_BINDS),
+});
 
 /** Éléments à supprimer, désignés un par un : l'agent ne supprime que ce qui reste candidat au moment de l'exécution. */
 export const PruneSchema = z.object({
@@ -619,6 +646,7 @@ export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   ErrorMessageSchema,
   RequestInventorySchema,
   RequestDiskUsageSchema,
+  RequestStorageSchema,
   PruneSchema,
   RunSchema,
   ScanSchema,

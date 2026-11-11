@@ -6,6 +6,7 @@ import CopyButton from "../components/CopyButton.vue";
 import CveHistoryChart from "../components/CveHistoryChart.vue";
 import MeterBar from "../components/MeterBar.vue";
 import PanelCard from "../components/PanelCard.vue";
+import StoragePanel from "../components/StoragePanel.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
 import VulnerabilityTable from "../components/VulnerabilityTable.vue";
 import LogsTab from "./stack/LogsTab.vue";
@@ -177,20 +178,12 @@ async function scan(imageId: string, platform: string, ref: string) {
                   <td class="px-4 py-3 text-xs">{{ (c.networks ?? []).join(", ") || "—" }}</td>
                   <td class="px-4 py-3 text-xs tabular-nums">{{ c.restartCount ?? 0 }}</td>
                 </tr>
-                <tr v-if="c.mounts?.length" class="bg-slate-50">
-                  <td colspan="6" class="px-4 py-2 text-xs text-slate-600">
-                    <button class="underline" :aria-expanded="!!open[c.id]" @click="open[c.id] = !open[c.id]">{{ open[c.id] ? "Masquer" : "Voir" }} les {{ c.mounts.length }} montage(s)</button>
-                    <ul v-if="open[c.id]" class="mt-2 space-y-1 font-mono">
-                      <li v-for="m in c.mounts" :key="m.destination">
-                        <span class="text-slate-400">{{ m.type }}</span> {{ m.source ?? "?" }} → {{ m.destination }} <span class="text-slate-400">({{ m.rw ? "lecture-écriture" : "lecture seule" }})</span>
-                      </li>
-                    </ul>
-                  </td>
-                </tr>
               </template>
             </tbody>
           </table>
         </section>
+
+        <StoragePanel :host-id="hostId" :project="name" :offline="app.hostPresence === 'offline'" />
       </template>
 
       <template v-else-if="tab === 'security'">

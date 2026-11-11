@@ -27,6 +27,7 @@ import { ScanService } from "./scans.js";
 import { listApplications } from "./applications.js";
 import { registerDashboardRoutes } from "./dashboard-routes.js";
 import { PruneService } from "./host-prune.js";
+import { StorageService } from "./storage.js";
 import { registerHostDiskRoutes } from "./host-disk-routes.js";
 import { registerProjectRoutes } from "./project-routes.js";
 import { MetricsStore } from "./metrics-store.js";
@@ -96,6 +97,7 @@ export interface BuiltApp {
   pruning: PruneService;
   watcher: ImageWatcher;
   observedWatcher: ObservedWatcher;
+  storage: StorageService;
   /** Routes HTTP enregistrées (`METHODE chemin-openapi`), pour vérifier la documentation. */
   routes: string[];
 }
@@ -459,6 +461,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const removalPlans = new RemovalPlanService(gateway);
   app.addHook("onClose", async () => terminals.closeAll());
   const pruning = new PruneService(pool, gateway);
+  const storage = new StorageService(pool, gateway, { error: (o, m) => app.log.error(o as object, m) });
   gateway.setHandlers({
     onLog: (hostId, operationId, text) => ops.onLog(hostId, operationId, text),
     onResult: (hostId, msg) => ops.onResult(hostId, msg),
@@ -471,6 +474,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       await ops.onDisconnect(hostId);
       await scans.onDisconnect(hostId);
       await pruning.onDisconnect(hostId);
+      storage.onDisconnect(hostId);
     },
     onLogChunk: (hostId, streamId, lines) => logStreams.onChunk(hostId, streamId, lines),
     onLogEnd: (hostId, streamId, reason) => logStreams.onEnd(hostId, streamId, reason),
@@ -484,6 +488,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       await metrics.ingest(hostId, samples, host);
     },
     onScanResult: (hostId, result) => scans.onResult(hostId, result),
+    onStorageUsage: (hostId, msg) => storage.onResult(hostId, msg),
     onPruneResult: (hostId, result) => pruning.onResult(hostId, result),
     onPruneProgress: (hostId, progress) => pruning.onProgress(hostId, progress),
     onConnect: () => scans.pumpAny(),
@@ -508,13 +513,14 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     candidates.close();
     watcher.close();
     observedWatcher.close();
+    storage.close();
   });
   const dashboard = new Dashboard({ pool, metrics, backup, scans, watcher, observedWatcher, isOnline: (id) => gateway.isOnline(id) });
   registerImageRoutes(app, { pool, session: auth, apiAuth, scans, watcher, registries, registryClient, isOnline: (id) => gateway.isOnline(id) });
   registerHostDiskRoutes(app, { auth: apiAuth, session: auth, pruning });
   registerTraefikRoutes(app, { pool, auth: apiAuth, isOnline: (id) => gateway.isOnline(id) });
   registerTraefikDynamicRoutes(app, { pool, auth: apiAuth });
-  registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
+  registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, storage, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
   registerTokenRoutes(app, { pool, auth });
@@ -546,5 +552,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, scans, candidates, pruning, watcher, observedWatcher, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, candidates, pruning, watcher, observedWatcher, storage, routes };
 }

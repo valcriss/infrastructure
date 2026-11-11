@@ -12,6 +12,7 @@ import {
   type PruneProgress,
   type PruneResult,
   type ScanResult,
+  type StorageUsageMessage,
   type OperationResultSchema,
   type ToolsResultSchema,
   type ImagePullResultSchema,
@@ -43,6 +44,7 @@ export interface GatewayHandlers {
   onTerminalEnd(hostId: string, sessionId: string, reason: string, exitCode?: number): void;
   onMetrics(hostId: string, samples: MetricSample[], host?: HostMetrics): Promise<void>;
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
+  onStorageUsage(hostId: string, msg: StorageUsageMessage): Promise<void>;
   onPruneResult(hostId: string, result: PruneResult): Promise<void>;
   onPruneProgress(hostId: string, progress: PruneProgress): Promise<void>;
   /** Un agent vient de se connecter (ou reconnecter) : de quoi relancer ce qui attend (file de scans). */
@@ -192,6 +194,9 @@ export class AgentGateway {
             break;
           case "disk_usage":
             await this.pool.query("UPDATE hosts SET disk_usage = $2, disk_usage_at = now() WHERE id = $1", [hostId, JSON.stringify(msg)]);
+            break;
+          case "storage_usage":
+            await this.handlers?.onStorageUsage(hostId, msg);
             break;
           case "prune_progress":
             await this.handlers?.onPruneProgress(hostId, msg);

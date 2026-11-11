@@ -9,6 +9,7 @@ import DeleteStackDialog from "../../components/DeleteStackDialog.vue";
 import DeployDialog from "../../components/DeployDialog.vue";
 import HealthcheckDialog from "../../components/HealthcheckDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
+import StoragePanel from "../../components/StoragePanel.vue";
 import RevisionDiff from "../../components/RevisionDiff.vue";
 import TraefikExposeDialog, { type TraefikService, type TraefikSettingsView } from "../../components/TraefikExposeDialog.vue";
 import { useSession } from "../../stores/session";
@@ -306,6 +307,8 @@ Supprimer…
         </tbody>
       </table>
     </section>
+
+    <StoragePanel :host-id="stack.hostId" :project="stack.name" :offline="offline" />
 
     <section v-if="traefik?.settings" class="rounded-lg border border-slate-200 bg-white">
       <h2 class="flex items-center gap-2 border-b border-slate-200 px-4 py-2 font-semibold"><FaIcon :icon="['fas', 'route']" class="text-slate-400" /> Exposition par Traefik</h2>
