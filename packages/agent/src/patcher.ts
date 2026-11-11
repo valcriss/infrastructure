@@ -139,7 +139,7 @@ export function copaPatchArgs(cfg: Pick<PatcherConfig, "patcherImage" | "trivyMe
     "-e", "DOCKER_CONFIG=/dockercfg", "-v", `${dir}/dockercfg:/dockercfg:ro`, "-v", `${dir}:/work`,
     cfg.patcherImage, "patch",
     "--image", ref, "--report", "/work/copa-report.json", "--tag", patchedTag,
-    "--addr", `tcp://localhost:${BUILDKIT_PORT}`, "--push", "--progress", "quiet",
+    "--addr", `tcp://localhost:${BUILDKIT_PORT}`, "--push", "--progress", "plain",
     "--format", "openvex", "--output", "/work/vex.json",
     "--timeout", `${Math.max(1, Math.floor(timeoutSec))}s`,
   ];
