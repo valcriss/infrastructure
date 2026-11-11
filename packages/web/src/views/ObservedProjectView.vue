@@ -221,7 +221,7 @@ async function scan(imageId: string, platform: string, ref: string) {
         <p class="text-xs text-slate-500" :title="fmtDate(new Date(now).toISOString())">Actualisé {{ ago(new Date(now).toISOString()) }}.</p>
       </template>
 
-      <VersionsTab v-else-if="tab === 'versions'" :project="project" />
+      <VersionsTab v-else-if="tab === 'versions'" :project="project" :compose="{ dir: origin?.composeWorkingDir, files: origin?.composeConfigFiles }" />
       <MetricsTab v-else-if="tab === 'metrics'" :stack="stackLike" :project="project" />
       <LogsTab v-else-if="tab === 'logs'" :stack="stackLike" :project="project" />
       <TerminalPanel v-else-if="tab === 'terminal'" :host-id="hostId" :containers="containers" />

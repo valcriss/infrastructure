@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import CopyButton from "../../components/CopyButton.vue";
 import ToolsMenu, { type ToolItem } from "../../components/ToolsMenu.vue";
 import TrackingRuleDialog from "../../components/TrackingRuleDialog.vue";
 import UpdateBadge from "../../components/UpdateBadge.vue";
@@ -9,7 +10,16 @@ import { useSession } from "../../stores/session";
 
 // Versions d'un projet observé : mises à jour disponibles (mêmes règles de suivi qu'une stack gérée, rien n'est
 // déployé) et historique des changements d'image, un changement d'étiquette ou de contenu par ligne.
-const props = defineProps<{ project: { hostId: string; name: string } }>();
+const props = defineProps<{ project: { hostId: string; name: string }; compose?: { dir?: string | undefined; files?: string | undefined } }>();
+
+const sh = (s: string): string => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+/** Commande à lancer sur l'hôte pour mettre à jour un service (la console ne déploie pas les projets observés). */
+function updateCommand(service: string): string {
+  const files = (props.compose?.files ?? "").split(",").map((f) => f.trim()).filter(Boolean);
+  const base = ["docker", "compose", "-p", sh(props.project.name), ...files.flatMap((f) => ["-f", sh(f)])].join(" ");
+  const cd = !files.length && props.compose?.dir ? `cd ${sh(props.compose.dir)} && ` : "";
+  return `${cd}${base} pull ${sh(service)} && ${base} up -d --no-deps ${sh(service)}`;
+}
 
 interface Version { id: string; service: string; image: string; imageId: string; digest: string | null; observedAt: string }
 type Component = Omit<StackImageComponent, "image">;
@@ -113,7 +123,11 @@ const short = (id: string): string => (id.startsWith("sha256:") ? id.slice(7, 19
               <p v-else-if="c.check.kind === 'pinned'" class="text-slate-600">Image épinglée par digest.</p>
               <p v-else-if="c.check.kind === 'local'" class="text-slate-600">Image locale : aucune comparaison avec un registre.</p>
               <template v-else-if="c.check.kind === 'update_available'">
-                <p v-if="c.check.detail.contentChanged" class="text-amber-700">Le tag « {{ c.check.detail.tag }} » pointe vers un nouveau contenu dans le registre.</p>
+                <div v-if="c.check.detail.contentChanged" class="space-y-1">
+                  <p class="text-amber-700">Le tag « {{ c.check.detail.tag }} » pointe vers un nouveau contenu dans le registre.</p>
+                  <p class="text-xs text-slate-500">La console ne déploie pas ce projet. Pour mettre à jour ce service, lancez sur l'hôte (le conteneur est recréé, brève interruption) :</p>
+                  <p class="flex items-start gap-1"><code class="block flex-1 break-all rounded bg-slate-100 px-2 py-1 font-mono text-xs">{{ updateCommand(c.service) }}</code><CopyButton :text="updateCommand(c.service)" :label="`Copier la commande de mise à jour de ${c.service}`" /></p>
+                </div>
                 <div v-if="c.check.detail.candidates.length">
                   <p class="text-amber-700">Versions plus récentes{{ c.check.detail.uncertain ? " (candidats incertains)" : "" }} :</p>
                   <ul class="mt-1 flex flex-wrap gap-2">
