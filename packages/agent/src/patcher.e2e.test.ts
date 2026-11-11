@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEFAULT_BUILDKIT_IMAGE } from "./config.js";
+import { DEFAULT_BUILDKIT_IMAGE, DEFAULT_BUILDKIT_PRIVILEGED_IMAGE } from "./config.js";
 import { dockerGet } from "./docker.js";
 import { dockerEnv, runCommand } from "./exec.js";
 import { ImagePatcher } from "./patcher.js";
@@ -13,7 +13,7 @@ import { ImagePatcher } from "./patcher.js";
  * Parcours complet sur Docker réel : copie dans un registre local, scan, correctif Copa + BuildKit rootless, rescan par
  * digest, vérification de la configuration. Désactivé par défaut (réseau, images, une à deux minutes) :
  *   PATCH_E2E=1 PATCHER_IMAGE=infrastructure-patcher:e2e npx vitest run packages/agent/src/patcher.e2e.test.ts
- * `PATCH_E2E_PORT` : port local du registre de test (15055 par défaut). `PATCH_E2E_WORKSPACE` : dossier monté au même chemin dans le conteneur d'exécution et sur l'hôte Docker.
+ * `PATCH_E2E_PRIVILEGED=1` : BuildKit privilégié (hôte sans espaces de noms utilisateur). `PATCH_E2E_PORT` : port local du registre de test (15055 par défaut). `PATCH_E2E_WORKSPACE` : dossier monté au même chemin dans le conteneur d'exécution et sur l'hôte Docker.
  * L'image de test `alpine:3.22.0` est volontairement ancienne : ne dépend d'aucune CVE précise, seulement qu'il y en ait.
  */
 const enabled = process.env.PATCH_E2E === "1";
@@ -25,12 +25,14 @@ describe.skipIf(!enabled)("correctif d'image (Docker réel)", () => {
   const env = dockerEnv(socket);
   const patcherImage = process.env.PATCHER_IMAGE ?? "infrastructure-patcher:e2e";
   let workspace = "";
+  // Repli privilégié (hôtes sans espaces de noms utilisateur) : PATCH_E2E_PRIVILEGED=1.
+  const privileged = process.env.PATCH_E2E_PRIVILEGED === "1";
 
   const docker = (args: string[], timeoutMs = 300_000) => runCommand("docker", args, { env, timeoutMs });
 
   beforeAll(async () => {
     workspace = process.env.PATCH_E2E_WORKSPACE ?? (await mkdtemp(join(tmpdir(), "patch-e2e-")));
-    for (const image of [SOURCE, "registry:3.0.0", DEFAULT_BUILDKIT_IMAGE]) {
+    for (const image of [SOURCE, "registry:3.0.0", privileged ? DEFAULT_BUILDKIT_PRIVILEGED_IMAGE : DEFAULT_BUILDKIT_IMAGE]) {
       const r = await docker(["pull", "--quiet", image]);
       if (r.code !== 0) throw new Error(`pull ${image} : ${r.stderr}`);
     }
@@ -47,6 +49,8 @@ describe.skipIf(!enabled)("correctif d'image (Docker réel)", () => {
       dockerSocket: socket,
       patcherImage,
       buildkitImage: DEFAULT_BUILDKIT_IMAGE,
+      buildkitPrivileged: privileged,
+      buildkitPrivilegedImage: DEFAULT_BUILDKIT_PRIVILEGED_IMAGE,
       trivyImage: "ghcr.io/aquasecurity/trivy:0.76.1",
       trivyCacheVolume: "console-docker-trivy-cache-e2e",
       buildkitMemory: "3g",

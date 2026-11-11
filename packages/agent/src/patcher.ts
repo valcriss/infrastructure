@@ -28,6 +28,12 @@ export interface PatcherConfig {
   patcherImage: string;
   /** Image officielle de BuildKit, variante rootless (version épinglée). */
   buildkitImage: string;
+  /**
+   * Repli explicite pour les hôtes qui interdisent les espaces de noms utilisateur (Ubuntu 24.04+ par défaut) : BuildKit
+   * classique en mode privilégié, c'est-à-dire un accès équivalent à root sur l'hôte. Jamais activé automatiquement.
+   */
+  buildkitPrivileged?: boolean;
+  buildkitPrivilegedImage?: string;
   trivyImage: string;
   trivyCacheVolume: string;
   /** Mémoire du conteneur BuildKit (syntaxe Docker : 2g). */
@@ -64,7 +70,29 @@ export function parsePushDigest(output: string): string | null {
   return all.length > 0 ? (all[all.length - 1]?.[1] ?? null) : null;
 }
 
-export function buildkitRunArgs(cfg: Pick<PatcherConfig, "buildkitImage" | "buildkitMemory" | "buildkitExtraArgs">, container: string): string[] {
+/** Image de BuildKit effectivement utilisée (rootless par défaut). */
+export const buildkitImageOf = (cfg: Pick<PatcherConfig, "buildkitImage" | "buildkitPrivileged" | "buildkitPrivilegedImage">): string =>
+  cfg.buildkitPrivileged && cfg.buildkitPrivilegedImage ? cfg.buildkitPrivilegedImage : cfg.buildkitImage;
+
+/**
+ * Explication d'un échec de démarrage de BuildKit rootless quand l'hôte interdit les espaces de noms utilisateur non
+ * privilégiés (AppArmor sur Ubuntu 23.10+, ou noyau sans la fonction) ; null pour toute autre cause.
+ */
+export function buildkitStartHint(logs: string): string | null {
+  if (!/apparmor_restrict_unprivileged_userns|rootlesskit|user ?namespace/i.test(logs)) return null;
+  return "BuildKit rootless ne peut pas démarrer : l'hôte interdit les espaces de noms utilisateur non privilégiés (Ubuntu 23.10 et plus récent, via AppArmor). Autorisez-les avec « sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 » (à rendre permanent dans /etc/sysctl.d), ou acceptez explicitement un BuildKit privilégié (équivalent à root sur l'hôte) avec BUILDKIT_PRIVILEGED=1 sur l'agent.";
+}
+
+export function buildkitRunArgs(cfg: Pick<PatcherConfig, "buildkitImage" | "buildkitPrivileged" | "buildkitPrivilegedImage" | "buildkitMemory" | "buildkitExtraArgs">, container: string): string[] {
+  if (cfg.buildkitPrivileged) {
+    return [
+      "run", "-d", "--name", container, "--privileged",
+      "--memory", cfg.buildkitMemory, "--pids-limit", "2048",
+      ...(cfg.buildkitExtraArgs ?? []),
+      buildkitImageOf(cfg),
+      "--addr", `tcp://0.0.0.0:${BUILDKIT_PORT}`,
+    ];
+  }
   return [
     "run", "-d", "--name", container,
     // BuildKit rootless : pas de --privileged. seccomp/apparmor « unconfined » et l'absence de sandbox de processus sont
@@ -73,7 +101,7 @@ export function buildkitRunArgs(cfg: Pick<PatcherConfig, "buildkitImage" | "buil
     "-e", "BUILDKITD_FLAGS=--oci-worker-no-process-sandbox",
     "--memory", cfg.buildkitMemory, "--pids-limit", "2048",
     ...(cfg.buildkitExtraArgs ?? []),
-    cfg.buildkitImage,
+    buildkitImageOf(cfg),
     "--addr", `tcp://0.0.0.0:${BUILDKIT_PORT}`,
   ];
 }
@@ -275,7 +303,7 @@ export class ImagePatcher {
       }
 
       // 2. Images des outils, puis BuildKit éphémère (il porte l'espace réseau des autres conteneurs).
-      for (const image of [cfg.patcherImage, cfg.buildkitImage, cfg.trivyImage]) {
+      for (const image of [cfg.patcherImage, buildkitImageOf(cfg), cfg.trivyImage]) {
         if ((await docker(["image", "inspect", "--format", "{{.Id}}", image], 30_000, dockerEnv(cfg.dockerSocket))).code !== 0) {
           const pulled = await docker(["pull", "--quiet", image], left(), dockerEnv(cfg.dockerSocket));
           if (pulled.code !== 0) return fail(`Téléchargement de l'image ${image} impossible : ${pulled.tail}`);
@@ -287,7 +315,10 @@ export class ImagePatcher {
       for (;;) {
         const logs = await docker(["logs", bk], 15_000, dockerEnv(cfg.dockerSocket));
         if (/running server/.test(logs.tail)) break;
-        if (Date.now() > ready) return fail(`BuildKit n'est pas prêt : ${logs.tail}`);
+        if (Date.now() > ready) return fail(buildkitStartHint(logs.tail) ?? `BuildKit n'est pas prêt : ${logs.tail}`);
+        // Un arrêt immédiat (espaces de noms interdits, etc.) ne se rattrape pas en attendant.
+        const state = await docker(["inspect", "--format", "{{.State.Running}}", bk], 15_000, dockerEnv(cfg.dockerSocket));
+        if (state.stdout.trim() === "false") return fail(buildkitStartHint(logs.tail) ?? `BuildKit s'est arrêté au démarrage : ${logs.tail}`);
         await new Promise((r) => setTimeout(r, 500));
       }
       if (cfg.afterBuildkit) stopSidecar = await cfg.afterBuildkit(bk);

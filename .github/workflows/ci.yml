@@ -93,5 +93,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build -w @infra/shared
+      # Ubuntu 24.04 interdit par défaut les espaces de noms utilisateur non privilégiés (AppArmor) : BuildKit rootless
+      # exige de les autoriser. Même réglage à faire sur un hôte réel (voir docs/exploitation.md).
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: docker build --target patcher -t "$PATCHER_IMAGE" .
       - run: npx vitest run packages/agent/src/patcher.e2e.test.ts

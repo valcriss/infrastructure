@@ -1,6 +1,6 @@
 import type { PatchMessage } from "@infra/shared";
 import { describe, expect, it } from "vitest";
-import { buildkitRunArgs, configDiff, copaPatchArgs, fixableReport, osPackages, packageChanges, parsePushDigest, registryRef, registryScheme, trivyRemoteArgs } from "./patcher.js";
+import { buildkitImageOf, buildkitRunArgs, buildkitStartHint, configDiff, copaPatchArgs, fixableReport, osPackages, packageChanges, parsePushDigest, registryRef, registryScheme, trivyRemoteArgs } from "./patcher.js";
 import { normalizeReport } from "./scanner.js";
 
 const cfg = {
@@ -14,6 +14,23 @@ const cfg = {
 const target: PatchMessage["target"] = { registry: "registry.exemple.fr", repository: "patched/docker-io-library-alpine", sourceTag: "src-8a1f59ffb675", patchedTag: "3.22.0-patch.1" };
 
 describe("arguments des conteneurs", () => {
+  it("le repli privilégié est explicite : image classique et --privileged, jamais par défaut", () => {
+    const p = buildkitRunArgs({ ...cfg, buildkitPrivileged: true, buildkitPrivilegedImage: "moby/buildkit:v0.35.0" }, "bk");
+    expect(p).toContain("--privileged");
+    expect(p).toContain("moby/buildkit:v0.35.0");
+    expect(p).not.toContain("seccomp=unconfined");
+    expect(buildkitImageOf({ ...cfg, buildkitPrivileged: true, buildkitPrivilegedImage: "x:1" })).toBe("x:1");
+    expect(buildkitImageOf(cfg)).toBe("moby/buildkit:v0.35.0-rootless");
+    expect(buildkitRunArgs(cfg, "bk")).not.toContain("--privileged");
+  });
+
+  it("explique l'échec de BuildKit rootless sur un hôte qui interdit les espaces de noms utilisateur", () => {
+    const logs = "[rootlesskit:parent] This error might have happened because /proc/sys/kernel/apparmor_restrict_unprivileged_userns is set to 1";
+    expect(buildkitStartHint(logs)).toContain("apparmor_restrict_unprivileged_userns=0");
+    expect(buildkitStartHint(logs)).toContain("BUILDKIT_PRIVILEGED=1");
+    expect(buildkitStartHint("panic: autre cause")).toBeNull();
+  });
+
   it("BuildKit est rootless, sans --privileged, avec mémoire plafonnée", () => {
     const a = buildkitRunArgs(cfg, "bk");
     expect(a).not.toContain("--privileged");

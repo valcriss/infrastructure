@@ -14,6 +14,9 @@ export interface AgentConfig {
   /** Correctifs d'images : image du runner Copa (CI de ce dépôt), BuildKit rootless officiel, mémoire de BuildKit. */
   patcherImage: string;
   buildkitImage: string;
+  /** Repli explicite et privilégié pour les hôtes qui interdisent les espaces de noms utilisateur (BUILDKIT_PRIVILEGED=1). */
+  buildkitPrivileged: boolean;
+  buildkitPrivilegedImage: string;
   buildkitMemory: string;
   /** Projets Compose que la console ne peut ni arrêter ni redéployer (en plus du projet de l'agent lui-même). */
   protectedProjects: string[];
@@ -28,6 +31,8 @@ export const DEFAULT_TRIVY_IMAGE = "ghcr.io/aquasecurity/trivy:0.76.1";
 export const DEFAULT_PATCHER_IMAGE = "ghcr.io/valcriss/infrastructure-patcher:latest";
 /** BuildKit rootless officiel, version éprouvée au spike (ADR 0002). */
 export const DEFAULT_BUILDKIT_IMAGE = "moby/buildkit:v0.35.0-rootless";
+/** Même version, variante classique : réservée au repli privilégié explicite. */
+export const DEFAULT_BUILDKIT_PRIVILEGED_IMAGE = "moby/buildkit:v0.35.0";
 /** Volume nommé qui conserve la base de vulnérabilités entre les scans. */
 export const TRIVY_CACHE_VOLUME = "console-docker-trivy-cache";
 
@@ -60,6 +65,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     trivyMaxImageBytes: maxImageBytes(env),
     patcherImage: env.PATCHER_IMAGE ?? DEFAULT_PATCHER_IMAGE,
     buildkitImage: env.BUILDKIT_IMAGE ?? DEFAULT_BUILDKIT_IMAGE,
+    buildkitPrivileged: ["1", "true"].includes((env.BUILDKIT_PRIVILEGED ?? "").toLowerCase()),
+    buildkitPrivilegedImage: env.BUILDKIT_PRIVILEGED_IMAGE ?? DEFAULT_BUILDKIT_PRIVILEGED_IMAGE,
     buildkitMemory: /^[0-9]+[kmg]$/i.test(env.BUILDKIT_MEMORY ?? "") ? (env.BUILDKIT_MEMORY as string) : "3g",
     protectedProjects: (env.PROTECTED_PROJECTS ?? "").split(",").map((p) => p.trim()).filter(Boolean),
     selfContainer: env.HOSTNAME,

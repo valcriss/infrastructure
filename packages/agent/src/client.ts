@@ -130,6 +130,8 @@ export class AgentClient {
       dockerSocket: config.dockerSocket,
       patcherImage: config.patcherImage,
       buildkitImage: config.buildkitImage,
+      buildkitPrivileged: config.buildkitPrivileged,
+      buildkitPrivilegedImage: config.buildkitPrivilegedImage,
       trivyImage: config.trivyImage,
       trivyCacheVolume: TRIVY_CACHE_VOLUME,
       buildkitMemory: config.buildkitMemory,
@@ -143,7 +145,7 @@ export class AgentClient {
     return collectDiskUsage({
       socket: this.config.dockerSocket,
       protectedAmong: (projects) => this.protection.protectedAmong(projects),
-      protectedImageRefs: [this.config.trivyImage, this.config.patcherImage, this.config.buildkitImage],
+      protectedImageRefs: [this.config.trivyImage, this.config.patcherImage, this.config.buildkitImage, this.config.buildkitPrivilegedImage],
       retained: this.retained,
     });
   }
