@@ -2,7 +2,7 @@ import type { Container } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { hiddenProjects } from "./display.js";
 import { HttpError } from "./http-error.js";
-import { loadUsedImages } from "./images.js";
+import { loadUsedImages, type UsedImage } from "./images.js";
 import { POLICIES, validatePattern, type UpdatePolicy } from "./image-tags.js";
 import { evaluateImage, type CheckDetail, type CheckKind, type PolicyRow, type RegistryLike } from "./image-watch.js";
 import { RegistryError } from "./registry.js";
@@ -26,6 +26,30 @@ export interface IgnoredTag {
 }
 
 const key = (hostId: string, project: string): string => `${hostId}|${project}`;
+
+/**
+ * Vérifications des projets observés qui valent encore : celles obtenues pour une autre référence d'image que celle
+ * qui tourne (étiquette modifiée depuis) sont écartées, comme dans l'onglet Versions. Tableau de bord et liste des
+ * applications comptent ainsi les mêmes mises à jour que la fiche de l'application.
+ */
+export async function currentObservedChecks(pool: Pool, used?: UsedImage[]): Promise<(ObservedCheckRow & { hostId: string; project: string })[]> {
+  const [{ rows }, images] = await Promise.all([
+    pool.query<{
+      host_id: string; project: string; service: string; checked_at: Date; status: "ok" | "error"; kind: CheckKind | null; detail: CheckDetail | null; error: string | null; last_success_at: Date | null;
+    }>("SELECT host_id, project, service, checked_at, status, kind, detail, error, last_success_at FROM observed_image_checks"),
+    used ? Promise.resolve(used) : loadUsedImages(pool),
+  ]);
+  const refOf = new Map<string, string>();
+  for (const img of images) for (const u of img.usedBy) if (u.service && u.project && !refOf.has(`${u.hostId}|${u.project}|${u.service}`)) refOf.set(`${u.hostId}|${u.project}|${u.service}`, u.ref);
+  return rows
+    .filter((r) => {
+      const ref = r.detail?.ref;
+      const current = refOf.get(`${r.host_id}|${r.project}|${r.service}`);
+      // Service disparu de l'inventaire : plus rien à signaler ; référence différente : résultat périmé.
+      return current !== undefined && (!ref || ref === current);
+    })
+    .map((r) => ({ hostId: r.host_id, project: r.project, service: r.service, checkedAt: r.checked_at, status: r.status, kind: r.kind, detail: r.detail, error: r.error, lastSuccessAt: r.last_success_at }));
+}
 
 /**
  * Suivi des versions d'image des projets Compose non gérés : mêmes règles et même évaluation que pour les stacks

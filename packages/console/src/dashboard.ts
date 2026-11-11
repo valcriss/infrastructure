@@ -2,7 +2,7 @@ import { INVENTORY_INTERVAL_SEC, listComposeServices, type ComposeService, type 
 import type { SeverityCounts } from "@infra/shared";
 import type { BackupService, BackupStatus } from "./backup.js";
 import type { CheckDetail, ImageWatcher } from "./image-watch.js";
-import type { ObservedWatcher } from "./observed-watch.js";
+import { currentObservedChecks, type ObservedWatcher } from "./observed-watch.js";
 import { hiddenProjects } from "./display.js";
 import { briefOf, isScanStale, loadUsedImages, scanState, type ScanState } from "./images.js";
 import type { ScanService } from "./scans.js";
@@ -528,7 +528,7 @@ export class Dashboard {
     const visibleStacks = new Set(stackViews.map((v) => v.s.id));
     const checks = allChecks.filter((c) => visibleStacks.has(c.stackId));
     // Projets non gérés (hors console, hors stack) : filtrés par hôte comme le reste, absents d'une vue par application.
-    const observedChecks = filter.stackId ? [] : (await (this.deps.observedWatcher?.allChecks() ?? Promise.resolve([]))).filter(
+    const observedChecks = filter.stackId ? [] : (await (this.deps.observedWatcher ? currentObservedChecks(pool, usedImages) : Promise.resolve([]))).filter(
       (c) => hostById.has(c.hostId) && !hidden.includes(c.project) && !managedProjects.has(`${c.hostId}:${c.project}`),
     );
     const staleError = (c: { status: string; lastSuccessAt: Date | null }): boolean => c.status === "error" && (!c.lastSuccessAt || now - c.lastSuccessAt.getTime() > 3 * 24 * 3600_000);

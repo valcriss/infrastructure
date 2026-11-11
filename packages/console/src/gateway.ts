@@ -24,7 +24,7 @@ import type { WebSocket } from "ws";
 import { removeBootstrapFile } from "./bootstrap.js";
 import { randomToken, safeEqualHex, sha256 } from "./crypto.js";
 import { audit, type Pool } from "./db.js";
-import { recordObservedVersions } from "./observed-versions.js";
+import { recordObservedVersions, type ObservedChange } from "./observed-versions.js";
 
 const HELLO_TIMEOUT_MS = 10_000;
 
@@ -274,10 +274,21 @@ export class AgentGateway {
       ],
     );
     // L'historique des versions ne doit jamais empêcher l'enregistrement de l'inventaire.
-    await recordObservedVersions(this.pool, hostId, inventory).catch((err: unknown) =>
-      this.log.error({ err, hostId }, "erreur d'enregistrement de l'historique des versions"),
-    );
+    const changes = await recordObservedVersions(this.pool, hostId, inventory).catch((err: unknown) => {
+      this.log.error({ err, hostId }, "erreur d'enregistrement de l'historique des versions");
+      return [];
+    });
+    if (changes.length > 0) {
+      try {
+        this.onObservedChange?.(hostId, changes);
+      } catch (err) {
+        this.log.error({ err, hostId }, "erreur de traitement d'un changement d'image observé");
+      }
+    }
   }
+
+  /** Appelé (sans attendre) quand l'image d'un service observé change : vérification de version et scan. */
+  onObservedChange: ((hostId: string, changes: ObservedChange[]) => void) | undefined;
 
   private async authenticate(
     msg: Extract<ReturnType<typeof AgentMessageSchema.parse>, { type: "hello" }>,

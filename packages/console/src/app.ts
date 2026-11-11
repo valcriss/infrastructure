@@ -16,6 +16,7 @@ import { z, ZodError } from "zod";
 import { BackupService } from "./backup.js";
 import { Dashboard } from "./dashboard.js";
 import { ImageWatcher } from "./image-watch.js";
+import { loadUsedImages } from "./images.js";
 import { ObservedWatcher } from "./observed-watch.js";
 import { registerTraefikDynamicRoutes } from "./traefik-dynamic-routes.js";
 import { registerTraefikRoutes } from "./traefik-routes.js";
@@ -432,6 +433,24 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const observedWatcher = new ObservedWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
+  // Une image qui change sur un projet observé est revérifiée (versions) et rescannée tout de suite, sans attendre la planification.
+  gateway.onObservedChange = (hostId, changes) => {
+    const logError = (err: unknown, msg: string): void => app.log.error({ err, hostId }, msg);
+    for (const project of new Set(changes.map((c) => c.project))) {
+      void observedWatcher.checkProject(hostId, project).catch((err: unknown) => logError(err, "vérification d'un changement d'image observé"));
+    }
+    void (async () => {
+      const images = await loadUsedImages(pool, { hostId });
+      for (const change of changes) {
+        const img = images.find((i) => i.imageId === change.imageId);
+        const user = img?.usedBy.find((u) => u.project === change.project && u.service === change.service);
+        if (!img || !user) continue;
+        await scans
+          .request({ imageId: img.imageId, platform: img.platform, hostId, imageRef: user.ref, trigger: "scheduled", requestedBy: "changement d'image" })
+          .catch((err: unknown) => logError(err, "scan d'un changement d'image observé"));
+      }
+    })().catch((err: unknown) => logError(err, "scan d'un changement d'image observé"));
+  };
   const candidates = new CandidateScans(pool, scans, gateway, registries);
   const logStreams = new LogStreams(gateway);
   const terminals = new TerminalService(pool, gateway);

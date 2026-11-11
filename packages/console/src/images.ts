@@ -9,6 +9,8 @@ export interface ImageUser {
   stackId: string | null;
   stackName: string | null;
   service: string | null;
+  /** Projet Compose du conteneur (géré ou observé). */
+  project: string | null;
   container: string;
   containerId: string;
   state: string;
@@ -79,6 +81,7 @@ export async function loadUsedImages(pool: Pick<Pool, "query">, filter: ImageFil
         stackId: stack?.id ?? null,
         stackName: stack?.name ?? null,
         service: c.composeService ?? null,
+        project: c.composeProject ?? null,
         container: c.names[0] ?? c.id.slice(0, 12),
         containerId: c.id,
         state: c.state,

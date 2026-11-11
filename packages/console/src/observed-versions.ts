@@ -32,7 +32,7 @@ function digestOf(imageId: string, images: ImageInfo[] | undefined): string | nu
  * rien n'est écrit tant que l'image et son contenu (identifiant local) n'ont pas changé. Les projets gérés par une
  * stack et ceux de la console elle-même sont ignorés.
  */
-export async function recordObservedVersions(pool: Pool, hostId: string, inventory: Inventory): Promise<void> {
+export async function recordObservedVersions(pool: Pool, hostId: string, inventory: Inventory): Promise<ObservedChange[]> {
   const hidden = await hiddenProjects(pool);
   const managed = await pool.query<{ name: string }>("SELECT name FROM stacks WHERE host_id = $1", [hostId]);
   const skip = new Set([...hidden, ...managed.rows.map((r) => r.name)]);
@@ -43,7 +43,8 @@ export async function recordObservedVersions(pool: Pool, hostId: string, invento
     const key = JSON.stringify([c.composeProject, c.composeService]);
     byService.set(key, [...(byService.get(key) ?? []), c]);
   }
-  if (byService.size === 0) return;
+  const changes: ObservedChange[] = [];
+  if (byService.size === 0) return changes;
 
   const latest = await pool.query<{ project: string; service: string; image: string; image_id: string }>(
     `SELECT DISTINCT ON (project, service) project, service, image, image_id
@@ -67,7 +68,18 @@ export async function recordObservedVersions(pool: Pool, hostId: string, invento
           ORDER BY observed_at DESC, id OFFSET $4)`,
       [hostId, project, service, MAX_VERSIONS_PER_SERVICE],
     );
+    // Première observation : pas un changement (rien à comparer, et un démarrage ne doit pas tout scanner d'un coup).
+    if (prev) changes.push({ project, service, image: c.image, imageId: c.imageId });
   }
+  return changes;
+}
+
+/** Service observé dont l'image (étiquette ou contenu) vient de changer. */
+export interface ObservedChange {
+  project: string;
+  service: string;
+  image: string;
+  imageId: string;
 }
 
 export async function listObservedVersions(pool: Pool, hostId: string, project: string): Promise<ObservedVersion[]> {

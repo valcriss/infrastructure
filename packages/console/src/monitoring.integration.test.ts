@@ -335,7 +335,7 @@ describe.skipIf(!url)("supervision (intégration)", () => {
     // Une mise à jour trouvée sur un projet non géré : compteur de l'application, alerte et total du tableau de bord.
     // Le « DELETE » ci-dessus relance une vérification en arrière-plan : on attend qu'elle ait fini avant d'écrire.
     await waitFor(() => !built.observedWatcher.isChecking(hostId, "legacy"));
-    const detail1 = { ref: "img", tag: "1.0", candidates: ["1.1"], contentChanged: false, uncertain: false, notes: [], ignored: [] };
+    const detail1 = { ref: upd.components[0].ref as string, tag: "1.0", candidates: ["1.1"], contentChanged: false, uncertain: false, notes: [], ignored: [] };
     await pool.query(
       `INSERT INTO observed_image_checks (host_id, project, service, checked_at, status, kind, detail) VALUES ($1, 'legacy', 'old', now(), 'ok', 'update_available', $2)
        ON CONFLICT (host_id, project, service) DO UPDATE SET kind = 'update_available', detail = $2, status = 'ok'`,
@@ -354,6 +354,12 @@ describe.skipIf(!url)("supervision (intégration)", () => {
       // Filtré sur une application gérée : les projets non gérés n'y figurent pas.
       const only = (await call("GET", `/api/v1/dashboard?stackId=${stackId}`)).json;
       expect(only.alerts.some((a: any) => a.target.project === "legacy")).toBe(false);
+      // Résultat obtenu pour une autre référence (image changée depuis) : ni compteur ni alerte, comme dans l'onglet Versions.
+      await pool.query("UPDATE observed_image_checks SET detail = $1 WHERE host_id = $2 AND project = 'legacy'", [JSON.stringify({ ...detail1, ref: "ancienne:0.1" }), hostId]);
+      const apps3 = (await call("GET", "/api/v1/applications")).json.applications as any[];
+      expect(apps3.find((a) => a.name === "legacy")).toMatchObject({ updatesAvailable: 0 });
+      const dash3 = (await call("GET", "/api/v1/dashboard")).json;
+      expect(dash3.alerts.some((a: any) => a.kind === "image_update" && a.target.project === "legacy")).toBe(false);
     } finally {
       await pool.query("DELETE FROM observed_image_checks");
     }
