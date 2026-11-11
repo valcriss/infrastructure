@@ -67,3 +67,25 @@ COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/agent/dist packages/agent/dist
 RUN mkdir -p /data
 CMD ["node", "packages/agent/dist/main.js"]
+
+# --- Patcher ----------------------------------------------------------------
+# Moteur de correctifs de la remédiation des images : Project Copacetic seul. Il pilote un BuildKit distinct (image
+# officielle, lancée à part par l'agent) et n'a pas besoin du socket Docker. Version et sommes SHA-256 épinglées :
+# l'archive est vérifiée avant d'être installée.
+FROM alpine:3.22 AS patcher
+ARG TARGETARCH
+ARG COPA_VERSION=0.15.0
+ARG COPA_SHA256_AMD64=cff3fe9320f3bd24bafcfd0ce877ef57e23acad0836da0ac6c253919f71c9cad
+ARG COPA_SHA256_ARM64=2444b6109c6164beef980641ec5f2813bc42b1703add6dd73591ace23051ca8f
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates curl \
+    && case "${TARGETARCH:-amd64}" in \
+         amd64) sha="$COPA_SHA256_AMD64" ;; \
+         arm64) sha="$COPA_SHA256_ARM64" ;; \
+         *) echo "architecture non prise en charge : ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/copa.tar.gz "https://github.com/project-copacetic/copacetic/releases/download/v${COPA_VERSION}/copa_${COPA_VERSION}_linux_${TARGETARCH:-amd64}.tar.gz" \
+    && echo "${sha}  /tmp/copa.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/copa.tar.gz -C /usr/local/bin copa \
+    && rm -f /tmp/copa.tar.gz \
+    && apk del curl
+ENTRYPOINT ["/usr/local/bin/copa"]

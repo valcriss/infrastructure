@@ -18,6 +18,8 @@ import {
   type ImagePullResultSchema,
   type ContainerActionResultSchema,
   type RemovalPlanResultSchema,
+  type PatchProgress,
+  type PatchResult,
 } from "@infra/shared";
 import type { z } from "zod";
 import type { FastifyBaseLogger } from "fastify";
@@ -44,6 +46,8 @@ export interface GatewayHandlers {
   onTerminalEnd(hostId: string, sessionId: string, reason: string, exitCode?: number): void;
   onMetrics(hostId: string, samples: MetricSample[], host?: HostMetrics): Promise<void>;
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
+  onPatchProgress(hostId: string, progress: PatchProgress): Promise<void>;
+  onPatchResult(hostId: string, result: PatchResult): Promise<void>;
   onStorageUsage(hostId: string, msg: StorageUsageMessage): Promise<void>;
   onPruneResult(hostId: string, result: PruneResult): Promise<void>;
   onPruneProgress(hostId: string, progress: PruneProgress): Promise<void>;
@@ -206,6 +210,12 @@ export class AgentGateway {
             break;
           case "scan_result":
             await this.handlers?.onScanResult(hostId, msg);
+            break;
+          case "patch_progress":
+            await this.handlers?.onPatchProgress(hostId, msg);
+            break;
+          case "patch_result":
+            await this.handlers?.onPatchResult(hostId, msg);
             break;
           case "operation_log":
             await this.handlers?.onLog(hostId, msg.operationId, msg.text);

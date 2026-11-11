@@ -23,6 +23,7 @@ jobs:
         include:
           - target: console
           - target: agent
+          - target: patcher
     steps:
       - uses: actions/checkout@v7
 

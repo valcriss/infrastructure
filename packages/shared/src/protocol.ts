@@ -388,6 +388,8 @@ export const VulnerabilitySchema = z.object({
   url: z.string().max(300).nullable(),
   /** Statut Trivy (fixed, affected, will_not_fix…). */
   status: z.string().max(40).optional(),
+  /** Nature du constat : paquet du système (os) ou dépendance applicative (lang). Absent sur les anciens scans. */
+  kind: z.enum(["os", "lang"]).optional(),
 });
 export type Vulnerability = z.infer<typeof VulnerabilitySchema>;
 
@@ -426,7 +428,76 @@ export const ScanResultSchema = z.object({
 });
 export type ScanResult = z.infer<typeof ScanResultSchema>;
 
+/** Version et base de Trivy utilisées pour un scan. */
+const TrivyInfoSchema = z.object({
+  version: z.string().max(40),
+  dbVersion: z.number().int().optional(),
+  dbUpdatedAt: z.string().max(40).optional(),
+  dbDownloadedAt: z.string().max(40).optional(),
+});
+
+/** Constat allégé (sans titre ni lien) : un rapport avant/après en contient jusqu'à 2 x 2000, sous la limite des messages. */
+export const PatchVulnerabilitySchema = VulnerabilitySchema.pick({ id: true, pkg: true, installed: true, fixed: true, severity: true, kind: true });
+export type PatchVulnerability = z.infer<typeof PatchVulnerabilitySchema>;
+
+/** Résultat normalisé d'un scan de l'image avant ou après correctif (mêmes options Trivy des deux côtés). */
+export const PatchScanSchema = z.object({
+  trivy: TrivyInfoSchema.optional(),
+  os: z.object({ family: z.string().max(40), name: z.string().max(80), eosl: z.boolean().optional() }).optional(),
+  counts: SeverityCountsSchema,
+  total: z.number().int().min(0),
+  vulnerabilities: z.array(PatchVulnerabilitySchema).max(MAX_SCAN_VULNERABILITIES),
+  truncated: z.boolean().optional(),
+});
+export type PatchScan = z.infer<typeof PatchScanSchema>;
+
+export const PATCH_STAGES = ["preparing", "scanning_before", "patching", "scanning_after", "verifying"] as const;
+export type PatchStage = (typeof PATCH_STAGES)[number];
+
+/** Progression d'un correctif (étape en cours), pour le suivi et le journal. */
+export const PatchProgressSchema = z.object({
+  type: z.literal("patch_progress"),
+  jobId: z.uuid(),
+  stage: z.enum(PATCH_STAGES),
+  message: z.string().max(300).optional(),
+});
+export type PatchProgress = z.infer<typeof PatchProgressSchema>;
+
+export const PatchPackageChangeSchema = z.object({ name: z.string().max(200), from: z.string().max(120), to: z.string().max(120) });
+export type PatchPackageChange = z.infer<typeof PatchPackageChangeSchema>;
+
+export const MAX_PATCH_PACKAGES = 2000;
+
+/**
+ * Résultat d'un correctif. Seules des données normalisées et bornées sont transmises : ni rapport brut, ni valeurs de
+ * la configuration de l'image (les variables d'environnement peuvent contenir des secrets) : seuls les NOMS des champs
+ * modifiés sont rapportés.
+ */
+export const PatchResultSchema = z.object({
+  type: z.literal("patch_result"),
+  jobId: z.uuid(),
+  status: z.enum(["succeeded", "failed"]),
+  error: z.string().max(2000).optional(),
+  /** Versions des outils utilisés (journalisées pour la provenance). */
+  tools: z.object({ copa: z.string().max(60), buildkit: z.string().max(60), trivy: z.string().max(60) }).optional(),
+  /** Copie de l'image source dans le registre (digest du manifeste publié). */
+  source: z.object({ ref: z.string().max(400), digest: z.string().regex(/^sha256:[0-9a-f]{64}$/) }).optional(),
+  patched: z.object({ ref: z.string().max(400), digest: z.string().regex(/^sha256:[0-9a-f]{64}$/) }).optional(),
+  before: PatchScanSchema.optional(),
+  after: PatchScanSchema.optional(),
+  packageChanges: z.array(PatchPackageChangeSchema).max(MAX_PATCH_PACKAGES).optional(),
+  /** Champs de configuration de l'image modifiés (Entrypoint, Cmd, User, Env…), sans leurs valeurs. */
+  configChanges: z.array(z.string().max(40)).max(30).optional(),
+  /** Libellés ajoutés par le moteur (BaseImage…). */
+  labelsAdded: z.array(z.string().max(100)).max(30).optional(),
+  /** Nombre de déclarations du document VEX produit par le moteur. */
+  vexStatements: z.number().int().min(0).optional(),
+});
+export type PatchResult = z.infer<typeof PatchResultSchema>;
+
 export const AgentMessageSchema = z.discriminatedUnion("type", [
+  PatchProgressSchema,
+  PatchResultSchema,
   HelloSchema,
   HeartbeatSchema,
   InventoryMessageSchema,
@@ -641,7 +712,39 @@ export const ScanSchema = z.object({
 });
 export type ScanMessage = z.infer<typeof ScanSchema>;
 
+const REGISTRY_HOST = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?$/;
+const REPOSITORY = /^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*$/;
+const TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+
+/**
+ * Corrige une image locale de l'hôte (jamais modifiée) : copie dans le registre cible, scan, correctif des paquets du
+ * système par Copa + BuildKit, nouveau scan par digest. L'agent répond par `patch_progress` puis `patch_result`.
+ * L'image est désignée par son identifiant local ; aucune commande ni option du moteur n'est transmise.
+ */
+export const PatchSchema = z.object({
+  type: z.literal("patch"),
+  jobId: z.uuid(),
+  expiresAt: z.iso.datetime().optional(),
+  imageId: z.string().min(8).max(100).regex(/^(sha256:)?[0-9a-f]{12,64}$/),
+  /** Référence lisible, pour les journaux uniquement. */
+  imageRef: z.string().max(300),
+  platform: z.string().regex(/^linux\/(amd64|arm64)$/),
+  target: z.object({
+    registry: z.string().max(255).regex(REGISTRY_HOST),
+    repository: z.string().max(200).regex(REPOSITORY),
+    /** Tag de la copie de l'image source. */
+    sourceTag: z.string().regex(TAG),
+    /** Tag (immuable) de l'image corrigée. */
+    patchedTag: z.string().regex(TAG),
+  }),
+  /** Identifiants du registre cible (lecture et publication). */
+  registryAuths: z.array(RegistryAuthSchema).max(5).optional(),
+  timeoutSec: z.number().int().min(60).max(7200),
+});
+export type PatchMessage = z.infer<typeof PatchSchema>;
+
 export const ConsoleMessageSchema = z.discriminatedUnion("type", [
+  PatchSchema,
   WelcomeSchema,
   ErrorMessageSchema,
   RequestInventorySchema,

@@ -14,3 +14,4 @@ export * from "./traefik.js";
 export * from "./compose-traefik.js";
 export * from "./traefik-dynamic.js";
 export * from "./registry.js";
+export * from "./remediation.js";

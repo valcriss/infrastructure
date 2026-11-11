@@ -9,7 +9,7 @@ const pool = createPool(config.databaseUrl);
 
 await migrate(pool, (m) => console.log(m));
 const masterKey = await loadOrCreateMasterKey(config.dataDir);
-const { app, setup, ops, backup, metrics, scans, candidates, pruning, watcher, observedWatcher, storage } = await buildApp({ config, pool, logger: true, masterKey });
+const { app, setup, ops, backup, metrics, scans, remediation, candidates, pruning, watcher, observedWatcher, storage } = await buildApp({ config, pool, logger: true, masterKey });
 // Une opération active avant le redémarrage a un résultat inconnu : jamais rejouée.
 await ops.markInterruptedUnknown();
 await ensureBootstrapToken(pool, config.sharedDir);
@@ -21,8 +21,10 @@ await backup.start();
 metrics.start();
 // Scans de vulnérabilités et vérification des versions d'images (planifiés).
 await scans.markInterrupted();
+await remediation.markInterrupted();
 await pruning.markInterrupted();
 scans.start();
+remediation.start();
 candidates.start();
 watcher.start();
 observedWatcher.start();

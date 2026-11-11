@@ -11,6 +11,10 @@ export interface AgentConfig {
   trivyImage: string;
   trivyMemory: string;
   trivyMaxImageBytes: number;
+  /** Correctifs d'images : image du runner Copa (CI de ce dépôt), BuildKit rootless officiel, mémoire de BuildKit. */
+  patcherImage: string;
+  buildkitImage: string;
+  buildkitMemory: string;
   /** Projets Compose que la console ne peut ni arrêter ni redéployer (en plus du projet de l'agent lui-même). */
   protectedProjects: string[];
   /** Conteneur de l'agent (HOSTNAME dans Docker), pour retrouver son projet Compose. */
@@ -20,6 +24,10 @@ export interface AgentConfig {
 export const AGENT_VERSION = "0.0.0";
 /** Version stable de Trivy vérifiée à l'implémentation ; surchargeable avec TRIVY_IMAGE. */
 export const DEFAULT_TRIVY_IMAGE = "ghcr.io/aquasecurity/trivy:0.76.1";
+/** Runner Copa publié par la CI du dépôt ; fixez une version (PATCHER_IMAGE) pour un déploiement reproductible. */
+export const DEFAULT_PATCHER_IMAGE = "ghcr.io/valcriss/infrastructure-patcher:latest";
+/** BuildKit rootless officiel, version éprouvée au spike (ADR 0002). */
+export const DEFAULT_BUILDKIT_IMAGE = "moby/buildkit:v0.35.0-rootless";
 /** Volume nommé qui conserve la base de vulnérabilités entre les scans. */
 export const TRIVY_CACHE_VOLUME = "console-docker-trivy-cache";
 
@@ -50,6 +58,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     trivyImage: env.TRIVY_IMAGE ?? DEFAULT_TRIVY_IMAGE,
     trivyMemory: /^[0-9]+[kmg]$/i.test(env.TRIVY_MEMORY ?? "") ? (env.TRIVY_MEMORY as string) : "2g",
     trivyMaxImageBytes: maxImageBytes(env),
+    patcherImage: env.PATCHER_IMAGE ?? DEFAULT_PATCHER_IMAGE,
+    buildkitImage: env.BUILDKIT_IMAGE ?? DEFAULT_BUILDKIT_IMAGE,
+    buildkitMemory: /^[0-9]+[kmg]$/i.test(env.BUILDKIT_MEMORY ?? "") ? (env.BUILDKIT_MEMORY as string) : "3g",
     protectedProjects: (env.PROTECTED_PROJECTS ?? "").split(",").map((p) => p.trim()).filter(Boolean),
     selfContainer: env.HOSTNAME,
   };

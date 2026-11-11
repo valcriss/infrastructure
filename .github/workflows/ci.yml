@@ -50,6 +50,7 @@ jobs:
       - uses: actions/checkout@v7
       - run: docker build --target console -t console-docker/console:ci .
       - run: docker build --target agent -t console-docker/agent:ci .
+      - run: docker build --target patcher -t console-docker/patcher:ci .
       # Aucune vulnérabilité corrigeable (tous niveaux de gravité) dans les images générées : le contrôle échoue dès
       # qu'un correctif existe (paquet système, runtime Node ou dépendance). Les vulnérabilités sans correctif
       # connu ne bloquent pas. Même version de Trivy que celle utilisée par l'agent pour scanner les images.
@@ -66,3 +67,31 @@ jobs:
             echo "::endgroup::"
           done
           exit $status
+
+      # Le moteur de correctifs (Copa) est un binaire amont : sa bibliothèque standard Go n'est pas de notre fait. Le scan
+      # est donc informatif (il ne bloque pas) ; le conteneur est éphémère, en lecture seule et sans capacités.
+      - name: Vulnérabilités de l'image du moteur de correctifs (informatif)
+        run: |
+          trivy_image="$(grep -oE 'ghcr\.io/aquasecurity/trivy:[0-9.]+' packages/agent/src/config.ts | head -1)"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$trivy_image" image \
+            --no-progress --ignore-unfixed --severity HIGH,CRITICAL --exit-code 0 console-docker/patcher:ci
+
+
+  # Parcours complet d'un correctif d'image sur le vrai Docker (copie dans un registre local, scan, Copa + BuildKit
+  # rootless, rescan par digest, vérification de la configuration). Voir docs/adr/0002-remediation-images.md.
+  patch-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PATCH_E2E: "1"
+      PATCHER_IMAGE: console-docker/patcher:e2e
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w @infra/shared
+      - run: docker build --target patcher -t "$PATCHER_IMAGE" .
+      - run: npx vitest run packages/agent/src/patcher.e2e.test.ts

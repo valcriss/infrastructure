@@ -24,6 +24,7 @@ import { Prober } from "./probe.js";
 import { planRemoval } from "./removal.js";
 import { MetricsCollector } from "./metrics.js";
 import { Pruner } from "./pruner.js";
+import { ImagePatcher } from "./patcher.js";
 import { TrivyScanner } from "./scanner.js";
 import { StorageMeter } from "./storage.js";
 
@@ -79,6 +80,7 @@ export class AgentClient {
   private readonly prober: Prober;
   private readonly containerActions: ContainerActions;
   private readonly scanner: TrivyScanner;
+  private readonly patcher: ImagePatcher;
   private readonly storage: StorageMeter;
   /** Écart entre l'horloge de la console et celle de l'hôte (mesuré à la connexion), pour l'échéance des demandes. */
   private clockOffsetMs = 0;
@@ -123,6 +125,17 @@ export class AgentClient {
       maxImageBytes: config.trivyMaxImageBytes,
       timeoutMs: 20 * 60 * 1000,
     });
+    this.patcher = new ImagePatcher({
+      workspaceDir: config.workspaceDir,
+      dockerSocket: config.dockerSocket,
+      patcherImage: config.patcherImage,
+      buildkitImage: config.buildkitImage,
+      trivyImage: config.trivyImage,
+      trivyCacheVolume: TRIVY_CACHE_VOLUME,
+      buildkitMemory: config.buildkitMemory,
+      trivyMemory: config.trivyMemory,
+      maxImageBytes: config.trivyMaxImageBytes,
+    });
   }
 
   /** Espace disque Docker et candidats au nettoyage, sans les projets protégés ni l'image de Trivy. */
@@ -130,7 +143,7 @@ export class AgentClient {
     return collectDiskUsage({
       socket: this.config.dockerSocket,
       protectedAmong: (projects) => this.protection.protectedAmong(projects),
-      protectedImageRefs: [this.config.trivyImage],
+      protectedImageRefs: [this.config.trivyImage, this.config.patcherImage, this.config.buildkitImage],
       retained: this.retained,
     });
   }
@@ -245,7 +258,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy", "image.patch"],
           auth: auth,
         });
       });
@@ -280,6 +293,23 @@ export class AgentClient {
               // Premier relevé : sert de référence pour le calcul du CPU du suivant.
               void sendMetrics();
               break;
+            case "patch": {
+              const verdict = this.guard.check(msg.jobId, msg.expiresAt);
+              if (verdict !== "ok") {
+                this.log(`demande de correctif ${verdict === "replayed" ? "rejouée" : "expirée"} ignorée (${msg.jobId})`);
+                if (verdict === "expired") this.emit({ type: "patch_result", jobId: msg.jobId, status: "failed", error: "Demande de correctif expirée avant exécution." });
+                break;
+              }
+              // Un correctif à la fois ; le résultat repasse par emit() (conservé si la connexion est coupée).
+              void this.patcher
+                .patch(msg, (m) => this.emit(m))
+                .then((result) => this.emit(result))
+                .catch((err: unknown) => {
+                  this.log(`erreur de correctif : ${(err as Error).message}`);
+                  this.emit({ type: "patch_result", jobId: msg.jobId, status: "failed", error: `Erreur inattendue de l'agent : ${(err as Error).message}`.slice(0, 500) });
+                });
+              break;
+            }
             case "scan": {
               const verdict = this.guard.check(msg.scanId, msg.expiresAt);
               if (verdict !== "ok") {

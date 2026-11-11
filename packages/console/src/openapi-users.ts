@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { RouteDoc } from "./openapi.js";
 import { RegistryAppBody } from "./registry-app-routes.js";
+import { CreateRemediationBody } from "./remediation-routes.js";
 import { CreateUserBody, UpdateUserBody } from "./user-routes.js";
 
 const passkeyResponse = z.object({ challengeId: z.string(), response: z.record(z.string(), z.unknown()) });
@@ -76,6 +77,15 @@ export const REGISTRY_APP_ROUTE_DOCS: RouteDoc[] = [
   { method: "post", path: "/api/v1/settings/registry/rotate", summary: "Renouveler le mot de passe du registre", tag: "Registry", access: "session", success: { status: 200, description: "Nouvelle révision (non déployée) ; les identifiants enregistrés sont remplacés" }, errors: [401, 403, 409], description: "Redéployer l'application registry pour appliquer le nouveau mot de passe ; les hôtes qui avaient mémorisé l'ancien doivent se reconnecter." },
   { method: "post", path: "/api/v1/settings/registry/test", summary: "Tester l'accès public au registre", tag: "Registry", access: "session", success: { status: 200, description: "DNS, certificat reconnu, accès anonyme refusé, identifiants acceptés, et verdict global (ready)" }, errors: [401, 403, 409] },
   { method: "post", path: "/api/v1/settings/registry/detach", summary: "Détacher l'application de la gestion automatique", tag: "Registry", access: "session", success: { status: 200, description: "L'application redevient modifiable à la main" }, errors: [401, 403, 409] },
+];
+
+/** Remédiation des images : correctifs des paquets du système préparés sur un hôte, jamais déployés (ADR 0002). */
+export const REMEDIATION_ROUTE_DOCS: RouteDoc[] = [
+  { method: "get", path: "/api/v1/images/{imageId}/remediation/eligibility", summary: "Éligibilité d'une image à un correctif", tag: "Remédiation", access: "any", query: [{ name: "platform", schema: { type: "string", enum: ["linux/amd64", "linux/arm64"] } }], success: { status: 200, description: "Éligible ou non avec le motif (distribution, fin de vie, aucun correctif), CVE corrigeables du système / applicatives / sans correctif, hôtes capables, état du registre privé, correctif déjà actif" }, errors: [400, 401, 404] },
+  { method: "post", path: "/api/v1/images/{imageId}/remediations", summary: "Lancer un correctif d'image", tag: "Remédiation", access: "any", body: CreateRemediationBody, success: { status: 202, description: "Correctif en file (ou correctif déjà actif pour ce contenu : 200, created=false)" }, errors: [400, 401, 403, 404, 409], description: "Le correctif ne modifie ni l'image source ni un conteneur, et ne déploie rien : l'agent copie l'image dans le registre privé, la scanne, la corrige (Copa + BuildKit), puis la rescanne par digest. Le verdict (validated, partial, rejected) vient du second scan. Les codes d'erreur not_eligible_* disent pourquoi l'image est refusée." },
+  { method: "get", path: "/api/v1/remediations", summary: "Lister les correctifs", tag: "Remédiation", access: "any", query: [{ name: "imageId", schema: { type: "string" } }, { name: "hostId", schema: { type: "string", format: "uuid" } }, { name: "status", schema: { type: "string" } }, { name: "limit", schema: { type: "integer", minimum: 1, maximum: 200 } }], success: { status: 200, description: "Correctifs récents, sans les listes détaillées" }, errors: [400, 401] },
+  { method: "get", path: "/api/v1/remediations/{id}", summary: "Détail d'un correctif", tag: "Remédiation", access: "any", success: { status: 200, description: "Statut, bilan avant / après (CVE corrigées, restantes, nouvelles), paquets modifiés, changements de configuration, digests et référence immuable de l'image corrigée" }, errors: [401, 404] },
+  { method: "post", path: "/api/v1/remediations/{id}/cancel", summary: "Annuler un correctif en attente ou abandonner un correctif indéterminé", tag: "Remédiation", access: "any", success: { status: 200, description: "Correctif annulé" }, errors: [401, 403, 404, 409], description: "Un correctif en cours d'exécution ne s'annule pas : l'agent va jusqu'au bout de l'étape." },
 ];
 
 /** Terminal de conteneur et enregistrements de sessions. */

@@ -21,6 +21,8 @@ import { ObservedWatcher } from "./observed-watch.js";
 import { registerTraefikDynamicRoutes } from "./traefik-dynamic-routes.js";
 import { registerTraefikRoutes } from "./traefik-routes.js";
 import { registerRegistryAppRoutes } from "./registry-app-routes.js";
+import { RemediationService } from "./remediation.js";
+import { registerRemediationRoutes } from "./remediation-routes.js";
 import { registerImageRoutes } from "./image-routes.js";
 import { RegistryStore } from "./registries.js";
 import { RegistryClient, createFetch } from "./registry.js";
@@ -94,6 +96,7 @@ export interface BuiltApp {
   backup: BackupService;
   metrics: MetricsStore;
   scans: ScanService;
+  remediation: RemediationService;
   candidates: CandidateScans;
   pruning: PruneService;
   watcher: ImageWatcher;
@@ -434,6 +437,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   }
   const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile, config.tlsSkipVerifyHosts) });
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
+  const remediation = new RemediationService(pool, gateway, scans, registries, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const observedWatcher = new ObservedWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   // Une image qui change sur un projet observé est revérifiée (versions) et rescannée tout de suite, sans attendre la planification.
@@ -474,6 +478,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       removalPlans.onHostDisconnect(hostId);
       await ops.onDisconnect(hostId);
       await scans.onDisconnect(hostId);
+      await remediation.onDisconnect(hostId);
       await pruning.onDisconnect(hostId);
       storage.onDisconnect(hostId);
     },
@@ -489,10 +494,15 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       await metrics.ingest(hostId, samples, host);
     },
     onScanResult: (hostId, result) => scans.onResult(hostId, result),
+    onPatchProgress: (hostId, progress) => remediation.onProgress(hostId, progress),
+    onPatchResult: (hostId, result) => remediation.onResult(hostId, result),
     onStorageUsage: (hostId, msg) => storage.onResult(hostId, msg),
     onPruneResult: (hostId, result) => pruning.onResult(hostId, result),
     onPruneProgress: (hostId, progress) => pruning.onProgress(hostId, progress),
-    onConnect: () => scans.pumpAny(),
+    onConnect: async () => {
+      await scans.pumpAny();
+      await remediation.pumpAny();
+    },
   });
   app.addHook("onClose", async () => ops.close());
   const backup = new BackupService({
@@ -511,6 +521,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     backup.close();
     metrics.close();
     scans.close();
+    remediation.close();
     candidates.close();
     watcher.close();
     observedWatcher.close();
@@ -522,6 +533,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerTraefikRoutes(app, { pool, auth: apiAuth, isOnline: (id) => gateway.isOnline(id) });
   registerTraefikDynamicRoutes(app, { pool, auth: apiAuth });
   registerRegistryAppRoutes(app, { pool, auth: apiAuth, registries });
+  registerRemediationRoutes(app, { auth: apiAuth, remediation });
   registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, storage, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });
@@ -554,5 +566,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, scans, candidates, pruning, watcher, observedWatcher, storage, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, remediation, candidates, pruning, watcher, observedWatcher, storage, routes };
 }

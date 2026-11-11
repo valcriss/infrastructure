@@ -67,10 +67,11 @@ export function normalizeReport(report: unknown): {
   vulnerabilities: Vulnerability[];
   truncated: boolean;
 } {
-  const r = (report ?? {}) as { Metadata?: { OS?: { Family?: unknown; Name?: unknown; EOSL?: unknown } }; Results?: { Vulnerabilities?: RawVuln[] | null }[] };
+  const r = (report ?? {}) as { Metadata?: { OS?: { Family?: unknown; Name?: unknown; EOSL?: unknown } }; Results?: { Class?: unknown; Vulnerabilities?: RawVuln[] | null }[] };
   const seen = new Set<string>();
   const all: Vulnerability[] = [];
   for (const res of r.Results ?? []) {
+    const kind = res.Class === "os-pkgs" ? ("os" as const) : res.Class === "lang-pkgs" ? ("lang" as const) : undefined;
     for (const v of res.Vulnerabilities ?? []) {
       const id = text(v.VulnerabilityID, 80);
       if (!id) continue;
@@ -87,6 +88,7 @@ export function normalizeReport(report: unknown): {
         title: text(v.Title, 300),
         url: text(v.PrimaryURL, 300) || null,
         ...(text(v.Status, 40) ? { status: text(v.Status, 40) } : {}),
+        ...(kind ? { kind } : {}),
       });
     }
   }

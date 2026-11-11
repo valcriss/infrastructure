@@ -5,7 +5,7 @@ import { BackupConfigBody, BackupTestBody, RestoreApplyBody, RestorePreviewBody 
 import { BatchScanBody, ManualScanBody, PolicyBody, RegistryBody, SecuritySettingsBody } from "./image-routes.js";
 import { PreviewBody, PruneBody } from "./host-disk-routes.js";
 import { CreateTokenBody } from "./token-routes.js";
-import { IMAGE_ROUTE_DOCS, REGISTRY_APP_ROUTE_DOCS, REMOVAL_ROUTE_DOCS, SECURITY_ROUTE_DOCS, TERMINAL_ROUTE_DOCS, TRAEFIK_ROUTE_DOCS, USER_ROUTE_DOCS } from "./openapi-users.js";
+import { IMAGE_ROUTE_DOCS, REGISTRY_APP_ROUTE_DOCS, REMEDIATION_ROUTE_DOCS, REMOVAL_ROUTE_DOCS, SECURITY_ROUTE_DOCS, TERMINAL_ROUTE_DOCS, TRAEFIK_ROUTE_DOCS, USER_ROUTE_DOCS } from "./openapi-users.js";
 
 /** Qui peut appeler la route. */
 type Access = "public" | "session" | "any";
@@ -44,6 +44,7 @@ export const ROUTE_DOCS: RouteDoc[] = [
   ...TERMINAL_ROUTE_DOCS,
   ...TRAEFIK_ROUTE_DOCS,
   ...REGISTRY_APP_ROUTE_DOCS,
+  ...REMEDIATION_ROUTE_DOCS,
   ...IMAGE_ROUTE_DOCS,
   ...SECURITY_ROUTE_DOCS,
   ...REMOVAL_ROUTE_DOCS,

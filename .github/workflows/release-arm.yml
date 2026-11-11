@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [console, agent]
+        target: [console, agent, patcher]
     env:
       VERSION: ${{ inputs.version }}
     steps:
