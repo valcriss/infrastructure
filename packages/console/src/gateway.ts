@@ -20,6 +20,7 @@ import {
   type RemovalPlanResultSchema,
   type PatchProgress,
   type PatchResult,
+  type RegistryGcResult,
 } from "@infra/shared";
 import type { z } from "zod";
 import type { FastifyBaseLogger } from "fastify";
@@ -48,6 +49,7 @@ export interface GatewayHandlers {
   onScanResult(hostId: string, result: ScanResult): Promise<void>;
   onPatchProgress(hostId: string, progress: PatchProgress): Promise<void>;
   onPatchResult(hostId: string, result: PatchResult): Promise<void>;
+  onRegistryGcResult(hostId: string, result: RegistryGcResult): void;
   onStorageUsage(hostId: string, msg: StorageUsageMessage): Promise<void>;
   onPruneResult(hostId: string, result: PruneResult): Promise<void>;
   onPruneProgress(hostId: string, progress: PruneProgress): Promise<void>;
@@ -210,6 +212,9 @@ export class AgentGateway {
             break;
           case "scan_result":
             await this.handlers?.onScanResult(hostId, msg);
+            break;
+          case "registry_gc_result":
+            this.handlers?.onRegistryGcResult(hostId, msg);
             break;
           case "patch_progress":
             await this.handlers?.onPatchProgress(hostId, msg);

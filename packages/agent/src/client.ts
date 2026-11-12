@@ -25,6 +25,7 @@ import { planRemoval } from "./removal.js";
 import { MetricsCollector } from "./metrics.js";
 import { Pruner } from "./pruner.js";
 import { ImagePatcher } from "./patcher.js";
+import { runRegistryGc } from "./registry-gc.js";
 import { TrivyScanner } from "./scanner.js";
 import { StorageMeter } from "./storage.js";
 
@@ -81,6 +82,7 @@ export class AgentClient {
   private readonly containerActions: ContainerActions;
   private readonly scanner: TrivyScanner;
   private readonly patcher: ImagePatcher;
+  private gcRunning = false;
   private readonly storage: StorageMeter;
   /** Écart entre l'horloge de la console et celle de l'hôte (mesuré à la connexion), pour l'échéance des demandes. */
   private clockOffsetMs = 0;
@@ -260,7 +262,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy", "image.patch", "image.patch.cancel"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy", "image.patch", "image.patch.cancel", "registry.gc"],
           auth: auth,
         });
       });
@@ -316,6 +318,25 @@ export class AgentClient {
               // Sans effet si le correctif est terminé ou inconnu : la console le déduira du résultat ou de son délai.
               this.log(`annulation du correctif ${msg.jobId} : ${this.patcher.cancel(msg.jobId) ? "demandée" : "rien à arrêter"}`);
               break;
+            case "registry_gc": {
+              const verdict = this.guard.check(msg.requestId, msg.expiresAt);
+              if (verdict !== "ok") {
+                this.log(`demande de ramasse-miettes ${verdict === "replayed" ? "rejouée" : "expirée"} ignorée (${msg.requestId})`);
+                if (verdict === "expired") this.emit({ type: "registry_gc_result", requestId: msg.requestId, status: "failed", dryRun: msg.dryRun, error: "Demande expirée avant exécution." });
+                break;
+              }
+              // Un seul ramasse-miettes à la fois : un second est refusé (le registre ne supporte pas deux GC simultanés).
+              if (this.gcRunning) {
+                this.emit({ type: "registry_gc_result", requestId: msg.requestId, status: "failed", dryRun: msg.dryRun, error: "Un ramasse-miettes est déjà en cours sur cet hôte." });
+                break;
+              }
+              this.gcRunning = true;
+              void runRegistryGc(msg, this.config.dockerSocket)
+                .then((result) => this.emit(result))
+                .catch((err: unknown) => this.emit({ type: "registry_gc_result", requestId: msg.requestId, status: "failed", dryRun: msg.dryRun, error: `Erreur inattendue de l'agent : ${(err as Error).message}`.slice(0, 500) }))
+                .finally(() => (this.gcRunning = false));
+              break;
+            }
             case "scan": {
               const verdict = this.guard.check(msg.scanId, msg.expiresAt);
               if (verdict !== "ok") {

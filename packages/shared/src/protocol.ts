@@ -496,7 +496,25 @@ export const PatchResultSchema = z.object({
 });
 export type PatchResult = z.infer<typeof PatchResultSchema>;
 
+/**
+ * Résultat du ramasse-miettes du registre géré (agent -> console). Seule la fin de la sortie est transmise.
+ */
+export const RegistryGcResultSchema = z.object({
+  type: z.literal("registry_gc_result"),
+  requestId: z.uuid(),
+  status: z.enum(["succeeded", "failed"]),
+  dryRun: z.boolean(),
+  error: z.string().max(1000).optional(),
+  /** Fin de la sortie du ramasse-miettes. */
+  output: z.string().max(6000).optional(),
+  /** Espace occupé par le stockage du registre avant / après, en Kio. */
+  usedBeforeKb: z.number().int().min(0).optional(),
+  usedAfterKb: z.number().int().min(0).optional(),
+});
+export type RegistryGcResult = z.infer<typeof RegistryGcResultSchema>;
+
 export const AgentMessageSchema = z.discriminatedUnion("type", [
+  RegistryGcResultSchema,
   PatchProgressSchema,
   PatchResultSchema,
   HelloSchema,
@@ -748,12 +766,26 @@ export type PatchMessage = z.infer<typeof PatchSchema>;
  * Arrête un correctif en cours (ou en attente sur l'agent) : le processus en cours est tué, les conteneurs éphémères
  * sont supprimés et l'agent répond par un `patch_result` « cancelled ». Capacité `image.patch.cancel`.
  */
+/**
+ * Lance le ramasse-miettes du registre géré par la console (`registry garbage-collect`, commande fixe) dans son seul
+ * conteneur (projet Compose « registry »). Aucun argument libre : seul `dryRun` (simulation) est transmis. Capacité
+ * `registry.gc`.
+ */
+export const RegistryGcSchema = z.object({
+  type: z.literal("registry_gc"),
+  requestId: z.uuid(),
+  expiresAt: z.iso.datetime().optional(),
+  dryRun: z.boolean(),
+});
+export type RegistryGcMessage = z.infer<typeof RegistryGcSchema>;
+
 export const PatchCancelSchema = z.object({ type: z.literal("patch_cancel"), jobId: z.uuid() });
 export type PatchCancelMessage = z.infer<typeof PatchCancelSchema>;
 
 export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   PatchSchema,
   PatchCancelSchema,
+  RegistryGcSchema,
   WelcomeSchema,
   ErrorMessageSchema,
   RequestInventorySchema,

@@ -7,6 +7,7 @@ import { loadUsedImages } from "./images.js";
 import type { ImageRef } from "./image-ref.js";
 import { RegistryError, type RegistryClient } from "./registry.js";
 import { getRegistrySettings, type RegistrySettings } from "./registry-app-routes.js";
+import { getRetentionSettings, markRetention, type RetentionMark, type RetentionSettings } from "./registry-retention.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -34,6 +35,12 @@ export interface RegistryImage {
   /** `patched` : image corrigée ; `source` : copie de l'image d'origine ; `other` : dépôt ou tag inconnu de la console. */
   kind: "patched" | "source" | "other";
   remediation: { id: string; status: string } | null;
+  /** Date du correctif d'origine (sert à classer les images pour la rétention). */
+  createdAt: string | null;
+  /** Digest de la copie source dont provient une image corrigée. */
+  sourceDigest: string | null;
+  /** Ce que dit la règle de rétention (désactivée : jamais candidate). */
+  retention: RetentionMark;
   /** Usages qui interdisent la suppression (révision courante ou déployée, conteneur en cours, correctif actif). */
   blockers: string[];
   /** Révisions plus anciennes qui référencent l'image : suppression possible après confirmation. */
@@ -59,6 +66,9 @@ export interface RegistryImagesView {
   truncated: boolean;
   totalBytes: number;
   gcCommand: string;
+  retention: Pick<RetentionSettings, "mode" | "keepPerRepository">;
+  /** Nombre d'images que la règle de rétention propose de supprimer. */
+  retentionCandidates: number;
   /** Nom du service à utiliser avec `docker exec`/Terminal. */
   containerHint: string;
 }
@@ -128,7 +138,10 @@ export class RegistryImages {
     const view: RegistryImagesView = {
       registry: s.host, reachable: false, error: null, repositories: [], truncated: false, totalBytes: 0,
       gcCommand: GARBAGE_COLLECT_COMMAND, containerHint: REGISTRY_STACK_NAME,
+      retention: { mode: "off", keepPerRepository: 0 }, retentionCandidates: 0,
     };
+    const retention = await getRetentionSettings(this.pool);
+    view.retention = { mode: retention.mode, keepPerRepository: retention.keepPerRepository };
     let names: string[];
     try {
       const cat = await this.client.catalog(this.ref(s, "catalog"));
@@ -143,8 +156,8 @@ export class RegistryImages {
 
     const [revisions, jobs, used] = await Promise.all([
       this.revisions(),
-      this.pool.query<{ id: string; status: string; repository: string; source_digest: string | null; patched_digest: string | null }>(
-        "SELECT id, status, repository, source_digest, patched_digest FROM remediation_jobs WHERE registry_host = $1 ORDER BY created_at",
+      this.pool.query<{ id: string; status: string; repository: string; source_digest: string | null; patched_digest: string | null; created_at: Date }>(
+        "SELECT id, status, repository, source_digest, patched_digest, created_at FROM remediation_jobs WHERE registry_host = $1 ORDER BY created_at",
         [s.host],
       ),
       loadUsedImages(this.pool),
@@ -175,7 +188,7 @@ export class RegistryImages {
             continue;
           }
           byDigest.set(digest, {
-            digest, tags: [tag], sizeBytes: null, kind: "other", remediation: null, blockers: [], history: [], deletable: false, reason: null,
+            digest, tags: [tag], sizeBytes: null, kind: "other", remediation: null, createdAt: null, sourceDigest: null, retention: { candidate: false, reason: null }, blockers: [], history: [], deletable: false, reason: null,
           });
         }
       } catch {
@@ -188,6 +201,8 @@ export class RegistryImages {
         const job = patched ?? source ?? null;
         img.kind = patched ? "patched" : source ? "source" : "other";
         img.remediation = job ? { id: job.id, status: job.status } : null;
+        img.createdAt = job?.created_at.toISOString() ?? null;
+        img.sourceDigest = patched?.source_digest ?? null;
         try {
           img.sizeBytes = await this.client.manifestSize(ref, img.digest);
         } catch {
@@ -207,18 +222,25 @@ export class RegistryImages {
         else if (img.blockers.length > 0) img.reason = img.blockers.join(" ; ");
         img.deletable = managed && img.blockers.length === 0;
       }
-      view.repositories.push({ repository, managed, images: [...byDigest.values()].sort((a, b) => a.tags[0]!.localeCompare(b.tags[0]!)), truncated });
+      const images = [...byDigest.values()].sort((a, b) => a.tags[0]!.localeCompare(b.tags[0]!));
+      if (managed) {
+        const marks = markRetention(images, retention);
+        for (const img of images) img.retention = marks.get(img.digest) ?? img.retention;
+        view.retentionCandidates += images.filter((i) => i.retention.candidate).length;
+      }
+      view.repositories.push({ repository, managed, images, truncated });
     }
     return view;
   }
 
   /** Supprime l'image (par digest) si, et seulement si, aucun usage ne la protège. Les contrôles sont refaits ici. */
-  async remove(input: { repository: string; digest: string; acceptHistory?: boolean | undefined }, actor: string): Promise<{ deleted: true; tags: string[]; gcCommand: string }> {
+  async remove(input: { repository: string; digest: string; acceptHistory?: boolean | undefined }, actor: string, fresh?: RegistryImagesView): Promise<{ deleted: true; tags: string[]; gcCommand: string }> {
     const s = await this.settings();
     if (!input.repository.startsWith(MANAGED_PREFIX)) {
       throw new HttpError(409, "not_managed", "Seules les images créées par les correctifs peuvent être supprimées depuis la console.");
     }
-    const view = await this.list();
+    // `fresh` : vue calculée à l'instant par l'appelant (suppressions en série) ; sinon les protections sont recalculées.
+    const view = fresh ?? (await this.list());
     if (!view.reachable) throw new HttpError(502, "registry_unreachable", view.error ?? "Registre injoignable.");
     const repo = view.repositories.find((r) => r.repository === input.repository);
     const img = repo?.images.find((i) => i.digest === input.digest);

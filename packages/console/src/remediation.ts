@@ -196,6 +196,8 @@ export class RemediationService {
   private timer: NodeJS.Timeout | undefined;
   /** Préparation planifiée des correctifs (désactivée par défaut). */
   readonly auto: RemediationAuto;
+  /** Démarrage des correctifs suspendu (ramasse-miettes du registre en cours) : les jobs restent en file. */
+  private held = false;
 
   constructor(
     private readonly pool: Pool,
@@ -423,7 +425,14 @@ export class RemediationService {
   // --- File d'exécution ------------------------------------------------------------------------------
 
   /** Démarre ce qui peut l'être (un job par hôte, deux au total). */
+  /** Suspend ou reprend le démarrage des correctifs ; à la reprise, la file repart. */
+  hold(held: boolean): void {
+    this.held = held;
+    if (!held) void this.pumpAny().catch((e: unknown) => this.log.error(e, "reprise des correctifs"));
+  }
+
   async pumpAny(): Promise<void> {
+    if (this.held) return;
     const client = await this.pool.connect();
     try {
       await client.query("SELECT pg_advisory_lock($1)", [PUMP_LOCK]);

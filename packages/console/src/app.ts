@@ -21,7 +21,9 @@ import { ObservedWatcher } from "./observed-watch.js";
 import { registerTraefikDynamicRoutes } from "./traefik-dynamic-routes.js";
 import { registerTraefikRoutes } from "./traefik-routes.js";
 import { registerRegistryAppRoutes } from "./registry-app-routes.js";
+import { RegistryGc } from "./registry-gc.js";
 import { RegistryImages, registerRegistryImageRoutes } from "./registry-images.js";
+import { RegistryRetention, registerRegistryMaintenanceRoutes } from "./registry-maintenance.js";
 import { RemediationService } from "./remediation.js";
 import { registerRemediationRoutes } from "./remediation-routes.js";
 import { RemediationApply } from "./remediation-apply.js";
@@ -100,6 +102,8 @@ export interface BuiltApp {
   metrics: MetricsStore;
   scans: ScanService;
   remediation: RemediationService;
+  /** Rétention automatique du registre (désactivée tant qu'un administrateur ne choisit pas le mode « auto »). */
+  retention: RegistryRetention;
   candidates: CandidateScans;
   pruning: PruneService;
   watcher: ImageWatcher;
@@ -441,6 +445,9 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const registryClient = new RegistryClient({ credentials: (r) => registries.credentials(r), fetchFn: await createFetch(config.registryCaFile, config.tlsSkipVerifyHosts) });
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const remediation = new RemediationService(pool, gateway, scans, registries, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
+  const registryImages = new RegistryImages(pool, registryClient);
+  const registryGc = new RegistryGc(pool, gateway, (held) => remediation.hold(held));
+  const retention = new RegistryRetention(pool, registryImages, registryGc, { error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const observedWatcher = new ObservedWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   // Une image qui change sur un projet observé est revérifiée (versions) et rescannée tout de suite, sans attendre la planification.
@@ -482,6 +489,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
       await ops.onDisconnect(hostId);
       await scans.onDisconnect(hostId);
       await remediation.onDisconnect(hostId);
+      registryGc.onDisconnect(hostId);
       await pruning.onDisconnect(hostId);
       storage.onDisconnect(hostId);
     },
@@ -499,6 +507,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     onScanResult: (hostId, result) => scans.onResult(hostId, result),
     onPatchProgress: (hostId, progress) => remediation.onProgress(hostId, progress),
     onPatchResult: (hostId, result) => remediation.onResult(hostId, result),
+    onRegistryGcResult: (hostId, result) => registryGc.onResult(hostId, result),
     onStorageUsage: (hostId, msg) => storage.onResult(hostId, msg),
     onPruneResult: (hostId, result) => pruning.onResult(hostId, result),
     onPruneProgress: (hostId, progress) => pruning.onProgress(hostId, progress),
@@ -525,6 +534,8 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     metrics.close();
     scans.close();
     remediation.close();
+    retention.close();
+    registryGc.close();
     candidates.close();
     watcher.close();
     observedWatcher.close();
@@ -536,7 +547,8 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerTraefikRoutes(app, { pool, auth: apiAuth, isOnline: (id) => gateway.isOnline(id) });
   registerTraefikDynamicRoutes(app, { pool, auth: apiAuth });
   registerRegistryAppRoutes(app, { pool, auth: apiAuth, registries });
-  registerRegistryImageRoutes(app, { auth: apiAuth, images: new RegistryImages(pool, registryClient) });
+  registerRegistryImageRoutes(app, { auth: apiAuth, images: registryImages });
+  registerRegistryMaintenanceRoutes(app, { pool, auth: apiAuth, retention, gc: registryGc });
   registerRemediationRoutes(app, { auth: apiAuth, remediation, apply: new RemediationApply(pool, remediation) });
   registerRemediationAutoRoutes(app, { pool, auth: apiAuth, auto: remediation.auto });
   registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, storage, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
@@ -571,5 +583,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, scans, remediation, candidates, pruning, watcher, observedWatcher, storage, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, remediation, retention, candidates, pruning, watcher, observedWatcher, storage, routes };
 }

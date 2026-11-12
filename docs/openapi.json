@@ -3260,6 +3260,298 @@
         }
       }
     },
+    "/api/v1/settings/registry/retention": {
+      "get": {
+        "summary": "Règle de rétention du registre et état du ramasse-miettes",
+        "tags": [
+          "Registry"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Réglages (mode off / propose / auto, keepPerRepository, maxDeletesPerPass) et état du ramasse-miettes (en cours, dernier résultat, commande manuelle)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Modifier la règle de rétention du registre",
+        "description": "Administrateurs uniquement. Les N images corrigées les plus récentes de chaque dépôt sont conservées. « propose » signale les images à supprimer (champ retention de la liste des images) ; « auto » les supprime périodiquement (toutes les 6 h, jamais pendant un correctif) puis lance le ramasse-miettes.",
+        "tags": [
+          "Registry"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "propose",
+                      "auto"
+                    ]
+                  },
+                  "keepPerRepository": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  "maxDeletesPerPass": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  }
+                },
+                "required": [
+                  "mode",
+                  "keepPerRepository",
+                  "maxDeletesPerPass"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Réglages enregistrés",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/registry/retention/apply": {
+      "post": {
+        "summary": "Supprimer maintenant les images proposées par la règle de rétention",
+        "description": "Administrateurs uniquement. Mêmes protections que la suppression manuelle ; une image référencée par d'anciennes révisions n'est jamais candidate.",
+        "tags": [
+          "Registry"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Images supprimées, échecs, nombre restant (plafond par passage) ; aucun ramasse-miettes n'est lancé",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/registry/gc": {
+      "get": {
+        "summary": "État du ramasse-miettes du registre",
+        "tags": [
+          "Registry"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Opération en cours, dernier résultat (espace avant / après) et commande manuelle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Lancer le ramasse-miettes du registre",
+        "description": "Administrateurs uniquement. Commande fixe exécutée dans le conteneur du registre géré (dryRun = simulation). 409 si un correctif est en cours ou en attente (aucune publication pendant un ramasse-miettes), si l'agent est ancien (agent_cannot_gc) ou l'hôte hors ligne. Les correctifs ne démarrent pas pendant l'opération.",
+        "tags": [
+          "Registry"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "dryRun": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Demande envoyée à l'agent de l'hôte du registre ; suivre l'état par GET",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/registry/images/delete": {
       "post": {
         "summary": "Supprimer une image du registre (par digest)",
