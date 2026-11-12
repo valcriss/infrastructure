@@ -789,6 +789,8 @@ export interface RemediationJob {
   error: string | null;
   applied: { stackId: string; stackName: string; service: string; revision: number; by: string; at: string }[];
   imageDeleted: boolean;
+  /** Un arrêt a été demandé à l'agent et n'est pas encore confirmé. */
+  cancelRequested: boolean;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

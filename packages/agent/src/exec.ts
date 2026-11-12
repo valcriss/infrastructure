@@ -8,11 +8,15 @@ export interface ExecOptions {
   onOutput?: (chunk: string) => void;
   /** Taille maximale de la sortie standard conservée dans `stdout`. */
   maxStdoutBytes?: number;
+  /** Interrompt le processus (SIGKILL) quand le signal est déclenché ; `aborted` vaut alors vrai. */
+  signal?: AbortSignal;
 }
 
 export interface ExecResult {
   code: number | null;
   timedOut: boolean;
+  /** Le processus a été tué à la demande de l'appelant (signal). */
+  aborted?: boolean;
   stdout: string;
   /** Fin de la sortie d'erreur (les refus de registre y figurent). */
   stderr: string;
@@ -35,6 +39,13 @@ export function runCommand(file: string, args: string[], opts: ExecOptions): Pro
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
+    const onAbort = (): void => {
+      aborted = true;
+      child.kill("SIGKILL");
+    };
+    if (opts.signal?.aborted) onAbort();
+    else opts.signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
@@ -52,11 +63,13 @@ export function runCommand(file: string, args: string[], opts: ExecOptions): Pro
     });
     child.on("error", (err) => {
       clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
       reject(err);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code, timedOut, stdout, stderr });
+      opts.signal?.removeEventListener("abort", onAbort);
+      resolve({ code, timedOut, aborted, stdout, stderr });
     });
   });
 }

@@ -239,28 +239,51 @@ const brief = (msg: string): string => {
 
 class PatchError extends Error {}
 
+/** Le correctif a été arrêté à la demande de la console. */
+class CancelledError extends Error {}
+
 // --- Exécution ----------------------------------------------------------------------------------------
 
 /** Un correctif à la fois par agent. */
 export class ImagePatcher {
   private queue: Promise<unknown> = Promise.resolve();
+  /** Correctifs en attente ou en cours, par identifiant de job : de quoi les interrompre. */
+  private readonly controllers = new Map<string, AbortController>();
 
   constructor(private readonly cfg: PatcherConfig) {}
 
   patch(msg: PatchMessage, emit: Emit): Promise<PatchResult> {
-    const run = this.queue.then(() => this.patchNow(msg, emit));
+    // Le contrôleur existe dès la demande : un correctif encore en file peut aussi être annulé.
+    const ac = new AbortController();
+    this.controllers.set(msg.jobId, ac);
+    const run = this.queue.then(() => this.patchNow(msg, emit, ac.signal)).finally(() => this.controllers.delete(msg.jobId));
     this.queue = run.catch(() => {});
     return run;
   }
 
-  private async patchNow(msg: PatchMessage, emit: Emit): Promise<PatchResult> {
+  /** Arrête le correctif (processus tué, conteneurs supprimés) ; faux s'il n'est ni en attente ni en cours. */
+  cancel(jobId: string): boolean {
+    const ac = this.controllers.get(jobId);
+    if (!ac) return false;
+    ac.abort();
+    return true;
+  }
+
+  private async patchNow(msg: PatchMessage, emit: Emit, signal: AbortSignal): Promise<PatchResult> {
     const { cfg } = this;
     const id8 = msg.jobId.slice(0, 8);
     const dir = join(cfg.workspaceDir, `.patch-${msg.jobId}`);
     const bk = `console-docker-bk-${id8}`;
     const deadline = Date.now() + msg.timeoutSec * 1000;
     const left = (): number => Math.max(10_000, deadline - Date.now());
-    const progress = (stage: PatchProgress["stage"], message?: string): void => emit({ type: "patch_progress", jobId: msg.jobId, stage, ...(message ? { message } : {}) });
+    /** Lève CancelledError si l'annulation a été demandée : appelé entre les étapes et après chaque commande. */
+    const checkCancelled = (): void => {
+      if (signal.aborted) throw new CancelledError();
+    };
+    const progress = (stage: PatchProgress["stage"], message?: string): void => {
+      checkCancelled();
+      emit({ type: "patch_progress", jobId: msg.jobId, stage, ...(message ? { message } : {}) });
+    };
 
     const auth = await prepareDockerAuth(dockerEnv(cfg.dockerSocket), msg.registryAuths);
     const secrets = auth.secrets;
@@ -271,7 +294,9 @@ export class ImagePatcher {
 
     const docker = async (args: string[], timeoutMs: number, env: NodeJS.ProcessEnv = auth.env): Promise<{ stdout: string; code: number | null; timedOut: boolean; tail: string }> => {
       let tail = "";
-      const res = await runCommand("docker", args, { env, timeoutMs, onOutput: (c) => (tail = (tail + c).slice(-2000)) });
+      const res = await runCommand("docker", args, { env, timeoutMs, signal, onOutput: (c) => (tail = (tail + c).slice(-2000)) });
+      // Une commande tuée par l'annulation n'est jamais prise pour un échec du moteur.
+      checkCancelled();
       return { ...res, tail: mask(tail) };
     };
 
@@ -405,19 +430,21 @@ export class ImagePatcher {
         vexStatements,
       };
     } catch (err) {
+      if (err instanceof CancelledError) return { type: "patch_result", jobId: msg.jobId, status: "cancelled", error: "Correctif arrêté à la demande de la console." };
       return fail(err instanceof PatchError ? err.message : `Erreur inattendue de l'agent : ${(err as Error).message}`);
     } finally {
-      // Le nettoyage ne doit jamais faire perdre le résultat.
+      // Le nettoyage ne doit jamais faire perdre le résultat, ni être interrompu par l'annulation qu'il suit.
       const quiet = dockerEnv(cfg.dockerSocket);
+      const cleanup = (args: string[], ms: number): Promise<unknown> => runCommand("docker", args, { env: quiet, timeoutMs: ms }).catch(() => undefined);
       for (const name of [`console-docker-patch-copa-${id8}`, ...Array.from({ length: 3 }, (_, i) => `console-docker-patch-trivy-${id8}-${i}`), bk]) {
-        await docker(["rm", "-f", name], 20_000, quiet).catch(() => undefined);
+        await cleanup(["rm", "-f", name], 20_000);
       }
       try {
         await stopSidecar?.();
       } catch {
         /* sans conséquence */
       }
-      for (const t of tags) await docker(["rmi", t], 30_000, quiet).catch(() => undefined);
+      for (const t of tags) await cleanup(["rmi", t], 30_000);
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
       await auth.cleanup().catch(() => undefined);
     }

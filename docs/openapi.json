@@ -4188,8 +4188,8 @@
     },
     "/api/v1/remediations/{id}/cancel": {
       "post": {
-        "summary": "Annuler un correctif en attente ou abandonner un correctif indéterminé",
-        "description": "Un correctif en cours d'exécution ne s'annule pas : l'agent va jusqu'au bout de l'étape.",
+        "summary": "Annuler un correctif : en attente, en cours (arrêt demandé à l'agent) ou indéterminé (abandon)",
+        "description": "Un correctif en attente est annulé aussitôt ; un correctif indéterminé est abandonné. Pour un correctif en cours, l'arrêt est DEMANDÉ à l'agent (processus tué, conteneurs éphémères supprimés) : la réponse indique cancelRequested=true et le statut ne passe à « cancelled » que lorsque l'agent le confirme, sinon à « unknown » au bout de deux minutes. 409 agent_cannot_cancel si l'agent est ancien, host_offline si l'hôte est déconnecté. Ce qui a déjà été publié dans le registre y reste.",
         "tags": [
           "Remédiation"
         ],

@@ -476,7 +476,8 @@ export const MAX_PATCH_PACKAGES = 2000;
 export const PatchResultSchema = z.object({
   type: z.literal("patch_result"),
   jobId: z.uuid(),
-  status: z.enum(["succeeded", "failed"]),
+  /** « cancelled » : arrêté à la demande de la console (rien n'est conservé que le registre n'ait déjà reçu). */
+  status: z.enum(["succeeded", "failed", "cancelled"]),
   error: z.string().max(2000).optional(),
   /** Versions des outils utilisés (journalisées pour la provenance). */
   tools: z.object({ copa: z.string().max(60), buildkit: z.string().max(60), trivy: z.string().max(60) }).optional(),
@@ -743,8 +744,16 @@ export const PatchSchema = z.object({
 });
 export type PatchMessage = z.infer<typeof PatchSchema>;
 
+/**
+ * Arrête un correctif en cours (ou en attente sur l'agent) : le processus en cours est tué, les conteneurs éphémères
+ * sont supprimés et l'agent répond par un `patch_result` « cancelled ». Capacité `image.patch.cancel`.
+ */
+export const PatchCancelSchema = z.object({ type: z.literal("patch_cancel"), jobId: z.uuid() });
+export type PatchCancelMessage = z.infer<typeof PatchCancelSchema>;
+
 export const ConsoleMessageSchema = z.discriminatedUnion("type", [
   PatchSchema,
+  PatchCancelSchema,
   WelcomeSchema,
   ErrorMessageSchema,
   RequestInventorySchema,

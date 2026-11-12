@@ -179,8 +179,11 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
 
     ws.send(JSON.stringify({ type: "patch_progress", jobId: msg.jobId, stage: "patching" }));
     await waitFor(async () => (await status(msg.jobId)).status === "patching");
-    // Un job en cours ne s'annule pas.
-    expect((await call("POST", `/api/v1/remediations/${msg.jobId}/cancel`)).status).toBe(409);
+    // Un agent qui ne sait pas annuler (capacité absente) : refus clair, le job continue.
+    const noCancel = await call("POST", `/api/v1/remediations/${msg.jobId}/cancel`);
+    expect(noCancel.status).toBe(409);
+    expect(noCancel.json.error?.code ?? noCancel.json.code).toBe("agent_cannot_cancel");
+    expect((await status(msg.jobId)).status).toBe("patching");
   });
 
   it("calcule le verdict d'après les deux scans et publie la référence immuable", async () => {
@@ -368,6 +371,62 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       expect(registryStack?.managed_by).toBe("registry");
       const locked = await call("PUT", `/api/v1/stacks/${registryStack?.id}/compose`, { expectedRevision: 1, compose: "services: {}\n" });
       expect(locked.status).toBe(423);
+    });
+  });
+
+  describe("annuler un correctif en cours", () => {
+    const cancels = (jobId: string) => received.filter((m) => m.type === "patch_cancel" && m.jobId === jobId);
+    const running = async () => {
+      const { r, wait } = await start();
+      expect(r.status).toBe(202);
+      const msg = await wait();
+      ws.send(JSON.stringify({ type: "patch_progress", jobId: msg.jobId, stage: "patching" }));
+      await waitFor(async () => (await status(msg.jobId)).status === "patching");
+      return msg.jobId as string;
+    };
+
+    it("demande l'arrêt à l'agent, sans rien affirmer avant sa confirmation", async () => {
+      ws.close();
+      ws = await connect({ kind: "credentials", ...(creds as object) }, ["scan.trivy", "image.patch", "image.patch.cancel"]);
+      await sendInventory();
+      const id = await running();
+
+      const asked = await call("POST", `/api/v1/remediations/${id}/cancel`);
+      expect(asked.status).toBe(200);
+      expect(asked.json).toMatchObject({ status: "patching", active: true, cancelRequested: true });
+      await waitFor(() => cancels(id).length === 1);
+      // Une seconde demande ne renvoie rien de plus à l'agent.
+      expect((await call("POST", `/api/v1/remediations/${id}/cancel`)).status).toBe(200);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(cancels(id)).toHaveLength(1);
+
+      ws.send(JSON.stringify({ type: "patch_result", jobId: id, status: "cancelled", error: "Correctif arrêté à la demande de la console." }));
+      await waitFor(async () => (await status(id)).status === "cancelled");
+      const job = await status(id);
+      expect(job).toMatchObject({ active: false, cancelRequested: false, patchedDigest: null, patchedRef: null });
+      expect(job.error).toContain("Annulé par boss@example.com");
+      expect((await call("POST", `/api/v1/remediations/${id}/cancel`)).status).toBe(409);
+      expect((await pool.query("SELECT 1 FROM audit_events WHERE action = 'remediation.cancel' AND target LIKE $1", [`${id}%`])).rowCount).toBe(1);
+    });
+
+    it("si le correctif se termine avant l'arrêt, son résultat reste valable", async () => {
+      const id = await running();
+      expect((await call("POST", `/api/v1/remediations/${id}/cancel`)).status).toBe(200);
+      finish(id);
+      await waitFor(async () => (await status(id)).status === "validated");
+      expect(await status(id)).toMatchObject({ status: "validated", cancelRequested: false });
+    });
+
+    it("sans confirmation de l'agent, le résultat devient indéterminé (jamais « annulé »), puis une confirmation tardive est acceptée", async () => {
+      const id = await running();
+      expect((await call("POST", `/api/v1/remediations/${id}/cancel`)).status).toBe(200);
+      await pool.query("UPDATE remediation_jobs SET cancel_requested_at = now() - interval '5 minutes' WHERE id = $1", [id]);
+      await (built.remediation as unknown as { tick(): Promise<void> }).tick();
+      const job = await status(id);
+      expect(job.status).toBe("unknown");
+      expect(job.error).toContain("n'a pas confirmé");
+      ws.send(JSON.stringify({ type: "patch_result", jobId: id, status: "cancelled", error: "arrêté" }));
+      await waitFor(async () => (await status(id)).status === "cancelled");
     });
   });
 

@@ -260,7 +260,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy", "image.patch"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy", "image.patch", "image.patch.cancel"],
           auth: auth,
         });
       });
@@ -312,6 +312,10 @@ export class AgentClient {
                 });
               break;
             }
+            case "patch_cancel":
+              // Sans effet si le correctif est terminé ou inconnu : la console le déduira du résultat ou de son délai.
+              this.log(`annulation du correctif ${msg.jobId} : ${this.patcher.cancel(msg.jobId) ? "demandée" : "rien à arrêter"}`);
+              break;
             case "scan": {
               const verdict = this.guard.check(msg.scanId, msg.expiresAt);
               if (verdict !== "ok") {

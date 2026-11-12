@@ -89,7 +89,13 @@ async function start() {
 async function cancel() {
   if (!job.value) return;
   const unknown = job.value.status === "unknown";
-  if (!confirm(unknown ? "Abandonner ce correctif ? Le résultat réel est inconnu : vérifiez d'abord le registre. Un tag de correctif déjà publié restera dans le registre." : "Annuler ce correctif en attente ?")) return;
+  const running = job.value.status !== "queued" && !unknown;
+  const text = unknown
+    ? "Abandonner ce correctif ? Le résultat réel est inconnu : vérifiez d'abord le registre. Un tag de correctif déjà publié restera dans le registre."
+    : running
+      ? "Arrêter ce correctif en cours ? L'agent interrompt le travail et supprime ses conteneurs éphémères ; ce qu'il a déjà publié dans le registre y reste (images supprimables depuis Paramètres → Registry)."
+      : "Annuler ce correctif en attente ?";
+  if (!confirm(text)) return;
   busy.value = true;
   try {
     await api(`/api/v1/remediations/${job.value.id}/cancel`, { method: "POST" });
@@ -224,13 +230,13 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
         <section v-if="job" aria-label="Détail du correctif" class="space-y-4 rounded-lg border border-slate-200 p-4">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <h3 class="font-semibold">Correctif <span class="font-mono text-sm">{{ job.patchedTag }}</span> <span :class="['ml-2 rounded-full px-2 py-0.5 text-xs font-medium', statusClass(job.status)]">{{ statusLabel(job.status) }}</span></h3>
-            <button v-if="session.canOperate && (job.status === 'queued' || job.status === 'unknown')" :class="ghost" :disabled="busy" @click="cancel">{{ job.status === "unknown" ? "Abandonner" : "Annuler" }}</button>
+            <button v-if="session.canOperate && job.active" :class="ghost" :disabled="busy || job.cancelRequested" @click="cancel">{{ job.status === "unknown" ? "Abandonner" : job.status === "queued" ? "Annuler" : job.cancelRequested ? "Arrêt demandé…" : "Arrêter le correctif" }}</button>
           </div>
 
           <ol v-if="job.active && job.status !== 'unknown'" class="flex flex-wrap gap-2 text-xs" aria-label="Étapes">
             <li v-for="(s, n) in STAGES" :key="s.status" :class="['rounded-full px-3 py-1', n < stageIndex(job.status) ? 'bg-green-100 text-green-800' : n === stageIndex(job.status) ? 'bg-blue-600 font-medium text-white' : 'bg-slate-100 text-slate-500']" :aria-current="n === stageIndex(job.status) ? 'step' : undefined">{{ s.label }}</li>
           </ol>
-          <p v-if="job.active && job.status !== 'unknown'" class="text-xs text-slate-500">Suivi en direct. Un correctif en cours ne s'annule pas : l'agent va jusqu'au bout de l'étape.</p>
+          <p v-if="job.active && job.status !== 'unknown'" class="text-xs text-slate-500">Suivi en direct.<template v-if="job.cancelRequested"> Arrêt demandé à l'agent : le correctif passe à « annulé » dès qu'il le confirme, sinon à « indéterminé » au bout de deux minutes.</template></p>
 
           <p v-if="job.status === 'unknown'" role="alert" class="rounded border border-orange-300 bg-orange-50 p-3 text-orange-900">{{ job.error }} Il n'est jamais relancé automatiquement.</p>
           <p v-else-if="job.status === 'failed' || job.status === 'cancelled'" role="alert" class="rounded border border-red-200 bg-red-50 p-3 text-red-800">{{ job.error }}</p>

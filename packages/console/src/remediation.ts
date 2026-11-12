@@ -6,6 +6,7 @@ import {
   sourceCopyTag,
   type Bilan,
   type Eligibility,
+  type PatchCancelMessage,
   type PatchMessage,
   type PatchPackageChange,
   type PatchProgress,
@@ -31,6 +32,8 @@ export const PATCH_TIMEOUT_SEC = 30 * 60;
 const STALE_MARGIN_MIN = 10;
 /** Un job en attente sur un hôte hors ligne depuis plus longtemps que ça est abandonné. */
 const STALE_QUEUED_MIN = 30;
+/** Un agent qui ne confirme pas son annulation dans ce délai la rend « indéterminée ». */
+const CANCEL_CONFIRM_SEC = 120;
 /** Verrou consultatif PostgreSQL qui sérialise le démarrage des jobs (limites par hôte et globale). */
 const PUMP_LOCK = 7_305_002;
 
@@ -43,7 +46,7 @@ const RUNNING: JobStatus[] = ["preparing", "scanning_before", "patching", "scann
 
 export interface RemediationTransport {
   isOnline(hostId: string): boolean;
-  send(hostId: string, message: PatchMessage): boolean;
+  send(hostId: string, message: PatchMessage | PatchCancelMessage): boolean;
 }
 
 interface DbRow {
@@ -73,6 +76,8 @@ interface DbRow {
   error: string | null;
   applied: JobView["applied"] | null;
   registry_deleted_at: Date | null;
+  cancel_requested_at: Date | null;
+  cancel_requested_by: string | null;
   created_at: Date;
   started_at: Date | null;
   finished_at: Date | null;
@@ -108,6 +113,8 @@ export interface JobView {
   applied: { stackId: string; stackName: string; service: string; revision: number; by: string; at: string }[];
   /** L'image corrigée a été supprimée du registre : elle n'est plus utilisable. */
   imageDeleted: boolean;
+  /** Une annulation a été demandée à l'agent et n'est pas encore confirmée. */
+  cancelRequested: boolean;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -115,7 +122,7 @@ export interface JobView {
 
 const COLUMNS = `id, image_id, platform, host_id, image_ref, source_scan_id, policy, policy_version, status, requested_by, registry_host,
   repository, source_tag, patched_tag, patch_number, source_digest, patched_digest, tools, bilan, package_changes, config_changes,
-  labels_added, vex_statements, error, applied, registry_deleted_at, created_at, started_at, finished_at`;
+  labels_added, vex_statements, error, applied, registry_deleted_at, cancel_requested_at, cancel_requested_by, created_at, started_at, finished_at`;
 
 const toView = (r: DbRow, detail: boolean): JobView => ({
   id: r.id,
@@ -144,6 +151,7 @@ const toView = (r: DbRow, detail: boolean): JobView => ({
   error: r.error,
   applied: r.applied ?? [],
   imageDeleted: r.registry_deleted_at !== null,
+  cancelRequested: r.cancel_requested_at !== null && (RUNNING as string[]).includes(r.status),
   createdAt: r.created_at.toISOString(),
   startedAt: r.started_at?.toISOString() ?? null,
   finishedAt: r.finished_at?.toISOString() ?? null,
@@ -331,7 +339,8 @@ export class RemediationService {
 
   /**
    * Un job en attente est annulé. Un job « indéterminé » (connexion perdue) est abandonné par l'utilisateur, qui
-   * assume de ne pas avoir vérifié le registre. Un job en cours ne s'annule pas : l'agent va jusqu'au bout.
+   * assume de ne pas avoir vérifié le registre. Pour un job en cours, l'arrêt est DEMANDÉ à l'agent (processus tué,
+   * conteneurs supprimés) : le job ne passe à « annulé » que lorsque l'agent le confirme, jamais avant.
    */
   async cancel(id: string, actor: string): Promise<JobView> {
     const { rows } = await this.pool.query<DbRow>(
@@ -340,13 +349,32 @@ export class RemediationService {
         WHERE id = $1 AND status IN ('queued', 'unknown') RETURNING ${COLUMNS}`,
       [id, actor],
     );
-    if (!rows[0]) {
-      const cur = await this.get(id);
-      if (!cur) throw new HttpError(404, "remediation_not_found", "Correctif introuvable.");
-      throw new HttpError(409, "not_cancellable", cur.active ? "Ce correctif est en cours d'exécution : il ne peut pas être annulé avant la fin de l'étape." : "Ce correctif est déjà terminé.");
-    }
+    if (!rows[0]) return this.requestStop(id, actor);
     await audit(this.pool, actor, "remediation.cancel", id, "success");
     return toView(rows[0], true);
+  }
+
+  /** Demande à l'agent d'arrêter un correctif en cours ; l'état ne change qu'à sa confirmation. */
+  private async requestStop(id: string, actor: string): Promise<JobView> {
+    const { rows } = await this.pool.query<DbRow>(`SELECT ${COLUMNS} FROM remediation_jobs WHERE id = $1`, [id]);
+    const job = rows[0];
+    if (!job) throw new HttpError(404, "remediation_not_found", "Correctif introuvable.");
+    if (!(RUNNING as string[]).includes(job.status)) throw new HttpError(409, "not_cancellable", "Ce correctif est déjà terminé.");
+    if (job.cancel_requested_at) return toView(job, true); // demande déjà envoyée : sans effet
+    const caps = await this.pool.query<{ capabilities: string[] }>("SELECT capabilities FROM hosts WHERE id = $1", [job.host_id]);
+    if (!(caps.rows[0]?.capabilities ?? []).includes("image.patch.cancel")) {
+      throw new HttpError(409, "agent_cannot_cancel", "L'agent de cet hôte ne sait pas annuler un correctif en cours : mettez-le à jour, ou attendez la fin de l'étape.");
+    }
+    if (!this.transport.send(job.host_id, { type: "patch_cancel", jobId: job.id })) {
+      throw new HttpError(409, "host_offline", "L'hôte est hors ligne : l'annulation ne peut pas être demandée. Si la connexion est perdue, le correctif passe à « indéterminé » et peut être abandonné.");
+    }
+    const updated = await this.pool.query<DbRow>(
+      `UPDATE remediation_jobs SET cancel_requested_at = now(), cancel_requested_by = $2 WHERE id = $1 AND status = ANY($3::text[]) RETURNING ${COLUMNS}`,
+      [id, actor, RUNNING],
+    );
+    await audit(this.pool, actor, "remediation.cancel", `${id} (arrêt demandé à l'agent)`, "success");
+    // Le correctif a pu se terminer entre-temps : on renvoie l'état réel.
+    return toView(updated.rows[0] ?? job, true);
   }
 
   // --- File d'exécution ------------------------------------------------------------------------------
@@ -416,6 +444,15 @@ export class RemediationService {
     // Résultat inconnu, d'un autre hôte, ou déjà traité (rejeu) : ignoré. Un job « indéterminé » accepte son résultat tardif.
     if (!job || !(RUNNING as string[]).concat(["unknown"]).includes(job.status)) return;
 
+    if (msg.status === "cancelled") {
+      const by = job.cancel_requested_by;
+      await this.pool.query("UPDATE remediation_jobs SET status = 'cancelled', finished_at = now(), error = $2, tools = $3 WHERE id = $1", [
+        job.id, by ? `Annulé par ${by}.` : "Arrêté sur l'hôte.", msg.tools ? JSON.stringify(msg.tools) : null,
+      ]);
+      await audit(this.pool, "agent", "remediation.finish", `${job.id} cancelled`, "success");
+      void this.pumpAny().catch(() => undefined);
+      return;
+    }
     if (msg.status === "failed" || !msg.before || !msg.after || !msg.patched || !msg.source) {
       await this.pool.query("UPDATE remediation_jobs SET status = 'failed', finished_at = now(), error = $2, tools = $3 WHERE id = $1", [
         job.id, msg.error ?? "Le correctif a échoué sans détail.", msg.tools ? JSON.stringify(msg.tools) : null,
@@ -451,6 +488,12 @@ export class RemediationService {
       `UPDATE remediation_jobs SET status = 'unknown', error = 'Aucun retour de l''agent dans le délai prévu : le résultat est indéterminé.'
         WHERE status = ANY($1::text[]) AND started_at < now() - ($2 || ' seconds')::interval`,
       [RUNNING, String(PATCH_TIMEOUT_SEC + STALE_MARGIN_MIN * 60)],
+    );
+    // Annulation non confirmée : l'agent a peut-être déjà fini, ou ne répond plus. Résultat indéterminé, jamais « annulé ».
+    await this.pool.query(
+      `UPDATE remediation_jobs SET status = 'unknown', error = 'L''agent n''a pas confirmé l''annulation : le résultat est indéterminé. Vérifiez le registre avant de relancer.'
+        WHERE status = ANY($1::text[]) AND cancel_requested_at < now() - ($2 || ' seconds')::interval`,
+      [RUNNING, String(CANCEL_CONFIRM_SEC)],
     );
     await this.pool.query(
       `UPDATE remediation_jobs SET status = 'failed', finished_at = now(), error = 'Hôte hors ligne trop longtemps : correctif abandonné.'

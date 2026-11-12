@@ -41,10 +41,8 @@ describe.skipIf(!enabled)("correctif d'image (Docker réel)", () => {
     if (!process.env.PATCH_E2E_WORKSPACE) await rm(workspace, { recursive: true, force: true });
   });
 
-  it("corrige une image Alpine vulnérable, vérifie le résultat par digest et valide le verdict", async () => {
-    const image = (await dockerGet(socket, `/images/${encodeURIComponent(SOURCE)}/json`)) as { Id: string; Os: string; Architecture: string };
-    const stages: string[] = [];
-    const patcher = new ImagePatcher({
+  const newPatcher = (): ImagePatcher =>
+    new ImagePatcher({
       workspaceDir: workspace,
       dockerSocket: socket,
       patcherImage,
@@ -67,15 +65,22 @@ describe.skipIf(!enabled)("correctif d'image (Docker réel)", () => {
         return async () => void (await docker(["rm", "-f", name], 30_000));
       },
     });
-    const msg: PatchMessage = {
-      type: "patch",
-      jobId: randomUUID(),
-      imageId: image.Id,
-      imageRef: SOURCE,
-      platform: `${image.Os}/${image.Architecture}` as PatchMessage["platform"],
-      target: { registry: `localhost:${PORT}`, repository: "patched/docker-io-library-alpine", sourceTag: "src-e2e", patchedTag: "3.22.0-patch.1" },
-      timeoutSec: 900,
-    };
+
+  const message = (image: { Id: string; Os: string; Architecture: string }, patchedTag: string): PatchMessage => ({
+    type: "patch",
+    jobId: randomUUID(),
+    imageId: image.Id,
+    imageRef: SOURCE,
+    platform: `${image.Os}/${image.Architecture}` as PatchMessage["platform"],
+    target: { registry: `localhost:${PORT}`, repository: "patched/docker-io-library-alpine", sourceTag: "src-e2e", patchedTag },
+    timeoutSec: 900,
+  });
+
+  it("corrige une image Alpine vulnérable, vérifie le résultat par digest et valide le verdict", async () => {
+    const image = (await dockerGet(socket, `/images/${encodeURIComponent(SOURCE)}/json`)) as { Id: string; Os: string; Architecture: string };
+    const stages: string[] = [];
+    const patcher = newPatcher();
+    const msg = message(image, "3.22.0-patch.1");
 
     const result: PatchResult = await patcher.patch(msg, (m) => {
       if (m.type === "patch_progress") stages.push(m.stage);
@@ -102,4 +107,36 @@ describe.skipIf(!enabled)("correctif d'image (Docker réel)", () => {
     expect(bilan.cves.newHighOrCritical).toBe(0);
     expect(bilan.verdict).toBe("validated");
   }, 900_000);
+
+  it("annule un correctif en cours : processus arrêté, conteneurs éphémères supprimés, aucun résultat de succès", async () => {
+    const image = (await dockerGet(socket, `/images/${encodeURIComponent(SOURCE)}/json`)) as { Id: string; Os: string; Architecture: string };
+    const patcher = newPatcher();
+    const msg = message(image, "3.22.0-patch.cancelled");
+    const stages: string[] = [];
+    const result: PatchResult = await patcher.patch(msg, (m) => {
+      if (m.type !== "patch_progress") return;
+      stages.push(m.stage);
+      // Annulation en plein scan : un processus Docker est en cours, BuildKit et le registre de test tournent.
+      if (m.stage === "scanning_before") setTimeout(() => patcher.cancel(msg.jobId), 1500);
+    });
+
+    expect(result.status).toBe("cancelled");
+    expect(result.patched).toBeUndefined();
+    expect(stages).toContain("scanning_before");
+    // Rien ne reste : ni BuildKit, ni Trivy, ni registre de test, ni dossier de travail du job.
+    const left = await docker(["ps", "-a", "--filter", `name=${msg.jobId.slice(0, 8)}`, "--format", "{{.Names}}"], 30_000);
+    expect(left.stdout.trim()).toBe("");
+    // Annuler un correctif terminé ou inconnu est sans effet.
+    expect(patcher.cancel(msg.jobId)).toBe(false);
+  }, 900_000);
+
+  it("annule un correctif encore en file d'attente sans rien démarrer", async () => {
+    const image = (await dockerGet(socket, `/images/${encodeURIComponent(SOURCE)}/json`)) as { Id: string; Os: string; Architecture: string };
+    const patcher = newPatcher();
+    const msg = message(image, "3.22.0-patch.queued");
+    const pending = patcher.patch(msg, () => undefined);
+    // Annulé avant même que la file ne l'atteigne.
+    expect(patcher.cancel(msg.jobId)).toBe(true);
+    expect((await pending).status).toBe("cancelled");
+  }, 60_000);
 });
