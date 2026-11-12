@@ -3159,6 +3159,120 @@
         }
       }
     },
+    "/api/v1/settings/traefik/healthcheck": {
+      "post": {
+        "summary": "Ajouter le healthcheck à l'application Traefik",
+        "description": "Pour une application créée avant les healthchecks. Ajoute le healthcheck au Compose et la ligne « ping » à traefik.yml (point interne, non publié) ; les autres réglages faits à la main sont conservés, et un healthcheck ou un ping déjà défini n'est pas modifié. Redéployer l'application pour appliquer.",
+        "tags": [
+          "Traefik"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Nouvelle révision (non déployée) ; changed=false si rien n'était à ajouter ; notes liste les parties conservées ou ignorées",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/registry/healthcheck": {
+      "post": {
+        "summary": "Ajouter le healthcheck à l'application registry",
+        "description": "Pour une application créée avant les healthchecks. Régénère le Compose (les empreintes sont relues du fichier htpasswd, aucun mot de passe n'est renouvelé). 409 si l'application est détachée de la gestion automatique ou si les comptes ne sont pas lisibles. Redéployer l'application pour appliquer.",
+        "tags": [
+          "Registry"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Nouvelle révision (non déployée) ; mots de passe et version de l'image conservés",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/registry/rotate": {
       "post": {
         "summary": "Renouveler les mots de passe du registre (et séparer les comptes)",

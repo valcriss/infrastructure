@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
 import { createPool, migrate, type Pool } from "./db.js";
 import { requiredRole } from "./permissions.js";
+import { digestOf } from "./stacks.js";
 
 const url = process.env.TEST_DATABASE_URL;
 const HOST = "registry.exemple.invalid";
@@ -190,6 +191,35 @@ describe.skipIf(!url)("application registry (intégration)", () => {
     expect((await state()).application).toMatchObject({ deployed: false, managed: true });
   });
 
+  it("ajoute le healthcheck à une application créée avant, sans renouveler les mots de passe ni changer l'image", async () => {
+    expect((await state()).application).toMatchObject({ healthcheck: true });
+    expect((await call("POST", "/api/v1/settings/registry/healthcheck", { cookie: admin })).json).toMatchObject({ changed: false });
+
+    // Simule une application ancienne : ni healthcheck, ni serveur de diagnostic.
+    const rev = await revisionOf();
+    const cur = (await pool.query<{ compose: string; variables: Record<string, never>; files: Record<string, string>; sensitive_files: string[]; compose_sensitive: boolean }>("SELECT compose, variables, files, sensitive_files, compose_sensitive FROM stack_revisions WHERE stack_id = $1 AND revision = $2", [stackId, rev])).rows[0]!;
+    const legacy = cur.compose.replace(/ {4}healthcheck:\n(?: {6}.*\n)+/, "").replace(/ {6}# Point de contrôle.*\n {6}REGISTRY_HTTP_DEBUG_ADDR.*\n/, "");
+    expect(legacy).not.toContain("healthcheck");
+    expect(legacy).not.toContain("REGISTRY_HTTP_DEBUG_ADDR");
+    // L'empreinte stockée suit le contenu, comme pour une vraie révision ancienne.
+    const digest = digestOf({ compose: legacy, variables: cur.variables, files: cur.files, sensitiveFiles: cur.sensitive_files, composeSensitive: cur.compose_sensitive });
+    await pool.query("UPDATE stack_revisions SET compose = $3, digest = $4 WHERE stack_id = $1 AND revision = $2", [stackId, rev, legacy, digest]);
+    expect((await state()).application).toMatchObject({ healthcheck: false });
+
+    const before = (await call("POST", "/api/v1/settings/registry/credentials", { cookie: admin })).json;
+    const htpasswd = await htpasswdOf();
+    const r = await call("POST", "/api/v1/settings/registry/healthcheck", { cookie: admin });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ changed: true, revision: rev + 1 });
+    const compose = (await stack()).compose as string;
+    expect(compose).toContain("wget -q --spider http://127.0.0.1:5001/debug/health");
+    expect(compose).toContain("REGISTRY_HTTP_DEBUG_ADDR");
+    expect(compose).toContain("image: registry:3.0.1");
+    expect(await htpasswdOf()).toBe(htpasswd);
+    expect((await call("POST", "/api/v1/settings/registry/credentials", { cookie: admin })).json).toMatchObject({ password: before.password });
+    expect((await state()).application).toMatchObject({ healthcheck: true, deployed: false });
+  });
+
   it("une application créée avant la séparation obtient son compte de lecture et son routeur d'écriture au renouvellement", async () => {
     // Simule l'ancien état : un seul compte, ni compte de lecture, ni routeur d'écriture.
     const legacy = `infrastructure:$2a$10$${"a".repeat(53)}\n`;
@@ -235,7 +265,7 @@ describe.skipIf(!url)("application registry (intégration)", () => {
 
   it("réserve la configuration aux administrateurs, la lecture restant ouverte", () => {
     expect(requiredRole("GET", "/api/v1/settings/registry")).toBe("viewer");
-    for (const p of ["preview", "application", "credentials", "rotate", "test", "detach"]) expect(requiredRole("POST", `/api/v1/settings/registry/${p}`)).toBe("admin");
+    for (const p of ["preview", "application", "credentials", "rotate", "healthcheck", "test", "detach"]) expect(requiredRole("POST", `/api/v1/settings/registry/${p}`)).toBe("admin");
   });
 
   it("détache l'application : elle redevient modifiable à la main et ne se renouvelle plus", async () => {

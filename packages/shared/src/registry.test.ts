@@ -88,3 +88,14 @@ describe("generateRegistry", () => {
     expect(() => generateRegistry(base, { publish: PULL, pull: HASH })).toThrow();
   });
 });
+
+describe("healthcheck du registre", () => {
+  it("déclare le healthcheck sur le serveur de diagnostic, lié à la boucle locale du conteneur", () => {
+    const g = generateRegistry(base, ACCOUNTS);
+    expect(validateCompose(g.compose)).toMatchObject({ ok: true });
+    const svc = (parse(g.compose) as Record<string, any>).services.registry;
+    expect(svc.healthcheck).toMatchObject({ test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5001/debug/health"], interval: "30s", retries: 3, start_period: "15s" });
+    expect(svc.environment.REGISTRY_HTTP_DEBUG_ADDR).toBe("127.0.0.1:5001");
+    expect(svc.ports).toBeUndefined();
+  });
+});

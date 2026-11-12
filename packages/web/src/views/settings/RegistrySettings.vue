@@ -9,7 +9,7 @@ import RegistryImages from "../../components/RegistryImages.vue";
 
 // Registre d'images privé : application générée par la console, placée derrière Traefik.
 interface Settings { stackId: string; hostId: string; host: string; entryPoint: string; certResolver: string; network: string }
-interface Application { id: string; name: string; hostId: string; hostName: string | null; currentRevision: number; deployedRevision: number | null; deployed: boolean; managed: boolean }
+interface Application { id: string; name: string; hostId: string; hostName: string | null; currentRevision: number; deployedRevision: number | null; deployed: boolean; managed: boolean; healthcheck: boolean }
 type TraefikInfo = { available: true; hostId: string; hostName: string | null; deployed: boolean; production: boolean; entryPoint: string; certResolver: string; network: string } | { available: false; reason: string };
 interface State {
   settings: Settings | null;
@@ -114,6 +114,16 @@ function rotate() {
     },
   );
 }
+function addHealthcheck() {
+  if (!window.confirm("Régénérer le Compose pour y ajouter le healthcheck ? Les mots de passe et la version de l'image sont conservés. Une nouvelle révision est créée ; redéployez ensuite l'application registry (redémarrage bref du registre).")) return;
+  return run(
+    () => api("/api/v1/settings/registry/healthcheck", { method: "POST" }),
+    async () => {
+      info.value = "Healthcheck ajouté dans une nouvelle révision. Redéployez l'application registry pour l'appliquer.";
+      await load();
+    },
+  );
+}
 function detach() {
   if (!window.confirm("Détacher l'application de la gestion automatique ? Elle devient modifiable à la main, et la console ne renouvellera plus son mot de passe.")) return;
   return run(
@@ -189,6 +199,7 @@ const stepLabels: [keyof Omit<Probe, "ready">, string][] = [
           <button :class="primary" :disabled="busy || !application.deployed" :title="application.deployed ? '' : 'Déployez d\'abord l\'application'" @click="test">Tester l'accès</button>
           <button :class="ghost" :disabled="busy || !state.hasPassword" @click="reveal">Afficher les identifiants</button>
           <button v-if="application.managed" :class="ghost" :disabled="busy" @click="rotate">{{ state.separated ? "Renouveler les mots de passe" : "Séparer les comptes" }}</button>
+          <button v-if="application.managed && !application.healthcheck" :class="ghost" :disabled="busy" title="Régénère le Compose avec un healthcheck (mots de passe conservés)" @click="addHealthcheck">Ajouter le healthcheck</button>
           <button v-if="application.managed" :class="ghost" :disabled="busy" @click="detach">Détacher de la gestion automatique</button>
         </div>
 

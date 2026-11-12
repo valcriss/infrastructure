@@ -1,4 +1,5 @@
 import {
+  composeHasHealthcheck,
   composeServiceImage,
   generateRegistry,
   REGISTRY_AUTH_FILE,
@@ -6,6 +7,7 @@ import {
   REGISTRY_PULL_USERNAME,
   REGISTRY_STACK_NAME,
   REGISTRY_USERNAME,
+  validateHtpasswdLine,
   validateRegistryOptions,
   type GeneratedRegistry,
   type RegistryAccounts,
@@ -21,7 +23,7 @@ import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { normalizeRegistry } from "./image-ref.js";
 import type { RegistryStore } from "./registries.js";
-import { changeStack, createStack } from "./stacks.js";
+import { changeStack, createStack, getRevision } from "./stacks.js";
 import { getTraefikSettings, type TraefikSettings } from "./traefik-routes.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -244,8 +246,11 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
     let separated = false;
     if (settings) {
       const s = await stackOf(settings.stackId);
+      const rev = s ? await getRevision(pool, s.id, s.current_revision) : null;
       application = s
         ? {
+            // Faux pour une application créée avant les healthchecks : la console propose de le régénérer.
+            healthcheck: rev ? composeHasHealthcheck(rev.compose, REGISTRY_STACK_NAME) : false,
             id: s.id,
             name: s.name,
             hostId: s.host_id,
@@ -411,6 +416,31 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
     await registries.setPull(settings.host, { username: REGISTRY_PULL_USERNAME, password: pullPassword });
     await audit(pool, request.actor, "settings.registry.rotate", settings.host, "success");
     return { revision: result.revision, changed: result.changed, separated: true, newlySeparated: !wasSeparated };
+  });
+
+  // Régénère le Compose pour y ajouter le healthcheck (applications créées avant) : mots de passe et version d'image
+  // conservés (les empreintes sont relues du fichier htpasswd). Nouvelle révision, non déployée.
+  app.post("/api/v1/settings/registry/healthcheck", { preHandler: auth }, async (request) => {
+    const { settings, stack } = await configured();
+    if (stack.managed_by !== "registry") throw new HttpError(409, "registry_detached", "L'application est détachée de la gestion automatique : ajoutez le healthcheck à la main.");
+    const result = await changeStack(
+      pool,
+      stack.id,
+      stack.current_revision,
+      request.actor,
+      "Healthcheck du registre ajouté",
+      (c) => {
+        const [publish, pull] = (c.files[REGISTRY_AUTH_FILE] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+        if (!publish || !pull || !validateHtpasswdLine(publish, REGISTRY_USERNAME) || !validateHtpasswdLine(pull, REGISTRY_PULL_USERNAME)) {
+          throw new HttpError(409, "registry_accounts_unreadable", "Les comptes du registre ne sont pas lisibles dans l'application : renouvelez les mots de passe (cela régénère aussi le Compose).");
+        }
+        const generated = generateRegistry({ host: settings.host, traefik: { entryPoint: settings.entryPoint, certResolver: settings.certResolver, network: settings.network } }, { publish, pull });
+        return { ...c, compose: keepImage(generated.compose, composeServiceImage(c.compose, REGISTRY_STACK_NAME)), composeSensitive: true };
+      },
+      { allowManaged: true },
+    );
+    await audit(pool, request.actor, "settings.registry.healthcheck", settings.host, "success");
+    return { revision: result.revision, changed: result.changed };
   });
 
   // Contrôle ce que verront les hôtes : DNS, certificat, authentification.

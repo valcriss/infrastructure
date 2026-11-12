@@ -7,6 +7,10 @@
  * rechargement automatique de la configuration dynamique.
  */
 
+import { isMap, parseDocument } from "yaml";
+import type { YAMLMap } from "yaml";
+import { editServiceHealthcheck, type HealthcheckSpec } from "./compose-edit.js";
+
 /** Version fixée (pas de « latest ») ; le suivi des versions d'image proposera les suivantes. */
 export const TRAEFIK_IMAGE = "traefik:v3.7.17";
 
@@ -72,6 +76,57 @@ export interface GeneratedTraefik {
 /** Chaîne YAML entre guillemets (JSON est un sous-ensemble de YAML pour les chaînes). */
 const quote = (s: string): string => JSON.stringify(s);
 
+/** Healthcheck du conteneur Traefik : interroge /ping (entrypoint interne « traefik »). */
+export const TRAEFIK_HEALTHCHECK: HealthcheckSpec = { test: "traefik healthcheck --ping", interval: "30s", timeout: "5s", retries: 3, startPeriod: "15s" };
+
+export interface TraefikHealthcheckPatch {
+  compose: string;
+  /** Contenu de traefik.yml (inchangé si le fichier n'existe pas ou ne peut pas être modifié). */
+  staticConfig: string | null;
+  changed: boolean;
+  /** Raisons pour lesquelles une partie n'a pas été ajoutée (réglage manuel existant, structure inattendue). */
+  notes: string[];
+}
+
+/**
+ * Ajoute à une application Traefik existante le healthcheck et le point `/ping` qu'il interroge, sans régénérer le
+ * reste : les modifications faites à la main (Compose, traefik.yml) sont conservées. Un `healthcheck` ou un `ping`
+ * déjà présent n'est pas touché.
+ */
+export function addTraefikHealthcheck(compose: string, staticConfig: string | null): TraefikHealthcheckPatch {
+  const notes: string[] = [];
+  let nextCompose = compose;
+  let nextStatic = staticConfig;
+
+  const doc = parseDocument(compose, { uniqueKeys: true });
+  const svc = isMap(doc.get("services", true)) ? (doc.get("services", true) as YAMLMap).get(TRAEFIK_STACK_NAME, true) : null;
+  if (!isMap(svc)) {
+    notes.push("Service « traefik » introuvable dans le Compose : healthcheck non ajouté.");
+  } else if (svc.has("healthcheck")) {
+    notes.push("Un healthcheck est déjà défini : conservé.");
+  } else {
+    nextCompose = editServiceHealthcheck(compose, TRAEFIK_STACK_NAME, TRAEFIK_HEALTHCHECK);
+  }
+
+  if (staticConfig === null) {
+    notes.push(`Fichier ${TRAEFIK_STATIC_FILE} introuvable : « ping » non ajouté (le healthcheck échouerait).`);
+    // Sans /ping, un healthcheck ajouté rendrait le conteneur « unhealthy » : on n'ajoute rien.
+    nextCompose = compose;
+  } else {
+    const sdoc = parseDocument(staticConfig, { uniqueKeys: true });
+    if (sdoc.errors.length > 0 || !isMap(sdoc.contents)) {
+      notes.push(`${TRAEFIK_STATIC_FILE} n'est pas un YAML modifiable : « ping » non ajouté.`);
+      nextCompose = compose;
+    } else if (sdoc.has("ping")) {
+      notes.push("« ping » est déjà défini : conservé.");
+    } else {
+      sdoc.set("ping", sdoc.createNode({}));
+      nextStatic = sdoc.toString({ lineWidth: 0 });
+    }
+  }
+  return { compose: nextCompose, staticConfig: nextStatic, changed: nextCompose !== compose || nextStatic !== staticConfig, notes };
+}
+
 /** Génère le Compose et les fichiers ; les options doivent avoir été validées. */
 export function generateTraefik(o: TraefikOptions): GeneratedTraefik {
   const err = validateTraefikOptions(o);
@@ -87,6 +142,12 @@ services:
   traefik:
     image: ${TRAEFIK_IMAGE}
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", ${quote(TRAEFIK_HEALTHCHECK.test)} ]
+      interval: ${TRAEFIK_HEALTHCHECK.interval}
+      timeout: ${TRAEFIK_HEALTHCHECK.timeout}
+      retries: ${TRAEFIK_HEALTHCHECK.retries}
+      start_period: ${TRAEFIK_HEALTHCHECK.startPeriod}
     ports:
       - "80:80"
       - "443:443"
@@ -117,6 +178,10 @@ log:
 # Tableau de bord désactivé : l'exposer demande un domaine et une authentification.
 api:
   dashboard: false
+
+# Point de contrôle /ping pour le healthcheck du conteneur : il reste sur l'entrypoint interne « traefik » (port 8080,
+# non publié), jamais sur les entrypoints publics.
+ping: {}
 
 entryPoints:
   ${o.httpEntryPoint}:

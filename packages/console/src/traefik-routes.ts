@@ -1,8 +1,11 @@
 import {
+  addTraefikHealthcheck,
+  composeHasHealthcheck,
   generateTraefik,
   TRAEFIK_DEFAULTS,
   TRAEFIK_IMAGE,
   TRAEFIK_STACK_NAME,
+  TRAEFIK_STATIC_FILE,
   traefikConsoleSnippet,
   validateTraefikOptions,
   type Container,
@@ -14,7 +17,7 @@ import { z } from "zod";
 import { audit, type Pool } from "./db.js";
 import { selfProjects } from "./display.js";
 import { HttpError } from "./http-error.js";
-import { createStack } from "./stacks.js";
+import { changeStack, createStack, getRevision } from "./stacks.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -126,8 +129,9 @@ export function registerTraefikRoutes(app: FastifyInstance, deps: { pool: Pool; 
       const s = rows[0];
       const host = hostRows.rows.find((h) => h.id === s?.host_id);
       // L'application a pu être supprimée depuis : le réglage reste affiché, avec l'avertissement.
+      const rev = s ? await getRevision(pool, s.id, s.current_revision) : null;
       application = s
-        ? { id: s.id, name: s.name, hostId: s.host_id, hostName: host?.name ?? null, currentRevision: s.current_revision, deployedRevision: s.deployed_revision, deployed: s.deployed_revision !== null }
+        ? { healthcheck: rev ? composeHasHealthcheck(rev.compose, TRAEFIK_STACK_NAME) : false, id: s.id, name: s.name, hostId: s.host_id, hostName: host?.name ?? null, currentRevision: s.current_revision, deployedRevision: s.deployed_revision, deployed: s.deployed_revision !== null }
         : { missing: true };
     }
 
@@ -175,6 +179,23 @@ export function registerTraefikRoutes(app: FastifyInstance, deps: { pool: Pool; 
     }
     return { body, generated: generateTraefik(options) };
   }
+
+  // Ajoute le healthcheck (et le point /ping qu'il interroge) à une application créée avant : modification ciblée,
+  // les réglages faits à la main sont conservés. Nouvelle révision, non déployée.
+  app.post("/api/v1/settings/traefik/healthcheck", { preHandler: auth }, async (request) => {
+    const settings = await getTraefikSettings(pool);
+    if (!settings) throw new HttpError(409, "traefik_not_configured", "Aucune application Traefik n'est configurée.");
+    const { rows } = await pool.query<{ current_revision: number }>("SELECT current_revision FROM stacks WHERE id = $1", [settings.stackId]);
+    if (!rows[0]) throw new HttpError(409, "traefik_missing", "L'application Traefik a été supprimée.");
+    let notes: string[] = [];
+    const result = await changeStack(pool, settings.stackId, rows[0].current_revision, request.actor, "Healthcheck de Traefik ajouté", (c) => {
+      const patch = addTraefikHealthcheck(c.compose, c.files[TRAEFIK_STATIC_FILE] ?? null);
+      notes = patch.notes;
+      return { ...c, compose: patch.compose, files: patch.staticConfig === null ? c.files : { ...c.files, [TRAEFIK_STATIC_FILE]: patch.staticConfig } };
+    });
+    await audit(pool, request.actor, "settings.traefik.healthcheck", `application ${settings.stackId}`, "success");
+    return { revision: result.revision, changed: result.changed, notes };
+  });
 
   // Extrait à copier dans le Compose de la console pour la placer derrière Traefik (elle ne se gère pas elle-même).
   app.post("/api/v1/settings/traefik/console-snippet", { preHandler: auth }, async (request) => {

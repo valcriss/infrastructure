@@ -9,7 +9,7 @@ import TraefikDynamic from "../../components/TraefikDynamic.vue";
 interface Candidate { name: string; driver: string; usedBy: string[]; suggested: boolean }
 interface HostOption { id: string; name: string; online: boolean; networks: Candidate[] | null; portConflicts: { port: number; container: string }[] }
 interface Settings { stackId: string; hostId: string; httpEntryPoint: string; httpsEntryPoint: string; certResolver: string; network: string; production: boolean }
-interface Application { id: string; name: string; hostId: string; hostName: string | null; currentRevision: number; deployedRevision: number | null; deployed: boolean }
+interface Application { id: string; name: string; hostId: string; hostName: string | null; currentRevision: number; deployedRevision: number | null; deployed: boolean; healthcheck: boolean }
 interface State {
   settings: Settings | null;
   application: Application | { missing: true } | null;
@@ -111,6 +111,21 @@ async function makeSnippet() {
   }
 }
 
+async function addHealthcheck() {
+  if (!window.confirm("Ajouter le healthcheck à l'application Traefik ? Le Compose reçoit un healthcheck et traefik.yml la ligne « ping » ; vos autres réglages sont conservés. Une nouvelle révision est créée ; redéployez ensuite l'application (redémarrage bref de Traefik).")) return;
+  error.value = info.value = "";
+  busy.value = true;
+  try {
+    const r = await api<{ changed: boolean; notes: string[] }>("/api/v1/settings/traefik/healthcheck", { method: "POST" });
+    info.value = (r.changed ? "Healthcheck ajouté dans une nouvelle révision. Redéployez l'application Traefik pour l'appliquer." : "Aucune modification.") + (r.notes.length ? ` ${r.notes.join(" ")}` : "");
+    await load();
+  } catch (err) {
+    error.value = describeError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function create() {
   error.value = info.value = "";
   busy.value = true;
@@ -151,6 +166,10 @@ async function create() {
         <div><dt class="text-xs text-slate-500">Image</dt><dd class="font-mono">{{ state.image }}</dd></div>
       </dl>
       <p v-if="!application.deployed" class="mt-3 text-sm text-slate-600">Rien n'est déployé tant que vous ne l'avez pas demandé : ouvrez l'application, relisez ses fichiers, puis déployez.</p>
+      <p v-if="!application.healthcheck" role="note" class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-900">
+        Cette application n'a pas de healthcheck : un Traefik bloqué mais toujours « en marche » ne serait pas signalé.
+        <button :class="ghost" class="ml-2" :disabled="busy" @click="addHealthcheck">Ajouter le healthcheck</button>
+      </p>
       <p v-if="state.settings.production === false" class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-900">
         Les certificats viennent de l'autorité de test de Let's Encrypt : les navigateurs les refusent. Pour passer en production, modifiez <code>traefik.yml</code>
         dans les fichiers de l'application (retirez la ligne <code>caServer</code>) et redéployez.

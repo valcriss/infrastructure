@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
 import { createPool, migrate, type Pool } from "./db.js";
+import { digestOf } from "./stacks.js";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -151,6 +152,35 @@ describe.skipIf(!url)("application Traefik (intégration)", () => {
     await pool.query("DELETE FROM stacks WHERE id = $1", [res.json.id]);
     expect((await settings()).application).toEqual({ missing: true });
     expect((await call("POST", "/api/v1/settings/traefik/application", { cookie: admin, body: body({ network: { mode: "existing", name: "proxy-existant" } }) })).status).toBe(201);
+  });
+
+  it("ajoute le healthcheck à une application créée avant : ciblé, sans toucher au reste, et sans effet la seconde fois", async () => {
+    const s = await settings();
+    expect(s.application).toMatchObject({ healthcheck: true });
+    expect((await call("POST", "/api/v1/settings/traefik/healthcheck", { cookie: admin })).json).toMatchObject({ changed: false });
+
+    // Simule une application ancienne : ni healthcheck, ni « ping » (le reste, dont « certResolver », doit survivre).
+    const id = s.application.id as string;
+    const cur = (await pool.query<{ revision: number; compose: string; variables: Record<string, never>; files: Record<string, string>; sensitive_files: string[]; compose_sensitive: boolean }>("SELECT revision, compose, variables, files, sensitive_files, compose_sensitive FROM stack_revisions WHERE stack_id = $1 ORDER BY revision DESC LIMIT 1", [id])).rows[0]!;
+    const legacyCompose = cur.compose.replace(/ {4}healthcheck:\n(?: {6}.*\n)+/, "");
+    const legacyStatic = (cur.files["traefik.yml"] as string).replace(/\n# Point de contrôle[\s\S]*?ping: \{\}\n/, "\n");
+    expect(legacyCompose).not.toContain("healthcheck");
+    expect(legacyStatic).not.toContain("ping");
+    const legacyFiles = { ...cur.files, "traefik.yml": legacyStatic };
+    const digest = digestOf({ compose: legacyCompose, variables: cur.variables, files: legacyFiles, sensitiveFiles: cur.sensitive_files, composeSensitive: cur.compose_sensitive });
+    await pool.query("UPDATE stack_revisions SET compose = $3, files = $4, digest = $5 WHERE stack_id = $1 AND revision = $2", [id, cur.revision, legacyCompose, JSON.stringify(legacyFiles), digest]);
+    expect((await settings()).application).toMatchObject({ healthcheck: false });
+
+    const r = await call("POST", "/api/v1/settings/traefik/healthcheck", { cookie: admin });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ changed: true, revision: cur.revision + 1 });
+    const next = (await pool.query<{ compose: string; files: Record<string, string> }>("SELECT compose, files FROM stack_revisions WHERE stack_id = $1 AND revision = $2", [id, cur.revision + 1])).rows[0]!;
+    expect(next.compose).toContain("traefik healthcheck --ping");
+    expect(next.files["traefik.yml"]).toMatch(/^ping: \{\}$/m);
+    expect(next.files["traefik.yml"]).toContain("certResolver: le");
+    expect((await settings()).application).toMatchObject({ healthcheck: true, deployed: false });
+    expect((await call("POST", "/api/v1/settings/traefik/healthcheck", { cookie: admin })).json).toMatchObject({ changed: false });
+    expect((await pool.query("SELECT count(*)::int AS n FROM audit_events WHERE action = 'settings.traefik.healthcheck'")).rows[0]?.n).toBeGreaterThanOrEqual(1);
   });
 
   it("expose un service par Traefik : aperçu, révision, relecture, retrait, et refus hors périmètre", async () => {

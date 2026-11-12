@@ -2,7 +2,7 @@ import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { validateCompose } from "./compose.js";
 import { validateFilePath } from "./stack.js";
-import { generateTraefik, TRAEFIK_DEFAULTS, TRAEFIK_DYNAMIC_FILE, TRAEFIK_IMAGE, TRAEFIK_STATIC_FILE, validateTraefikOptions, type TraefikOptions } from "./traefik.js";
+import { addTraefikHealthcheck, generateTraefik, TRAEFIK_DEFAULTS, TRAEFIK_DYNAMIC_FILE, TRAEFIK_IMAGE, TRAEFIK_STATIC_FILE, validateTraefikOptions, type TraefikOptions } from "./traefik.js";
 
 const base: TraefikOptions = { ...TRAEFIK_DEFAULTS, email: "admin@exemple.fr" };
 const staticOf = (o: TraefikOptions) => parse(generateTraefik(o).files[TRAEFIK_STATIC_FILE] as string) as Record<string, any>;
@@ -89,5 +89,55 @@ describe("validateTraefikOptions", () => {
     ["réseau invalide", { network: { mode: "create", name: "../x" } }, /Réseau/],
   ] as const)("refuse : %s", (_label, over, message) => {
     expect(validateTraefikOptions({ ...base, ...over } as TraefikOptions)).toMatch(message);
+  });
+});
+
+describe("healthcheck de Traefik", () => {
+  it("le Compose généré déclare le healthcheck et le fichier statique active /ping", () => {
+    const g = generateTraefik(base);
+    const c = parse(g.compose) as Record<string, any>;
+    expect(c.services.traefik.healthcheck).toMatchObject({ test: ["CMD-SHELL", "traefik healthcheck --ping"], interval: "30s", retries: 3, start_period: "15s" });
+    expect(validateCompose(g.compose)).toMatchObject({ ok: true });
+    expect(parse(g.files[TRAEFIK_STATIC_FILE] as string).ping).toEqual({});
+    // /ping reste sur l'entrypoint interne : aucun entrypoint public ne le porte, et le port 8080 n'est pas publié.
+    expect(c.services.traefik.ports).toEqual(["80:80", "443:443"]);
+  });
+
+  const legacy = () => {
+    const g = generateTraefik(base);
+    return { compose: g.compose.replace(/ {4}healthcheck:\n(?: {6}.*\n)+/, ""), staticConfig: (g.files[TRAEFIK_STATIC_FILE] as string).replace(/\n# Point de contrôle[\s\S]*?ping: \{\}\n/, "\n") };
+  };
+
+  it("ajoute le healthcheck et « ping » à une application ancienne, en conservant le reste", () => {
+    const { compose, staticConfig } = legacy();
+    expect(compose).not.toContain("healthcheck");
+    expect(staticConfig).not.toContain("ping");
+    const p = addTraefikHealthcheck(compose.replace("restart: unless-stopped", "restart: always # choix manuel"), staticConfig + "# réglage manuel\n");
+    expect(p.changed).toBe(true);
+    expect(p.notes).toEqual([]);
+    expect((parse(p.compose) as any).services.traefik.healthcheck.test).toEqual(["CMD-SHELL", "traefik healthcheck --ping"]);
+    expect(p.compose).toContain("restart: always # choix manuel");
+    expect(parse(p.staticConfig as string).ping).toEqual({});
+    expect(p.staticConfig).toContain("# réglage manuel");
+    expect(p.staticConfig).toContain("certResolver: letsencrypt");
+  });
+
+  it("est sans effet sur une application déjà à jour, et ne remplace pas un réglage existant", () => {
+    const g = generateTraefik(base);
+    const same = addTraefikHealthcheck(g.compose, g.files[TRAEFIK_STATIC_FILE] as string);
+    expect(same.changed).toBe(false);
+    const custom = g.compose.replace("traefik healthcheck --ping", "mon-test");
+    expect(addTraefikHealthcheck(custom, g.files[TRAEFIK_STATIC_FILE] as string).compose).toContain("mon-test");
+  });
+
+  it("n'ajoute pas le healthcheck sans pouvoir ajouter « ping » (le conteneur serait « unhealthy »)", () => {
+    const { compose } = legacy();
+    const absent = addTraefikHealthcheck(compose, null);
+    expect(absent.compose).toBe(compose);
+    expect(absent.changed).toBe(false);
+    expect(absent.notes.join(" ")).toContain("ping");
+    const broken = addTraefikHealthcheck(compose, "- pas\n- un mapping\n");
+    expect(broken.compose).toBe(compose);
+    expect(broken.changed).toBe(false);
   });
 });

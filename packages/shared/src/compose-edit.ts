@@ -131,6 +131,19 @@ export function editServiceEnvironment(
   });
 }
 
+/** Le service déclare-t-il un `healthcheck` ? (false aussi si le Compose est illisible ou le service absent.) */
+export function composeHasHealthcheck(text: string, service: string): boolean {
+  try {
+    const doc = parseDocument(text, { uniqueKeys: true });
+    if (doc.errors.length > 0) return false;
+    const services = doc.get("services", true);
+    const svc = isMap(services) ? services.get(service, true) : null;
+    return isMap(svc) && svc.has("healthcheck");
+  } catch {
+    return false;
+  }
+}
+
 export interface HealthcheckSpec {
   /** Commande exécutée dans le conteneur (via `CMD-SHELL`). */
   test: string;

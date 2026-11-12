@@ -13,6 +13,7 @@
  * casserait la rotation du mot de passe.
  */
 
+import type { HealthcheckSpec } from "./compose-edit.js";
 import { traefikLabelEntries, validateTraefikExposure } from "./compose-traefik.js";
 
 /** Version fixée (pas de « latest ») ; le suivi des versions d'image proposera les suivantes. */
@@ -30,6 +31,10 @@ export const REGISTRY_PULL_USERNAME = "infrastructure-pull";
 export const REGISTRY_WRITE_ROUTER = "registry-write";
 export const REGISTRY_WRITE_AUTH = "registry-write-auth";
 export const REGISTRY_PORT = 5000;
+/** Serveur de diagnostic du registre, lié à la boucle locale du conteneur (jamais joignable depuis le réseau). */
+export const REGISTRY_DEBUG_ADDR = "127.0.0.1:5001";
+/** Healthcheck du conteneur : /debug/health du serveur de diagnostic (répond sans identifiants, contrairement à /v2/). */
+export const REGISTRY_HEALTHCHECK: HealthcheckSpec = { test: `wget -q --spider http://${REGISTRY_DEBUG_ADDR}/debug/health`, interval: "30s", timeout: "5s", retries: 3, startPeriod: "15s" };
 
 /** Réglages Traefik auxquels la registry se raccorde (lus de l'application Traefik, jamais modifiés). */
 export interface RegistryTraefik {
@@ -111,7 +116,15 @@ services:
   registry:
     image: ${REGISTRY_IMAGE}
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", ${quote(REGISTRY_HEALTHCHECK.test)} ]
+      interval: ${REGISTRY_HEALTHCHECK.interval}
+      timeout: ${REGISTRY_HEALTHCHECK.timeout}
+      retries: ${REGISTRY_HEALTHCHECK.retries}
+      start_period: ${REGISTRY_HEALTHCHECK.startPeriod}
     environment:
+      # Point de contrôle /debug/health, sans authentification : lié à 127.0.0.1, il n'est joignable que depuis le conteneur.
+      REGISTRY_HTTP_DEBUG_ADDR: ${quote(REGISTRY_DEBUG_ADDR)}
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
       REGISTRY_AUTH: htpasswd
