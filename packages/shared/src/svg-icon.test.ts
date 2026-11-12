@@ -18,6 +18,11 @@ describe("validateSvgIcon", () => {
     expect(r).toEqual({ ok: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>` });
   });
 
+  it("accepte les attributs courants des éditeurs (xml:space, espaces de noms déclarés, data-*)", () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" viewBox="-0.06 83.4 512.16 345.26"><path data-name="a" d="M116.8 428.5c-38.3-3.3z" style="fill:#24a1c1"/></svg>`;
+    expect(validateSvgIcon(svg)).toEqual({ ok: true, svg });
+  });
+
   it("accepte les dégradés et les références internes", () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/></linearGradient></defs><rect width="10" height="10" fill="url(#g)"/></svg>`;
     expect(validateSvgIcon(svg).ok).toBe(true);

@@ -25,6 +25,8 @@ const ATTRIBUTES = new Set([
   "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "opacity", "transform", "style", "class", "role", "aria-label",
   "aria-hidden", "preserveaspectratio", "offset", "stop-color", "stop-opacity", "gradientunits", "gradienttransform", "fx", "fy",
   "clip-path", "mask", "maskunits", "maskcontentunits", "clippathunits", "version", "fill-rule", "color", "display", "visibility",
+  // Ajoutés par les éditeurs courants (Illustrator, Figma, Inkscape…) : sans effet dangereux.
+  "xml:space", "xml:lang", "baseprofile", "shape-rendering", "vector-effect", "overflow", "paint-order", "mix-blend-mode", "isolation",
 ]);
 
 /** Attributs dont la valeur est une référence « url(#id) » : seule une ancre interne est acceptée. */
