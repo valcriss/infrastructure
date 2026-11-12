@@ -48,6 +48,8 @@ export class RegistryGc {
     private readonly transport: GcTransport,
     /** Suspend / reprend le démarrage des correctifs. */
     private readonly hold: (held: boolean) => void,
+    /** Appelé quand un ramasse-miettes échoue ou devient indéterminé (notification). */
+    private readonly onFailure: (outcome: GcOutcome) => void = () => {},
   ) {}
 
   close(): void {
@@ -118,5 +120,6 @@ export class RegistryGc {
       usedBeforeKb: r.usedBeforeKb ?? null,
       usedAfterKb: r.usedAfterKb ?? null,
     };
+    if (r.status !== "succeeded") this.onFailure(this.last);
   }
 }

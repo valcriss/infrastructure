@@ -3,6 +3,7 @@ import { onMounted, reactive, ref } from "vue";
 import { api, describeError, type MinSeverity, type RegistryEntry, type SecuritySettings } from "../../api";
 import AcceptedRisks from "../../components/AcceptedRisks.vue";
 import PanelCard from "../../components/PanelCard.vue";
+import NotificationSettings from "../../components/NotificationSettings.vue";
 import RemediationAutoSettings from "../../components/RemediationAutoSettings.vue";
 
 // Réglages de l'application pour la sécurité des images : périodicité des scans et registres.
@@ -113,6 +114,8 @@ onMounted(() => void load());
       </PanelCard>
 
       <RemediationAutoSettings />
+
+      <NotificationSettings />
 
       <AcceptedRisks />
 

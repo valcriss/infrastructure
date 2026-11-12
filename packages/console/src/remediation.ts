@@ -19,6 +19,7 @@ import { HttpError } from "./http-error.js";
 import { loadUsedImages } from "./images.js";
 import { parseImageRef } from "./image-ref.js";
 import type { RegistryStore } from "./registries.js";
+import type { Notifier } from "./notifications.js";
 import { AUTO_ACTOR, RemediationAuto } from "./remediation-auto.js";
 import { getRegistrySettings } from "./registry-app-routes.js";
 import type { ScanService } from "./scans.js";
@@ -196,6 +197,8 @@ export class RemediationService {
   private timer: NodeJS.Timeout | undefined;
   /** Préparation planifiée des correctifs (désactivée par défaut). */
   readonly auto: RemediationAuto;
+  /** Notifications (webhook) : branchées par l'application ; absentes, rien n'est notifié. */
+  notifier: Pick<Notifier, "notify"> | undefined;
   /** Démarrage des correctifs suspendu (ramasse-miettes du registre en cours) : les jobs restent en file. */
   private held = false;
 
@@ -510,6 +513,12 @@ export class RemediationService {
         job.id, msg.error ?? "Le correctif a échoué sans détail.", msg.tools ? JSON.stringify(msg.tools) : null,
       ]);
       await audit(this.pool, "agent", "remediation.finish", `${job.id} failed`, "failure");
+      this.notifier?.notify({ type: "remediation.failed", title: `Correctif en échec : ${job.image_ref}`, text: `Le correctif de ${job.image_ref} (${job.platform}) a échoué. Aucun changement n'a été appliqué.`, severity: "error", path: "/images", image: job.image_ref, status: "failed" });
+      if (job.requested_by === AUTO_ACTOR) {
+        // Trois échecs automatiques de suite suspendent la préparation : à signaler une fois, au moment où elle se suspend.
+        const paused = (await this.auto.state()).pausedUntil;
+        if (paused) this.notifier?.notify({ type: "remediation.auto_paused", title: "Préparation automatique des correctifs en pause", text: `Trois correctifs automatiques ont échoué de suite : la préparation reprend le ${new Date(paused).toLocaleString("fr-FR", { timeZone: "UTC" })} (UTC), ou après relecture des échecs.`, severity: "warning", path: "/settings?tab=security" });
+      }
       void this.pumpAny().catch(() => undefined);
       return;
     }
@@ -523,6 +532,20 @@ export class RemediationService {
       ],
     );
     await audit(this.pool, "agent", "remediation.finish", `${job.id} ${bilan.verdict}`, "success");
+    if ((bilan.verdict === "validated" || bilan.verdict === "partial") && job.requested_by === AUTO_ACTOR) {
+      const c = bilan.cves;
+      this.notifier?.notify({
+        type: "remediation.ready",
+        title: `Correctif prêt à relire : ${job.image_ref}`,
+        text: `Correctif ${bilan.verdict === "validated" ? "validé" : "partiel"} pour ${job.image_ref} (${job.platform}) : ${c.resolved} CVE corrigée(s), ${c.remainingFixable} corrigeable(s) restante(s). Rien n'a été appliqué ni déployé.`,
+        severity: bilan.verdict === "validated" ? "info" : "warning",
+        path: "/images",
+        image: job.image_ref,
+        status: bilan.verdict,
+      });
+    } else if (bilan.verdict === "rejected") {
+      this.notifier?.notify({ type: "remediation.failed", title: `Correctif refusé : ${job.image_ref}`, text: `Le correctif de ${job.image_ref} (${job.platform}) a été refusé : ${bilan.reasons.slice(0, 2).join(" ; ")}. Il n'est pas utilisable.`, severity: "warning", path: "/images", image: job.image_ref, status: "rejected" });
+    }
     void this.pumpAny().catch(() => undefined);
   }
 

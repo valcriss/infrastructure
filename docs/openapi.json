@@ -30,6 +30,9 @@
       "name": "Registry"
     },
     {
+      "name": "Notifications"
+    },
+    {
       "name": "Remédiation"
     },
     {
@@ -3249,6 +3252,324 @@
           },
           "409": {
             "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/notifications": {
+      "get": {
+        "summary": "Notifications par webhook : réglages et derniers envois",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Réglages (enabled, baseUrl, events, allowPrivate, maxPerHour), nom d'hôte du webhook (jamais l'adresse complète), présence du secret et dix derniers envois (statut, durée, tentatives ; ni contenu ni adresse)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Modifier les notifications par webhook",
+        "description": "Administrateurs uniquement. Désactivées par défaut. L'adresse (HTTPS obligatoire, sans identifiants) est chiffrée et jamais renvoyée ; absente = inchangée, chaîne vide = supprimée. Les adresses locales ou privées sont refusées sauf allowPrivate, et vérifiées aussi à chaque envoi (résolution de nom comprise). Un secret de signature est créé avec la première adresse.",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "url": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "baseUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "events": {
+                    "type": "object",
+                    "properties": {
+                      "remediation.ready": {
+                        "type": "boolean"
+                      },
+                      "remediation.failed": {
+                        "type": "boolean"
+                      },
+                      "remediation.auto_paused": {
+                        "type": "boolean"
+                      },
+                      "registry.gc_failed": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "remediation.ready",
+                      "remediation.failed",
+                      "remediation.auto_paused",
+                      "registry.gc_failed"
+                    ]
+                  },
+                  "allowPrivate": {
+                    "type": "boolean"
+                  },
+                  "maxPerHour": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "events",
+                  "allowPrivate",
+                  "maxPerHour"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Réglages enregistrés",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/notifications/test": {
+      "post": {
+        "summary": "Envoyer un message de test",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Résultat de l'envoi (ok, status HTTP, erreur, durée) ; sans reprise",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/notifications/secret/reveal": {
+      "post": {
+        "summary": "Afficher le secret de signature",
+        "description": "Administrateurs uniquement, tracé dans l'audit, jamais mis en cache.",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Secret (à utiliser pour vérifier l'en-tête X-Console-Signature : HMAC-SHA256 de « horodatage.corps »)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/notifications/secret/rotate": {
+      "post": {
+        "summary": "Renouveler le secret de signature",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Nouveau secret ; l'ancien n'est plus valable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
             "content": {
               "application/json": {
                 "schema": {

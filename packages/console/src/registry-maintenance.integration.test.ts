@@ -265,6 +265,19 @@ describe.skipIf(!url)("rétention et ramasse-miettes du registre (intégration)"
       expect((await pool.query("SELECT 1 FROM audit_events WHERE action = 'registry.gc.dry_run'")).rowCount).toBe(1);
     });
 
+    it("signale un ramasse-miettes en échec ou indéterminé (notification), pas un réussi", async () => {
+      const failures: string[] = [];
+      const g = new RegistryGc(pool, { isOnline: () => true, send: () => true }, () => undefined, (o) => failures.push(o.status));
+      const run = async (result: (id: string) => void): Promise<void> => {
+        await g.start("boss", false);
+        result(g.state().running?.requestId as string);
+      };
+      await run((id) => g.onResult(hostId, { type: "registry_gc_result", requestId: id, status: "succeeded", dryRun: false }));
+      await run((id) => g.onResult(hostId, { type: "registry_gc_result", requestId: id, status: "failed", dryRun: false, error: "x" }));
+      await run(() => g.onDisconnect(hostId));
+      expect(failures).toEqual(["failed", "unknown"]);
+    });
+
     it("une connexion perdue rend le résultat indéterminé et reprend les correctifs", async () => {
       const g = gc();
       await g.start("boss", false);

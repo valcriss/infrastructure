@@ -21,6 +21,8 @@ import { ObservedWatcher } from "./observed-watch.js";
 import { registerTraefikDynamicRoutes } from "./traefik-dynamic-routes.js";
 import { registerTraefikRoutes } from "./traefik-routes.js";
 import { registerRegistryAppRoutes } from "./registry-app-routes.js";
+import { Notifier } from "./notifications.js";
+import { registerNotificationRoutes } from "./notification-routes.js";
 import { RegistryGc } from "./registry-gc.js";
 import { RegistryImages, registerRegistryImageRoutes } from "./registry-images.js";
 import { RegistryRetention, registerRegistryMaintenanceRoutes } from "./registry-maintenance.js";
@@ -102,6 +104,7 @@ export interface BuiltApp {
   metrics: MetricsStore;
   scans: ScanService;
   remediation: RemediationService;
+  notifier: Notifier;
   /** Rétention automatique du registre (désactivée tant qu'un administrateur ne choisit pas le mode « auto »). */
   retention: RegistryRetention;
   candidates: CandidateScans;
@@ -446,7 +449,11 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const scans = new ScanService(pool, gateway, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const remediation = new RemediationService(pool, gateway, scans, registries, { warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o as object, m) });
   const registryImages = new RegistryImages(pool, registryClient);
-  const registryGc = new RegistryGc(pool, gateway, (held) => remediation.hold(held));
+  const notifier = new Notifier(pool, box, { log: { error: (o, m) => app.log.error(o as object, m) } });
+  remediation.notifier = notifier;
+  const registryGc = new RegistryGc(pool, gateway, (held) => remediation.hold(held), (o) =>
+    notifier.notify({ type: "registry.gc_failed", title: "Ramasse-miettes du registre en échec", text: `Le ramasse-miettes du registre est ${o.status === "unknown" ? "indéterminé" : "en échec"}${o.dryRun ? " (simulation)" : ""}. Consultez la page Registry.`, severity: "warning", path: "/settings?tab=registry", status: o.status }),
+  );
   const retention = new RegistryRetention(pool, registryImages, registryGc, { error: (o, m) => app.log.error(o as object, m) });
   const watcher = new ImageWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
   const observedWatcher = new ObservedWatcher(pool, registryClient, { error: (o, m) => app.log.error(o as object, m) });
@@ -548,6 +555,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerTraefikDynamicRoutes(app, { pool, auth: apiAuth });
   registerRegistryAppRoutes(app, { pool, auth: apiAuth, registries });
   registerRegistryImageRoutes(app, { auth: apiAuth, images: registryImages });
+  registerNotificationRoutes(app, { pool, auth: apiAuth, notifier });
   registerRegistryMaintenanceRoutes(app, { pool, auth: apiAuth, retention, gc: registryGc });
   registerRemediationRoutes(app, { auth: apiAuth, remediation, apply: new RemediationApply(pool, remediation) });
   registerRemediationAutoRoutes(app, { pool, auth: apiAuth, auto: remediation.auto });
@@ -583,5 +591,5 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     });
   }
 
-  return { app, setup, gateway, ops, backup, metrics, scans, remediation, retention, candidates, pruning, watcher, observedWatcher, storage, routes };
+  return { app, setup, gateway, ops, backup, metrics, scans, remediation, notifier, retention, candidates, pruning, watcher, observedWatcher, storage, routes };
 }
