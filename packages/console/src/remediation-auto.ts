@@ -4,6 +4,7 @@ import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { parseImageRef } from "./image-ref.js";
 import { loadUsedImages } from "./images.js";
+import { infrastructureStacks, isInfrastructureImage } from "./remediation-infra.js";
 import type { RemediationService } from "./remediation.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -158,8 +159,11 @@ export class RemediationAuto {
     if (budget <= 0) return { started: 0, skipped: "daily_limit" };
 
     const candidates: { imageId: string; platform: string; fixable: number }[] = [];
+    const infra = await infrastructureStacks(this.pool);
     for (const img of await loadUsedImages(this.pool)) {
       if (!img.platform) continue;
+      // Les images de l'infrastructure (registre, Traefik, console, agent) ne sont jamais préparées : dépendance circulaire.
+      if (isInfrastructureImage(img, infra)) continue;
       // Seules les images d'applications gérées sont concernées (comme les scans planifiés).
       const user = img.usedBy.find((u) => u.stackId !== null && this.isOnline(u.hostId));
       if (!user) continue;

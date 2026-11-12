@@ -135,6 +135,18 @@ describe.skipIf(!url)("préparation planifiée des correctifs (intégration)", (
     ]);
   });
 
+  it("ne prépare jamais une image d'infrastructure (application générée par la console)", async () => {
+    await setAutoSettings(pool, { enabled: true, maxPerDay: 10, excluded: ["postgres"] });
+    await pool.query("UPDATE stacks SET managed_by = 'registry' WHERE name = 'shop'");
+    try {
+      await auto().pass();
+      // L'image B appartient à « shop », désormais d'infrastructure : seule A est préparée.
+      expect(created.map((c) => c.imageId)).toEqual([IMG.A]);
+    } finally {
+      await pool.query("UPDATE stacks SET managed_by = NULL WHERE name = 'shop'");
+    }
+  });
+
   it("respecte le plafond par 24 h", async () => {
     await setAutoSettings(pool, { enabled: true, maxPerDay: 1, excluded: ["postgres"] });
     expect(await auto().pass()).toEqual({ started: 1, skipped: null });

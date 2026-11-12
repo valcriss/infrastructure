@@ -22,6 +22,7 @@ import { parseImageRef } from "./image-ref.js";
 import type { RegistryStore } from "./registries.js";
 import type { Notifier } from "./notifications.js";
 import { AUTO_ACTOR, RemediationAuto } from "./remediation-auto.js";
+import { INFRASTRUCTURE_MESSAGE, infrastructureStacks, isInfrastructureImage } from "./remediation-infra.js";
 import { verifyCheckFor } from "./remediation-verify.js";
 import { getRegistrySettings } from "./registry-app-routes.js";
 import type { ScanService } from "./scans.js";
@@ -263,7 +264,9 @@ export class RemediationService {
     if (!img) throw new HttpError(404, "image_not_found", "Image inconnue : elle n'est utilisée par aucun conteneur observé.");
     const scan = await this.scans.latestSucceeded(img.imageId, img.platform);
     const vulns = scan ? await this.scans.vulnerabilities(scan.id) : [];
-    const base = patchEligibility(scan ? { os: scan.os, vulnerabilities: vulns, truncated: scan.truncated } : null);
+    const scanned = patchEligibility(scan ? { os: scan.os, vulnerabilities: vulns, truncated: scan.truncated } : null);
+    // Une image utilisée seulement par l'infrastructure (registre, Traefik, console, agent) n'est jamais corrigée : voir remediation-infra.ts.
+    const base: Eligibility = isInfrastructureImage(img, await infrastructureStacks(this.pool)) ? { ...scanned, eligible: false, reason: "infrastructure", message: INFRASTRUCTURE_MESSAGE } : scanned;
 
     const caps = await this.pool.query<{ id: string; capabilities: string[] }>("SELECT id, capabilities FROM hosts WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL", [[...new Set(img.usedBy.map((u) => u.hostId))]]);
     const hosts = [...new Map(img.usedBy.map((u) => [u.hostId, u.hostName])).entries()].map(([id, name]) => ({

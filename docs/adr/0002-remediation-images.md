@@ -96,7 +96,8 @@ Décisions prises à l'implémentation, avec ce qui les motive. Le détail d'usa
 4. **Nettoyage du registre** : suppression par digest, jamais d'une image utilisée (révision courante, déployée ou ancienne, conteneur, correctif actif) ; rétention par nombre de correctifs conservés (proposée par défaut, automatique en option) ; **ramasse-miettes lancé par l'agent**, commande fixe dans le seul conteneur du registre officiel, jamais pendant un correctif, qui suspend le démarrage des correctifs pendant l'opération.
 5. **Annulation** : l'arrêt est demandé à l'agent et n'est jamais affirmé avant sa confirmation ; sans confirmation, le résultat est « indéterminé ».
 6. **Notifications** : webhook HTTPS sortant, signé, sans secret dans les messages, avec refus des adresses privées à l'enregistrement et à chaque envoi (résolution de nom comprise).
-7. **Confidentialité** : les sorties d'outils (vérification, ramasse-miettes en notification) ne sont jamais transmises ni conservées, seulement ce qu'elles prouvent ; l'adresse et le secret du webhook sont chiffrés et jamais renvoyés ; les écritures de réglages sont réservées aux administrateurs.
+7. **Images d'infrastructure exclues** : les images du registre, de Traefik, de la console et de son agent ne sont jamais corrigées localement (dépendance circulaire : stockées dans un registre que seuls ces composants rendent joignable). Refus côté serveur, exclusion de la préparation automatique, mise à jour par une version officielle. Découvert après coup en usage réel (le bouton « Corriger » était proposé pour l'image du registre).
+8. **Confidentialité** : les sorties d'outils (vérification, ramasse-miettes en notification) ne sont jamais transmises ni conservées, seulement ce qu'elles prouvent ; l'adresse et le secret du webhook sont chiffrés et jamais renvoyés ; les écritures de réglages sont réservées aux administrateurs.
 
 ### Revue de sécurité (lot Q1)
 

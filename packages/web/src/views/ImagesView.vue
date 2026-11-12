@@ -283,7 +283,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   <button v-if="i.scan.current?.total" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" :aria-expanded="!!open[key(i)]" @click="open[key(i)] = !open[key(i)]">
                     {{ open[key(i)] ? "Masquer" : "Détails" }}
                   </button>
-                  <button v-if="session.canOperate && i.scan.current?.total" class="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" title="Préparer une copie corrigée de cette image" @click="fixing = i">
+                  <span v-if="i.infrastructure" class="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-slate-600" title="Image du registre, de Traefik, de la console ou de son agent : la corriger puis la stocker dans le registre créerait une dépendance circulaire. Mettez-la à jour vers une version officielle.">Infrastructure</span>
+                  <button v-else-if="session.canOperate && i.scan.current?.total" class="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" title="Préparer une copie corrigée de cette image" @click="fixing = i">
                     <FaIcon :icon="['fas', 'wrench']" /> Corriger
                   </button>
                   <button class="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" @click="scan(i)">

@@ -25,6 +25,8 @@ export function eligibilityHint(e: RemediationEligibility | null, canOperate: bo
       return { tone: "warning", title: "Distribution en fin de vie", text: "Plus aucun correctif n'est publié pour cette version : un correctif local ne serait pas fiable. Migrez vers une version supportée de l'image (onglet « Sécurité et versions » de l'application)." };
     case "nothing_fixable":
       return { tone: "info", title: "Rien à corriger pour le moment", text: "Aucune vulnérabilité n'a de correctif publié dans les paquets du système : un correctif local n'apporterait rien. Revenez après la prochaine mise à jour de l'image, ou après un nouveau scan." };
+    case "infrastructure":
+      return { tone: "info", title: "Image d'infrastructure : pas de correctif local", text: "Cette image fait tourner le registre, Traefik, la console ou son agent. La stocker dans le registre créerait une dépendance circulaire : après un nettoyage de l'hôte, rien ne pourrait plus redémarrer. Mettez-la à jour vers une version officielle (« Vérifier les mises à jour », onglet « Sécurité et versions »)." };
     case "app_only":
       return { tone: "warning", title: "Vulnérabilités dans les dépendances de l'application", text: "Elles ne se corrigent pas au niveau de l'image : mettez à jour l'application elle-même, ou choisissez une version officielle plus récente de l'image." };
     default:

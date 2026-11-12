@@ -15,8 +15,8 @@ export type RemediationVerdict = "validated" | "partial" | "rejected";
 
 export interface Eligibility {
   eligible: boolean;
-  /** Code stable pour l'interface : ok, no_scan, unsupported_os, eol, nothing_fixable, app_only. */
-  reason: "ok" | "no_scan" | "unsupported_os" | "eol" | "nothing_fixable" | "app_only";
+  /** Code stable pour l'interface : ok, no_scan, unsupported_os, eol, nothing_fixable, app_only, infrastructure (image du registre, de Traefik, de la console ou de son agent). */
+  reason: "ok" | "no_scan" | "unsupported_os" | "eol" | "nothing_fixable" | "app_only" | "infrastructure";
   message: string;
   /** CVE uniques corrigeables dans les paquets du système (celles que le moteur peut traiter). */
   fixableOs: number;

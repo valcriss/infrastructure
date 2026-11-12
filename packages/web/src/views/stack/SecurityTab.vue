@@ -171,7 +171,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <button class="underline" :aria-expanded="!!open[c.service]" @click="open[c.service] = !open[c.service]">
             {{ open[c.service] ? "Masquer" : "Voir" }} les vulnérabilités
           </button>
-          <button v-if="session.canOperate" class="inline-flex items-center gap-1 underline" title="Préparer une copie corrigée de cette image" @click="fixing = c.image">
+          <span v-if="c.image.infrastructure" class="text-xs text-slate-600">Image d'infrastructure : pas de correctif local, mettez-la à jour vers une version officielle (« Vérifier les mises à jour »).</span>
+          <button v-else-if="session.canOperate" class="inline-flex items-center gap-1 underline" title="Préparer une copie corrigée de cette image" @click="fixing = c.image">
             <FaIcon :icon="['fas', 'wrench']" /> Corriger l'image…
           </button>
         </div>

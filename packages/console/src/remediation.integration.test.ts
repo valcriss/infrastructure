@@ -546,6 +546,83 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
     });
   });
 
+  describe("images d'infrastructure (registre, Traefik, console, agent)", () => {
+    const IMG_REG = sha("c");
+    const IMG_TRAEFIK = sha("d");
+    const IMG_CONSOLE = sha("e");
+    const IMG_MIXED = sha("f");
+    const all = [IMG_REG, IMG_TRAEFIK, IMG_CONSOLE, IMG_MIXED];
+    const eligibility = async (imageId: string) => (await call("GET", `/api/v1/images/${imageId}/remediation/eligibility?platform=${PLATFORM}`)).json;
+
+    beforeAll(async () => {
+      const containers = [
+        ctr("registry", "registry:3.0.0", IMG_REG, "registry"),
+        ctr("traefik", "traefik:v3.7", IMG_TRAEFIK, "traefik"),
+        ctr("console", "ghcr.io/valcriss/infrastructure-console:1", IMG_CONSOLE, "console-docker"),
+        // Partagée entre l'infrastructure et une application ordinaire.
+        ctr("registry2", "alpine:3.21", IMG_MIXED, "registry"),
+        ctr("web", "alpine:3.21", IMG_MIXED, "app"),
+      ];
+      const images = all.map((id) => info(id, id === IMG_MIXED ? "alpine:3.21" : "x:1"));
+      ws.send(JSON.stringify({ type: "inventory", inventory: { observedAt: new Date().toISOString(), dockerVersion: "29", containers, images } }));
+      await waitFor(async () => ((await pool.query("SELECT jsonb_array_length(images) AS n FROM hosts WHERE id = $1", [hostId])).rows[0]?.n ?? 0) === all.length);
+    });
+
+    it("refuse toute image utilisée seulement par le registre, Traefik, la console ou son agent", async () => {
+      for (const id of [IMG_REG, IMG_TRAEFIK, IMG_CONSOLE]) {
+        const e = await eligibility(id);
+        expect(e, id).toMatchObject({ eligible: false, reason: "infrastructure", canStart: false });
+        expect(e.message).toContain("dépendance circulaire");
+        // Refus côté serveur : jamais de correctif créé, quelle que soit l'interface.
+        const r = await call("POST", `/api/v1/images/${id}/remediations`, { platform: PLATFORM });
+        expect(r.status, id).toBe(409);
+        expect(r.json.error?.code ?? r.json.code).toBe("not_eligible_infrastructure");
+      }
+      expect((await pool.query("SELECT count(*)::int AS n FROM remediation_jobs WHERE image_id = ANY($1::text[])", [[IMG_REG, IMG_TRAEFIK, IMG_CONSOLE]])).rows[0].n).toBe(0);
+    });
+
+    it("reste vrai pour une application détachée de la gestion automatique (le réglage la désigne encore)", async () => {
+      await pool.query("UPDATE stacks SET managed_by = NULL WHERE name = 'registry'");
+      try {
+        expect(await eligibility(IMG_REG)).toMatchObject({ eligible: false, reason: "infrastructure" });
+      } finally {
+        await pool.query("UPDATE stacks SET managed_by = 'registry' WHERE name = 'registry'");
+      }
+    });
+
+    it("garde corrigeable une image partagée avec une application ordinaire", async () => {
+      expect((await eligibility(IMG_MIXED)).reason).not.toBe("infrastructure");
+    });
+
+    it("signale les images d'infrastructure dans la liste des images", async () => {
+      const list = (await call("GET", "/api/v1/images")).json.images as { imageId: string; infrastructure: boolean }[];
+      const flag = (id: string) => list.find((i) => i.imageId === id)?.infrastructure;
+      expect([IMG_REG, IMG_TRAEFIK, IMG_CONSOLE].map(flag)).toEqual([true, true, true]);
+      expect(flag(IMG_MIXED)).toBe(false);
+    });
+
+    it("ne propose jamais l'image corrigée à l'application d'infrastructure, mais bien à l'application ordinaire", async () => {
+      const id = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO remediation_jobs (image_id, platform, host_id, image_ref, status, requested_by, registry_host, repository, source_tag, patched_tag, patch_number, patched_digest, source_digest)
+           VALUES ($1, $2, $3, 'alpine:3.21', 'validated', 'test', $4, 'patched/alpine-mixed', 'src', 'x-patch.1', 1, $5, $6) RETURNING id`,
+          [IMG_MIXED, PLATFORM, hostId, REGISTRY, sha("7"), sha("6")],
+        )
+      ).rows[0]?.id as string;
+      const t = await call("GET", `/api/v1/remediations/${id}/stack-targets`);
+      expect(t.status).toBe(200);
+      const infra = t.json.targets.find((x: any) => x.stackName === "registry");
+      expect(infra).toMatchObject({ canApply: false });
+      expect(infra.reason).toContain("dépendance circulaire");
+      expect(t.json.targets.find((x: any) => x.stackName === "app")).toMatchObject({ canApply: true, reason: null });
+      // La demande directe est refusée de la même façon (409), pas seulement masquée.
+      const registryStack = (await pool.query<{ id: string }>("SELECT id FROM stacks WHERE name = 'registry'")).rows[0]?.id;
+      const refused = await call("POST", `/api/v1/remediations/${id}/stack-revision`, { stackId: registryStack, service: "registry2", expectedRevision: 1 });
+      expect(refused.status).toBe(409);
+      expect(refused.json.error?.code ?? refused.json.code).toBe("target_not_applicable");
+    });
+  });
+
   it("limite l'accès : lecture pour tous, lancement et annulation pour les opérateurs", () => {
     expect(requiredRole("GET", "/api/v1/images/:imageId/remediation/eligibility")).toBe("viewer");
     expect(requiredRole("GET", "/api/v1/remediations")).toBe("viewer");

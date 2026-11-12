@@ -3,6 +3,7 @@ import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { loadUsedImages } from "./images.js";
 import { getRegistrySettings } from "./registry-app-routes.js";
+import { INFRASTRUCTURE_TARGET_REASON, infrastructureStacks } from "./remediation-infra.js";
 import type { JobView, RemediationService } from "./remediation.js";
 import { changeStack, getRevision } from "./stacks.js";
 
@@ -86,6 +87,7 @@ export class RemediationApply {
     const settings = await getRegistrySettings(this.pool);
     const registryReady = settings?.host === job.registry;
     const img = (await loadUsedImages(this.pool)).find((i) => i.imageId === job.imageId && i.platform === job.platform);
+    const infra = await infrastructureStacks(this.pool);
     const seen = new Set<string>();
     const targets: StackTarget[] = [];
     for (const u of img?.usedBy ?? []) {
@@ -106,6 +108,7 @@ export class RemediationApply {
       const alreadyApplied = effectiveImage === job.patchedRef;
       let reason: string | null = null;
       if (RESERVED_STACK_NAMES.includes(u.stackName)) reason = "La console et son agent ne sont pas modifiés depuis leur propre interface.";
+      else if (infra.has(u.stackId)) reason = INFRASTRUCTURE_TARGET_REASON;
       else if (s.managed_by) reason = `Application générée et entretenue par la console (${s.managed_by}) : son contenu n'est pas modifiable à la main.`;
       else if (!registryReady) reason = "Le registre privé qui héberge cette image n'est plus configuré : le déploiement ne pourrait pas la télécharger.";
       else if (!rev) reason = "Révision courante introuvable.";

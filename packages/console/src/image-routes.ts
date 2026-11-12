@@ -12,6 +12,7 @@ import type { RegistryClient } from "./registry.js";
 import { RegistryError } from "./registry.js";
 import type { RegistryStore } from "./registries.js";
 import type { ScanRow, ScanService } from "./scans.js";
+import { infrastructureStacks, isInfrastructureImage } from "./remediation-infra.js";
 import { repoKey, summarizeVulns } from "./vuln-summary.js";
 import { hiddenProjects } from "./display.js";
 import { MIN_SEVERITIES, getSecuritySettings, isReported, reportedCounts, setSecuritySettings, type SecuritySettings } from "./settings.js";
@@ -107,7 +108,8 @@ export function registerImageRoutes(
   const { pool, session, apiAuth, scans, watcher, registries, registryClient } = deps;
 
   /** Vue d'un contenu d'image : état du scan (jamais confondu avec « sain »), utilisateurs, dernier résultat réussi. */
-  const view = async (img: UsedImage, queuePosition: number | null = null, updates: ImageUpdate[] = []) => {
+  const view = async (img: UsedImage, queuePosition: number | null = null, updates: ImageUpdate[] = [], infra?: Set<string>) => {
+    const infrastructure = isInfrastructureImage(img, infra ?? (await infrastructureStacks(pool)));
     const [attempt, ok, settings] = await Promise.all([scans.latest(img.imageId, img.platform), scans.latestSucceeded(img.imageId, img.platform), getSecuritySettings(pool)]);
     const state = scanState(attempt ? briefOf(attempt, settings) : null);
     return {
@@ -119,6 +121,8 @@ export function registerImageRoutes(
       repoDigests: img.info?.repoDigests ?? [],
       size: img.info?.size ?? null,
       managed: img.usedBy.some((u) => u.stackId !== null),
+      /** Image du registre, de Traefik, de la console ou de son agent : jamais corrigée localement (dépendance circulaire). */
+      infrastructure,
       usedBy: img.usedBy,
       scan: {
         state,
@@ -136,6 +140,7 @@ export function registerImageRoutes(
     const q = ImageListQuery.parse(request.query);
     const images = await loadUsedImages(pool, { ...q, excludeProjects: await hiddenProjects(pool) });
     const queue = await scans.queue();
+    const infra = await infrastructureStacks(pool);
     const position = new Map(queue.pending.map((p, i) => [`${p.imageId}|${p.platform}`, i + 1]));
     // Mises à jour disponibles, rattachées aux services (stack gérée ou projet observé) qui utilisent chaque image.
     const managed = new Map<string, CheckDetail>();
@@ -162,7 +167,7 @@ export function registerImageRoutes(
     };
     return {
       queue: { pending: queue.pending.length, running: queue.running, current: queue.current },
-      images: await Promise.all(images.map((img) => view(img, position.get(`${img.imageId}|${img.platform}`) ?? null, updatesOf(img)))),
+      images: await Promise.all(images.map((img) => view(img, position.get(`${img.imageId}|${img.platform}`) ?? null, updatesOf(img), infra))),
     };
   });
 

@@ -388,6 +388,8 @@ export interface ImageView {
   repoDigests: string[];
   size: number | null;
   managed: boolean;
+  /** Image du registre, de Traefik, de la console ou de son agent : jamais corrigée localement (dépendance circulaire). */
+  infrastructure: boolean;
   usedBy: ImageUserView[];
   scan: ImageScanView;
   /** Mises à jour disponibles pour les services qui utilisent cette image. */
@@ -816,7 +818,7 @@ export interface RemediationEligibility {
   imageId: string;
   platform: string;
   eligible: boolean;
-  reason: "ok" | "no_scan" | "unsupported_os" | "eol" | "nothing_fixable" | "app_only";
+  reason: "ok" | "no_scan" | "unsupported_os" | "eol" | "nothing_fixable" | "app_only" | "infrastructure";
   message: string;
   fixableOs: number;
   fixableApp: number;

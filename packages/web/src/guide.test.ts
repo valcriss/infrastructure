@@ -20,6 +20,10 @@ describe("guidage avant de lancer un correctif", () => {
     expect(eligibilityHint(elig({ eligible: false, reason: "unsupported_os" }), true)?.text).toContain("Alpine et Debian");
     expect(eligibilityHint(elig({ eligible: false, reason: "nothing_fixable" }), true)?.tone).toBe("info");
     expect(eligibilityHint(elig({ eligible: false, reason: "app_only" }), true)?.text).toContain("application");
+    const infra = eligibilityHint(elig({ eligible: false, reason: "infrastructure" }), true);
+    expect(infra?.tone).toBe("info");
+    expect(infra?.text).toContain("dépendance circulaire");
+    expect(infra?.text).toContain("version officielle");
     const registry = eligibilityHint(elig({ registry: { ready: false, reason: "L'application registry n'est pas déployée." }, canStart: false }), true);
     expect(registry).toMatchObject({ tone: "warning", to: "/settings?tab=registry" });
     expect(registry?.text).toContain("pas déployée");
