@@ -31,6 +31,7 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
   let baseUrl: string;
   let admin = "";
   let hostId = "";
+  let creds: { agentId: string; secret: string } | null = null;
   let ws: WebSocket;
   const received: Record<string, any>[] = [];
 
@@ -53,7 +54,10 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       sock.on("message", (raw) => {
         const msg = JSON.parse(raw.toString()) as Record<string, any>;
         if (msg.type === "welcome") {
-          if (msg.credentials) hostId = msg.agentId;
+          if (msg.credentials) {
+            hostId = msg.agentId;
+            creds = msg.credentials;
+          }
           resolve(sock);
         } else received.push(msg);
       });
@@ -61,13 +65,13 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
     });
   const status = async (id: string) => (await call("GET", `/api/v1/remediations/${id}`)).json;
 
-  const ctr = (svc: string, image: string, imageId: string): Container => ({
-    id: `c-${svc}`, names: [`app-${svc}-1`], image, imageId, state: "running", status: "Up", created: 1,
-    composeProject: "app", composeService: svc, health: "none", restartCount: 0, startedAt: new Date().toISOString(), exitCode: 0,
+  const ctr = (svc: string, image: string, imageId: string, project = "app"): Container => ({
+    id: `c-${project}-${svc}`, names: [`${project}-${svc}-1`], image, imageId, state: "running", status: "Up", created: 1,
+    composeProject: project, composeService: svc, health: "none", restartCount: 0, startedAt: new Date().toISOString(), exitCode: 0,
   });
   const info = (id: string, tag: string): ImageInfo => ({ id, repoTags: [tag], repoDigests: [], size: 5_000_000, os: "linux", arch: "amd64" });
   const sendInventory = async () => {
-    const containers = [ctr("web", "alpine:3.22.0", IMG), ctr("old", "alpine:3.12", IMG_EOL)];
+    const containers = [ctr("web", "alpine:3.22.0", IMG), ctr("old", "alpine:3.12", IMG_EOL), ctr("api", "alpine:3.22.0", IMG, "app2")];
     const images = [info(IMG, "alpine:3.22.0"), info(IMG_EOL, "alpine:3.12")];
     ws.send(JSON.stringify({ type: "inventory", inventory: { observedAt: new Date().toISOString(), dockerVersion: "29", containers, images } }));
     await waitFor(async () => ((await pool.query("SELECT jsonb_array_length(images) AS n FROM hosts WHERE id = $1", [hostId])).rows[0]?.n ?? 0) === 2);
@@ -235,6 +239,98 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
     expect(cancelled.json.error).toContain("Abandonné");
     expect((await call("POST", `/api/v1/remediations/${msg.jobId}/cancel`)).status).toBe(409);
     expect((await call("GET", "/api/v1/remediations/" + "00000000-0000-4000-8000-000000000000")).status).toBe(404);
+  });
+
+  describe("utiliser l'image corrigée dans une application", () => {
+    const COMPOSE = "services:\n  web:\n    image: alpine:3.22.0 # à corriger\n    restart: always\n";
+    let validatedId = "";
+    let stackId = "";
+    let apiStackId = "";
+    const patchedRef = `${REGISTRY}/patched/docker-io-library-alpine@${sha("2")}`;
+    const rev = async (id: string) => (await call("GET", `/api/v1/stacks/${id}`)).json;
+
+    it("liste les services qui utilisent exactement l'image corrigée, et dit pourquoi les autres ne peuvent pas", async () => {
+      validatedId = (await call("GET", "/api/v1/remediations?status=validated")).json.remediations[0].id as string;
+      const created = await call("POST", "/api/v1/stacks", { name: "app", hostId, description: "", compose: COMPOSE, variables: {}, adopt: true });
+      expect(created.status).toBe(201);
+      stackId = created.json.id;
+      apiStackId = (await call("POST", "/api/v1/stacks", { name: "app2", hostId, description: "", compose: "services:\n  api:\n    image: ${IMG:-alpine:3.22.0}\n", variables: {}, adopt: true })).json.id;
+
+      // Le service reconnecté revient en ligne avec ses identifiants (la connexion a été coupée plus haut).
+      ws = await connect({ kind: "credentials", ...(creds as object) }, ["scan.trivy", "image.patch"]);
+      await sendInventory();
+      const t = await call("GET", `/api/v1/remediations/${validatedId}/stack-targets`);
+      expect(t.status).toBe(200);
+      expect(t.json).toMatchObject({ patchedRef, verdict: "validated", registryReady: true });
+      const web = t.json.targets.find((x: any) => x.service === "web");
+      expect(web).toMatchObject({ stackName: "app", currentRevision: 1, deployedRevision: null, currentImage: "alpine:3.22.0", canApply: true, reason: null, alreadyApplied: false });
+      const api = t.json.targets.find((x: any) => x.service === "api");
+      expect(api).toMatchObject({ canApply: false });
+      expect(api.reason).toContain("variable");
+      // Le service qui utilise une autre image n'est pas concerné.
+      expect(t.json.targets.some((x: any) => x.service === "old")).toBe(false);
+      // Un correctif refusé ne propose rien.
+      const rejectedId = (await call("GET", "/api/v1/remediations?status=rejected")).json.remediations[0].id as string;
+      expect((await call("GET", `/api/v1/remediations/${rejectedId}/stack-targets`)).status).toBe(409);
+    });
+
+    it("prévisualise sans rien enregistrer, et refuse une révision périmée ou un service étranger", async () => {
+      const body = { stackId, service: "web", expectedRevision: 1 };
+      const p = await call("POST", `/api/v1/remediations/${validatedId}/stack-revision/preview`, body);
+      expect(p.status).toBe(200);
+      expect(p.json).toMatchObject({ from: "alpine:3.22.0", to: patchedRef });
+      expect(p.json.after).toContain(`image: ${patchedRef} # à corriger`);
+      expect(p.json.after).toContain("restart: always");
+      expect((await rev(stackId)).currentRevision).toBe(1);
+      expect((await call("POST", `/api/v1/remediations/${validatedId}/stack-revision/preview`, { ...body, expectedRevision: 9 })).status).toBe(409);
+      expect((await call("POST", `/api/v1/remediations/${validatedId}/stack-revision/preview`, { ...body, service: "db" })).status).toBe(409);
+      const variable = await call("POST", `/api/v1/remediations/${validatedId}/stack-revision`, { stackId: apiStackId, service: "api", expectedRevision: 1 });
+      expect(variable.status).toBe(409);
+      expect(variable.json.error?.code ?? variable.json.code).toBe("target_not_applicable");
+    });
+
+    it("crée une nouvelle révision NON déployée qui ne change que l'image, et mémorise le lien", async () => {
+      const r = await call("POST", `/api/v1/remediations/${validatedId}/stack-revision`, { stackId, service: "web", expectedRevision: 1 });
+      expect(r.status).toBe(201);
+      expect(r.json).toMatchObject({ revision: 2, changed: true, deployed: false, stackId });
+      const s = await rev(stackId);
+      expect(s).toMatchObject({ currentRevision: 2, deployedRevision: null, pendingDeploy: true });
+      expect(s.compose).toBe(COMPOSE.replace("alpine:3.22.0", patchedRef));
+      expect((await pool.query("SELECT count(*)::int AS n FROM operations")).rows[0].n).toBe(0);
+
+      const job = await status(validatedId);
+      expect(job.applied).toEqual([expect.objectContaining({ stackId, stackName: "app", service: "web", revision: 2, by: "boss@example.com" })]);
+      // Rejeu ou concurrence : plus rien à proposer / révision périmée.
+      expect((await call("POST", `/api/v1/remediations/${validatedId}/stack-revision`, { stackId, service: "web", expectedRevision: 2 })).status).toBe(409);
+      const again = (await call("GET", `/api/v1/remediations/${validatedId}/stack-targets`)).json.targets.find((x: any) => x.service === "web");
+      expect(again).toMatchObject({ alreadyApplied: true, canApply: false });
+    });
+
+    it("un correctif partiel exige une confirmation explicite", async () => {
+      const { r, wait } = await start();
+      expect(r.status).toBe(202);
+      const msg = await wait();
+      finish(msg.jobId, {
+        patched: { ref: `${REGISTRY}/r:t3`, digest: sha("3") },
+        after: patchScan([vuln("CVE-1", "CRITICAL", "2"), vuln("CVE-3", "LOW", null)]),
+      });
+      await waitFor(async () => (await status(msg.jobId)).status === "partial");
+      const body = { stackId, service: "web", expectedRevision: 2 };
+      const refused = await call("POST", `/api/v1/remediations/${msg.jobId}/stack-revision`, body);
+      expect(refused.status).toBe(409);
+      expect(refused.json.error?.code ?? refused.json.code).toBe("partial_requires_confirmation");
+      const ok = await call("POST", `/api/v1/remediations/${msg.jobId}/stack-revision`, { ...body, acceptPartial: true });
+      expect(ok.status).toBe(201);
+      expect((await rev(stackId)).compose).toContain(`@${sha("3")}`);
+    });
+
+    it("les applications générées par la console restent verrouillées à toute modification manuelle", async () => {
+      // Le registre est une application gérée : le contrôle de verrou (423) vaut aussi pour une révision d'image corrigée.
+      const registryStack = (await pool.query<{ id: string; managed_by: string }>("SELECT id, managed_by FROM stacks WHERE name = 'registry'")).rows[0];
+      expect(registryStack?.managed_by).toBe("registry");
+      const locked = await call("PUT", `/api/v1/stacks/${registryStack?.id}/compose`, { expectedRevision: 1, compose: "services: {}\n" });
+      expect(locked.status).toBe(423);
+    });
   });
 
   it("limite l'accès : lecture pour tous, lancement et annulation pour les opérateurs", () => {

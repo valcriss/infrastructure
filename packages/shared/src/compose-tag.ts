@@ -55,3 +55,42 @@ export function composeServiceImage(text: string, service: string): string | nul
     return null;
   }
 }
+
+/** Référence d'image corrigée par la console : registre, dépôt et digest (`registry.exemple.fr/patched/x@sha256:…`). */
+export const PATCHED_REF = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?\/[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$/;
+
+/**
+ * Remplace l'image d'un service par une référence épinglée par digest (image corrigée), en conservant le reste du
+ * document. Refuse une image paramétrée (variables), un service construit localement, une clé de fusion ou un alias.
+ * Une image déjà épinglée est remplaçable : c'est le cas d'un nouveau correctif après un précédent.
+ */
+export function editServiceImageRef(text: string, service: string, ref: string): { compose: string; from: string; to: string } {
+  if (!PATCHED_REF.test(ref)) throw new ComposeEditError("unsupported_structure", "Référence d'image invalide (registre/dépôt@sha256:… attendu).");
+  const doc = parseDocument(text, { uniqueKeys: true });
+  if (doc.errors.length > 0) throw new ComposeEditError("unsupported_structure", "Le Compose actuel n'est pas un YAML valide.");
+  const services = doc.get("services", true);
+  if (!isMap(services)) throw new ComposeEditError("unsupported_structure", "Section « services » introuvable.");
+  const svc = services.get(service, true);
+  if (!isMap(svc)) throw new ComposeEditError("service_not_found", `Service « ${service} » introuvable.`);
+  if (svc.has("<<")) throw new ComposeEditError("unsupported_structure", "Le service utilise une clé de fusion « << » : modification refusée.");
+  if (svc.has("build")) throw new ComposeEditError("unsupported_structure", "Ce service est construit localement : l'image corrigée ne peut pas le remplacer.");
+  const image = svc.get("image", true);
+  if (isAlias(image) || !isScalar(image) || typeof image.value !== "string") {
+    throw new ComposeEditError("unsupported_structure", "Le service n'a pas d'« image » simple à modifier.");
+  }
+  const from = image.value;
+  if (from.includes("$")) throw new ComposeEditError("unsupported_structure", "L'image est paramétrée par une variable : modifiez la variable ou le Compose à la main.");
+  if (from === ref) throw new ComposeEditError("unsupported_structure", "Ce service utilise déjà cette image corrigée.");
+  image.value = ref;
+  const style = detectStyle(text);
+  return {
+    from,
+    to: ref,
+    compose: doc.toString({
+      indent: style.indent,
+      indentSeq: style.indentSeq,
+      ...(style.singleQuote !== null ? { singleQuote: style.singleQuote } : {}),
+      lineWidth: 0,
+    }),
+  };
+}

@@ -744,3 +744,79 @@ export interface StorageView {
   measuredAt: string | null;
   measuring: boolean;
 }
+
+// --- Remédiation des images ----------------------------------------------------------------------------
+
+export type RemediationStatus =
+  | "queued" | "preparing" | "scanning_before" | "patching" | "scanning_after" | "verifying"
+  | "validated" | "partial" | "rejected" | "failed" | "unknown" | "cancelled";
+
+export interface RemediationBilanVuln { id: string; severity: VulnSeverity; pkg: string; installed: string; fixed: string | null }
+
+export interface RemediationBilan {
+  verdict: "validated" | "partial" | "rejected";
+  reasons: string[];
+  cves: { before: number; after: number; fixableBefore: number; resolved: number; remainingFixable: number; unfixable: number; new: number; newHighOrCritical: number };
+  findings: { before: number; after: number };
+  resolved: RemediationBilanVuln[];
+  remaining: RemediationBilanVuln[];
+  added: RemediationBilanVuln[];
+  truncatedLists: boolean;
+}
+
+export interface RemediationJob {
+  id: string;
+  imageId: string;
+  platform: string;
+  hostId: string;
+  imageRef: string;
+  policy: string;
+  status: RemediationStatus;
+  active: boolean;
+  requestedBy: string;
+  registry: string;
+  repository: string;
+  patchedTag: string;
+  patchedRef: string | null;
+  sourceDigest: string | null;
+  patchedDigest: string | null;
+  tools: { copa?: string; buildkit?: string; trivy?: string } | null;
+  bilan: RemediationBilan | null;
+  packageChanges: { name: string; from: string; to: string }[] | null;
+  configChanges: string[] | null;
+  labelsAdded: string[] | null;
+  vexStatements: number | null;
+  error: string | null;
+  applied: { stackId: string; stackName: string; service: string; revision: number; by: string; at: string }[];
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface RemediationEligibility {
+  imageId: string;
+  platform: string;
+  eligible: boolean;
+  reason: "ok" | "no_scan" | "unsupported_os" | "eol" | "nothing_fixable" | "app_only";
+  message: string;
+  fixableOs: number;
+  fixableApp: number;
+  unfixable: number;
+  hosts: { id: string; name: string; online: boolean; capable: boolean }[];
+  registry: { ready: boolean; reason: string | null };
+  activeJob: { id: string; status: RemediationStatus } | null;
+  canStart: boolean;
+}
+
+export interface RemediationTarget {
+  stackId: string;
+  stackName: string;
+  service: string;
+  hostName: string;
+  currentRevision: number;
+  deployedRevision: number | null;
+  currentImage: string | null;
+  canApply: boolean;
+  reason: string | null;
+  alreadyApplied: boolean;
+}

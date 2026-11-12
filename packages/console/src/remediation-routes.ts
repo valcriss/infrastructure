@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { HttpError } from "./http-error.js";
+import type { RemediationApply } from "./remediation-apply.js";
 import type { RemediationService } from "./remediation.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -15,6 +16,15 @@ export const CreateRemediationBody = z.object({
   /** Hôte qui exécute le correctif (par défaut : un hôte en ligne portant l'image). */
   hostId: z.uuid().optional(),
 });
+export const StackRevisionBody = z.object({
+  stackId: z.uuid(),
+  service: z.string().min(1).max(128),
+  /** Révision courante de la stack : un 409 est renvoyé si elle a changé entre-temps. */
+  expectedRevision: z.number().int().positive(),
+  /** Confirmation explicite pour un correctif « partiel » (des vulnérabilités corrigeables subsistent). */
+  acceptPartial: z.boolean().optional(),
+  message: z.string().max(200).optional(),
+});
 export const EligibilityQuery = z.object({ platform: Platform.optional() });
 export const ListRemediationsQuery = z.object({
   imageId: ImageId.optional(),
@@ -27,8 +37,8 @@ export const ListRemediationsQuery = z.object({
  * Remédiation des images : éligibilité, création d'un correctif (jamais de déploiement), suivi et annulation.
  * Lecture : tout utilisateur ; création et annulation : opérateur (règle par défaut des écritures).
  */
-export function registerRemediationRoutes(app: FastifyInstance, deps: { auth: Guard; remediation: RemediationService }): void {
-  const { auth, remediation } = deps;
+export function registerRemediationRoutes(app: FastifyInstance, deps: { auth: Guard; remediation: RemediationService; apply: RemediationApply }): void {
+  const { auth, remediation, apply } = deps;
 
   app.get("/api/v1/images/:imageId/remediation/eligibility", { preHandler: auth }, async (request) => {
     const { imageId } = z.object({ imageId: ImageId }).parse(request.params);
@@ -58,5 +68,22 @@ export function registerRemediationRoutes(app: FastifyInstance, deps: { auth: Gu
   app.post("/api/v1/remediations/:id/cancel", { preHandler: auth }, async (request) => {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     return remediation.cancel(id, request.actor);
+  });
+
+  // Utiliser l'image corrigée : services concernés, aperçu du Compose, puis nouvelle révision (jamais déployée ici).
+  app.get("/api/v1/remediations/:id/stack-targets", { preHandler: auth }, async (request) => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    return apply.targets(id);
+  });
+
+  app.post("/api/v1/remediations/:id/stack-revision/preview", { preHandler: auth }, async (request) => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    return apply.preview(id, StackRevisionBody.parse(request.body));
+  });
+
+  app.post("/api/v1/remediations/:id/stack-revision", { preHandler: auth }, async (request, reply) => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    const result = await apply.apply(id, StackRevisionBody.parse(request.body), request.actor);
+    return reply.code(201).send({ ...result, deployed: false });
   });
 }

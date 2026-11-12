@@ -3,13 +3,16 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import ToolsMenu, { type ToolItem } from "../../components/ToolsMenu.vue";
 import TrackingRuleDialog from "../../components/TrackingRuleDialog.vue";
 import UpdateBadge from "../../components/UpdateBadge.vue";
-import { ago, api, describeError, fmtDate, shortId, type StackDetail, type StackImageComponent, type UpdatePolicyName } from "../../api";
+import { ago, api, describeError, fmtDate, shortId, type ImageView, type StackDetail, type StackImageComponent, type UpdatePolicyName } from "../../api";
 import CandidateCompare from "../../components/CandidateCompare.vue";
 import CustomImageDialog from "../../components/CustomImageDialog.vue";
 import DeployDialog from "../../components/DeployDialog.vue";
 import OperationLog from "../../components/OperationLog.vue";
 import CveHistoryChart from "../../components/CveHistoryChart.vue";
 import { useSession } from "../../stores/session";
+import RemediationDialog from "../../components/RemediationDialog.vue";
+import { isPatchedRef } from "../../remediation";
+
 import ScanBadge from "../../components/ScanBadge.vue";
 import VulnerabilityTable from "../../components/VulnerabilityTable.vue";
 
@@ -22,6 +25,17 @@ function onImageSaved(revision: number) {
   imageTarget.value = null;
   info.value = `Révision ${revision} enregistrée avec l'image personnalisée. Elle n'est pas déployée : utilisez « Déployer » (vue d'ensemble) pour construire et appliquer l'image.`;
   emit("changed");
+}
+
+// Correctif d'image (remédiation) : l'image du dialogue ouvert, et le registre privé qui héberge les images corrigées.
+const fixing = ref<ImageView | null>(null);
+const registryHost = ref<string | null>(null);
+async function loadRegistryHost() {
+  try {
+    registryHost.value = (await api<{ settings: { host: string } | null }>("/api/v1/settings/registry")).settings?.host ?? null;
+  } catch {
+    registryHost.value = null;
+  }
 }
 
 const components = ref<StackImageComponent[]>([]);
@@ -113,6 +127,7 @@ function onMenu(service: string, id: string) {
 
 onMounted(() => {
   void load();
+  void loadRegistryHost();
   timer = window.setInterval(() => void load(), 4000);
 });
 onBeforeUnmount(() => window.clearInterval(timer));
@@ -141,7 +156,10 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <ToolsMenu v-if="session.canOperate" compact :label="`Actions de ${c.service}`" :items="menuItems(c.service)" @select="onMenu(c.service, $event)" />
           <div>
             <h2 class="font-semibold">{{ c.service }}</h2>
-            <p class="font-mono text-xs text-slate-600">{{ c.ref }}</p>
+            <p class="font-mono text-xs text-slate-600">
+              {{ c.ref }}
+              <span v-if="isPatchedRef(c.ref, registryHost)" class="ml-1 rounded-full bg-green-100 px-2 py-0.5 font-sans text-[11px] font-medium text-green-800" title="Image corrigée par la console, hébergée dans votre registre privé et épinglée par digest">image corrigée</span>
+            </p>
             <p class="text-xs text-slate-400">{{ c.image.platform || "plateforme inconnue" }} · {{ shortId(c.image.imageId) }}</p>
           </div>
         </div>
@@ -149,9 +167,14 @@ onBeforeUnmount(() => window.clearInterval(timer));
       </header>
 
       <div v-if="c.image.scan.current?.total" class="text-sm">
-        <button class="underline" :aria-expanded="!!open[c.service]" @click="open[c.service] = !open[c.service]">
-          {{ open[c.service] ? "Masquer" : "Voir" }} les vulnérabilités
-        </button>
+        <div class="flex flex-wrap items-center gap-4">
+          <button class="underline" :aria-expanded="!!open[c.service]" @click="open[c.service] = !open[c.service]">
+            {{ open[c.service] ? "Masquer" : "Voir" }} les vulnérabilités
+          </button>
+          <button v-if="session.canOperate" class="inline-flex items-center gap-1 underline" title="Préparer une copie corrigée de cette image" @click="fixing = c.image">
+            <FaIcon :icon="['fas', 'wrench']" /> Corriger l'image…
+          </button>
+        </div>
         <div v-if="open[c.service]" class="mt-3"><VulnerabilityTable :image-id="c.image.imageId" :platform="c.image.platform" :image-ref="c.ref" /></div>
       </div>
 
@@ -241,5 +264,6 @@ onBeforeUnmount(() => window.clearInterval(timer));
       @close="imageTarget = null"
       @saved="onImageSaved"
     />
+    <RemediationDialog v-if="fixing" :image="fixing" @close="fixing = null; load()" @changed="emit('changed')" />
   </div>
 </template>

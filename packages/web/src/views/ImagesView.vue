@@ -1,12 +1,20 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
-import { ago, api, describeError, fmtDate, shortId, type ImageView } from "../api";
+import { ago, api, describeError, fmtDate, shortId, type ImageView, type RemediationJob } from "../api";
+import RemediationDialog from "../components/RemediationDialog.vue";
+import { latestByImage, statusClass, statusLabel } from "../remediation";
+import { useSession } from "../stores/session";
 import ScanAllDialog, { type BatchResult } from "../components/ScanAllDialog.vue";
 import SeverityBadges from "../components/SeverityBadges.vue";
 import VulnerabilityTable from "../components/VulnerabilityTable.vue";
 
 const images = ref<ImageView[]>([]);
+const session = useSession();
+// Correctifs d'images (remédiation) : le plus récent par contenu d'image, et l'image dont le dialogue est ouvert.
+const jobs = ref<RemediationJob[]>([]);
+const latestJob = computed(() => latestByImage(jobs.value));
+const fixing = ref<ImageView | null>(null);
 const error = ref("");
 const info = ref("");
 const route = useRoute();
@@ -81,6 +89,8 @@ async function load() {
     const active = queue.value.pending + queue.value.running;
     peak.value = active === 0 ? 0 : Math.max(peak.value, active);
     error.value = "";
+    // Les correctifs sont un complément : leur absence ne doit pas masquer la liste des images.
+    jobs.value = (await api<{ remediations: RemediationJob[] }>("/api/v1/remediations?limit=200").catch(() => ({ remediations: [] as RemediationJob[] }))).remediations;
   } catch (err) {
     error.value = describeError(err);
   }
@@ -211,6 +221,11 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <p class="mt-0.5 text-xs text-slate-400">
                   {{ i.platform || "plateforme inconnue" }} · {{ shortId(i.imageId) }}<span v-if="!i.managed"> · hors application gérée</span>
                 </p>
+                <p v-if="latestJob.get(key(i))" class="mt-1.5 text-xs">
+                  <button class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium" :class="statusClass(latestJob.get(key(i))!.status)" :title="`Correctif ${latestJob.get(key(i))!.patchedTag} : voir le détail`" @click="fixing = i">
+                    <FaIcon :icon="['fas', 'wrench']" /> Correctif : {{ statusLabel(latestJob.get(key(i))!.status) }}
+                  </button>
+                </p>
                 <div v-if="i.updates.length" class="mt-1.5 space-y-0.5 text-xs">
                   <p class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
                     <FaIcon :icon="['fas', 'arrows-rotate']" /> Mise à jour disponible
@@ -250,6 +265,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   <button v-if="i.scan.current?.total" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" :aria-expanded="!!open[key(i)]" @click="open[key(i)] = !open[key(i)]">
                     {{ open[key(i)] ? "Masquer" : "Détails" }}
                   </button>
+                  <button v-if="session.canOperate && i.scan.current?.total" class="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" title="Préparer une copie corrigée de cette image" @click="fixing = i">
+                    <FaIcon :icon="['fas', 'wrench']" /> Corriger
+                  </button>
                   <button class="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 hover:bg-slate-100" @click="scan(i)">
                     <FaIcon :icon="['fas', 'shield-halved']" /> Scanner
                   </button>
@@ -269,5 +287,6 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <RouterLink to="/settings?tab=security" class="text-blue-600 underline">Paramètres de l'application</RouterLink>.
     </p>
     <ScanAllDialog v-if="scanAll" @close="scanAll = false" @started="onStarted" />
+    <RemediationDialog v-if="fixing" :image="fixing" @close="fixing = null; load()" @changed="load" />
   </div>
 </template>
