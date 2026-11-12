@@ -21,6 +21,7 @@ import { ObservedWatcher } from "./observed-watch.js";
 import { registerTraefikDynamicRoutes } from "./traefik-dynamic-routes.js";
 import { registerTraefikRoutes } from "./traefik-routes.js";
 import { registerRegistryAppRoutes } from "./registry-app-routes.js";
+import { RegistryImages, registerRegistryImageRoutes } from "./registry-images.js";
 import { RemediationService } from "./remediation.js";
 import { registerRemediationRoutes } from "./remediation-routes.js";
 import { RemediationApply } from "./remediation-apply.js";
@@ -534,6 +535,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerTraefikRoutes(app, { pool, auth: apiAuth, isOnline: (id) => gateway.isOnline(id) });
   registerTraefikDynamicRoutes(app, { pool, auth: apiAuth });
   registerRegistryAppRoutes(app, { pool, auth: apiAuth, registries });
+  registerRegistryImageRoutes(app, { auth: apiAuth, images: new RegistryImages(pool, registryClient) });
   registerRemediationRoutes(app, { auth: apiAuth, remediation, apply: new RemediationApply(pool, remediation) });
   registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, storage, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });

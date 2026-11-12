@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { api, describeError } from "../../api";
 import CopyButton from "../../components/CopyButton.vue";
 import PanelCard from "../../components/PanelCard.vue";
+import RegistryImages from "../../components/RegistryImages.vue";
 
 // Registre d'images privé : application générée par la console, placée derrière Traefik.
 interface Settings { stackId: string; hostId: string; host: string; entryPoint: string; certResolver: string; network: string }
@@ -167,6 +168,7 @@ const stepLabels: [keyof Omit<Probe, "ready">, string][] = [
           <button class="mt-2" :class="ghost" @click="credentials = null">Masquer</button>
         </div>
       </PanelCard>
+      <RegistryImages v-if="application.deployed" />
     </template>
 
     <template v-else-if="state && traefik && traefik.available">

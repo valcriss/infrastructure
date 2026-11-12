@@ -72,6 +72,7 @@ interface DbRow {
   vex_statements: number | null;
   error: string | null;
   applied: JobView["applied"] | null;
+  registry_deleted_at: Date | null;
   created_at: Date;
   started_at: Date | null;
   finished_at: Date | null;
@@ -105,6 +106,8 @@ export interface JobView {
   error: string | null;
   /** Où l'image corrigée a été proposée (révisions créées, jamais déployées par la console). */
   applied: { stackId: string; stackName: string; service: string; revision: number; by: string; at: string }[];
+  /** L'image corrigée a été supprimée du registre : elle n'est plus utilisable. */
+  imageDeleted: boolean;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -112,7 +115,7 @@ export interface JobView {
 
 const COLUMNS = `id, image_id, platform, host_id, image_ref, source_scan_id, policy, policy_version, status, requested_by, registry_host,
   repository, source_tag, patched_tag, patch_number, source_digest, patched_digest, tools, bilan, package_changes, config_changes,
-  labels_added, vex_statements, error, applied, created_at, started_at, finished_at`;
+  labels_added, vex_statements, error, applied, registry_deleted_at, created_at, started_at, finished_at`;
 
 const toView = (r: DbRow, detail: boolean): JobView => ({
   id: r.id,
@@ -140,6 +143,7 @@ const toView = (r: DbRow, detail: boolean): JobView => ({
   vexStatements: r.vex_statements,
   error: r.error,
   applied: r.applied ?? [],
+  imageDeleted: r.registry_deleted_at !== null,
   createdAt: r.created_at.toISOString(),
   startedAt: r.started_at?.toISOString() ?? null,
   finishedAt: r.finished_at?.toISOString() ?? null,

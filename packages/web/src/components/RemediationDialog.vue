@@ -29,7 +29,7 @@ let timer: number | undefined;
 const imageUrl = computed(() => `/api/v1/images/${encodeURIComponent(props.image.imageId)}`);
 const label = computed(() => props.image.refs[0] ?? shortId(props.image.imageId));
 const startHosts = computed(() => (eligibility.value?.hosts ?? []).filter((h) => h.online && h.capable));
-const usable = computed(() => job.value !== null && (job.value.status === "validated" || job.value.status === "partial"));
+const usable = computed(() => job.value !== null && !job.value.imageDeleted && (job.value.status === "validated" || job.value.status === "partial"));
 const platformJobs = computed(() => jobs.value.filter((j) => j.platform === props.image.platform));
 
 async function loadEligibility() {
@@ -213,6 +213,7 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
                 <span :class="['rounded-full px-2 py-0.5 text-xs font-medium', statusClass(j.status)]">{{ statusLabel(j.status) }}</span>
                 <span class="font-mono text-xs">{{ j.patchedTag }}</span>
                 <span class="text-xs text-slate-500" :title="fmtDate(j.createdAt)">{{ ago(j.createdAt) }} · {{ j.requestedBy }}</span>
+                <span v-if="j.imageDeleted" class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">image supprimée du registre</span>
                 <span v-if="j.applied.length" class="text-xs text-slate-500">· utilisée par {{ j.applied.map((a) => `${a.stackName}/${a.service}`).join(", ") }}</span>
               </button>
             </li>

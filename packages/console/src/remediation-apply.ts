@@ -57,6 +57,7 @@ export class RemediationApply {
     if (job.status !== "validated" && job.status !== "partial") {
       throw new HttpError(409, "remediation_not_usable", job.active ? "Ce correctif n'est pas terminé." : `Ce correctif est « ${job.status} » : son image ne peut pas être utilisée.`);
     }
+    if (job.imageDeleted) throw new HttpError(409, "remediation_not_usable", "L'image corrigée a été supprimée du registre : relancez un correctif.");
     if (!job.patchedRef) throw new HttpError(409, "remediation_not_usable", "Ce correctif n'a pas produit d'image.");
     return job as JobView & { patchedRef: string };
   }

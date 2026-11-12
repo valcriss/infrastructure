@@ -231,6 +231,7 @@ export class RegistryClient {
       throw new RegistryError("auth", creds?.username ? "Identifiants du registre refusés ou droits insuffisants." : "Registre privé : des identifiants sont nécessaires.");
     }
     if (res.status === 404) throw new RegistryError("not_found", "Image ou tag introuvable dans le registre.");
+    if (res.status === 405) throw new RegistryError("unsupported", "Opération refusée par le registre (HTTP 405) : la suppression d'images n'y est pas activée.");
     if (res.status === 429) throw new RegistryError("rate_limited", "Limite de requêtes du registre atteinte.", Number(res.headers.get("retry-after")) || undefined);
     if (res.status >= 500) throw new RegistryError("network", `Le registre a répondu HTTP ${res.status}.`);
     if (!res.ok) throw new RegistryError("bad_response", `Réponse inattendue du registre : HTTP ${res.status}.`);
@@ -314,6 +315,44 @@ export class RegistryClient {
       if (path && page === MAX_TAG_PAGES - 1) return { tags, truncated: true };
     }
     return { tags, truncated: false };
+  }
+
+  /** Liste les dépôts d'un registre (`/v2/_catalog`, pagination plafonnée). Le registre doit l'autoriser. */
+  async catalog(ref: Pick<ImageRef, "registry" | "apiHost">): Promise<{ repositories: string[]; truncated: boolean }> {
+    const repositories: string[] = [];
+    const target = { ...ref, repository: "catalog" };
+    let path: string | null = "/v2/_catalog?n=1000";
+    for (let page = 0; path && page < MAX_TAG_PAGES; page++) {
+      const res = await this.call(target, path, "GET", "application/json");
+      const body = (await res.json().catch(() => null)) as { repositories?: string[] | null } | null;
+      if (!body) throw new RegistryError("bad_response", "Liste de dépôts illisible.");
+      repositories.push(...(body.repositories ?? []));
+      const next = /<([^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1];
+      path = null;
+      if (next) {
+        const u = new URL(next, `https://${ref.apiHost}`);
+        if (u.host === ref.apiHost) path = u.pathname + u.search;
+      }
+      if (path && page === MAX_TAG_PAGES - 1) return { repositories, truncated: true };
+    }
+    return { repositories, truncated: false };
+  }
+
+  /** Taille cumulée (configuration et couches) d'un manifeste unique ; null pour un index ou un manifeste illisible. */
+  async manifestSize(ref: ImageRef, digest: string): Promise<number | null> {
+    const res = await this.call(ref, `/v2/${ref.repository}/manifests/${digest}`, "GET", MANIFEST_ACCEPT);
+    const body = (await res.json().catch(() => null)) as { config?: { size?: number }; layers?: { size?: number }[] } | null;
+    if (!body || !Array.isArray(body.layers)) return null;
+    return [body.config?.size ?? 0, ...body.layers.map((l) => l.size ?? 0)].reduce((a, b) => a + b, 0);
+  }
+
+  /**
+   * Supprime un manifeste PAR DIGEST (tous les tags qui le désignent disparaissent). L'espace disque n'est libéré que
+   * par le ramasse-miettes du registre. Un digest est exigé : supprimer par tag est impossible dans l'API.
+   */
+  async deleteManifest(ref: ImageRef, digest: string): Promise<void> {
+    if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new RegistryError("bad_response", "Digest invalide.");
+    await this.call(ref, `/v2/${ref.repository}/manifests/${digest}`, "DELETE");
   }
 
   /** Vérifie l'accès au registre avec les identifiants enregistrés (`GET /v2/`). */

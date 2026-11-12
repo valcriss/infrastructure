@@ -788,6 +788,7 @@ export interface RemediationJob {
   vexStatements: number | null;
   error: string | null;
   applied: { stackId: string; stackName: string; service: string; revision: number; by: string; at: string }[];
+  imageDeleted: boolean;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
