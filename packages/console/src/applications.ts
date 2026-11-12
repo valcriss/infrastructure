@@ -42,6 +42,10 @@ export interface Application {
   pendingDeploy: boolean;
   lastDeployAt: string | null;
   importable: boolean;
+  /** Empreinte courte de l'icône personnalisée (SVG) ; null : icône par défaut. Sert à invalider le cache du navigateur. */
+  iconTag: string | null;
+  /** Couleur de fond personnalisée (« #rrggbb »), ou null. */
+  iconColor: string | null;
 }
 
 interface Deps {
@@ -79,8 +83,9 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
     pool.query<{ id: string; name: string; inventory: Container[] | null; inventory_observed_at: Date | null }>(
       "SELECT id, name, inventory, inventory_observed_at FROM hosts WHERE revoked_at IS NULL ORDER BY created_at",
     ),
-    pool.query<{ id: string; name: string; host_id: string; current_revision: number; deployed_revision: number | null; compose: string | null }>(
-      `SELECT s.id, s.name, s.host_id, s.current_revision, s.deployed_revision, r.compose
+    pool.query<{ id: string; name: string; host_id: string; current_revision: number; deployed_revision: number | null; compose: string | null; icon_tag: string | null; icon_color: string | null }>(
+      `SELECT s.id, s.name, s.host_id, s.current_revision, s.deployed_revision, r.compose, s.icon_color,
+               CASE WHEN s.icon_svg IS NULL THEN NULL ELSE left(md5(s.icon_svg), 12) END AS icon_tag
          FROM stacks s LEFT JOIN stack_revisions r ON r.stack_id = s.id AND r.revision = s.deployed_revision ORDER BY s.name`,
     ),
     pool.query<{ stack_id: string; finished_at: Date }>(
@@ -197,6 +202,8 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
         pendingDeploy: s.deployed_revision !== s.current_revision,
         lastDeployAt: deployedAt.get(s.id)?.toISOString() ?? null,
         importable: false,
+        iconTag: s.icon_tag,
+        iconColor: s.icon_color,
       });
     }
 
@@ -225,6 +232,8 @@ export async function listApplications(deps: Deps, now = Date.now()): Promise<Ap
         pendingDeploy: false,
         lastDeployAt: null,
         importable: !RESERVED_STACK_NAMES.includes(name),
+        iconTag: null,
+        iconColor: null,
       });
     }
   }

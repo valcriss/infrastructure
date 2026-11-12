@@ -96,6 +96,9 @@ export interface StackSummary {
   description: string;
   /** Module qui génère et entretient l'application (contenu non modifiable à la main), ou null. */
   managedBy: string | null;
+  /** Empreinte du SVG personnalisé (null : icône par défaut) et couleur de fond personnalisée (« #rrggbb »). */
+  iconTag: string | null;
+  iconColor: string | null;
   currentRevision: number;
   deployedRevision: number | null;
   pendingDeploy: boolean;
@@ -498,6 +501,8 @@ export interface Application {
   pendingDeploy: boolean;
   lastDeployAt: string | null;
   importable: boolean;
+  iconTag: string | null;
+  iconColor: string | null;
 }
 
 // --- Conteneurs ---------------------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   faArrowsRotate,
   faBars,
   faBoxesStacked,
+  faPalette,
   faChevronLeft,
   faChevronRight,
   faCircleCheck,
@@ -70,5 +71,5 @@ library.add(
   faHardDrive, faHeartPulse, faKey, faLayerGroup, faMemory, faMicrochip, faMoon, faNetworkWired, faPlug, faServer,
   faShieldHalved, faSun, faTriangleExclamation, faUser, faUsers, faXmark, faPlay, faStop, faRocket, faMagnifyingGlass, faPlus, faClock, faArrowUpRightFromSquare, faCodeBranch, faDownload,
   faFileCode, faSliders, faFolderOpen, faChartLine, faTerminal, faClockRotateLeft, faListCheck, faBroom, faTrashCan, faDatabase, faBox, faWrench, faChevronDown,
-  faChevronUp, faFileLines, faEllipsis, faList, faTableCellsLarge, faRoute,
+  faChevronUp, faFileLines, faEllipsis, faList, faTableCellsLarge, faRoute, faPalette,
 );

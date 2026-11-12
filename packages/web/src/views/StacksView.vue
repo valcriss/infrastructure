@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRouter } from "vue-router";
 import { readJson, writeJson } from "../persist";
 import { ApiError, ago, api, describeError, fmtDate, formatBytes, type Application, type ScanStateName, type StackStatus } from "../api";
+import AppIcon from "../components/AppIcon.vue";
 import MeterBar from "../components/MeterBar.vue";
 import SeverityBadges, { type Counts } from "../components/SeverityBadges.vue";
 import { useSession } from "../stores/session";
@@ -278,9 +279,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
           >
             <td class="px-3 py-2">
               <div class="flex items-center gap-3">
-                <span :class="['flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', a.kind === 'managed' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500']" :title="a.kind === 'managed' ? 'Gérée par la console' : 'Observée : le fichier Compose n\'est pas connu de la console'">
-                  <FaIcon :icon="['fas', a.kind === 'managed' ? 'boxes-stacked' : 'eye']" />
-                </span>
+                <AppIcon :stack-id="a.stackId" :kind="a.kind" :icon-tag="a.iconTag" :icon-color="a.iconColor" size="sm" :title="a.kind === 'managed' ? 'Gérée par la console' : 'Observée : le fichier Compose n\'est pas connu de la console'" />
                 <div class="min-w-0">
                   <RouterLink :to="a.stackId ? `/stacks/${a.stackId}` : `/hosts/${a.hostId}/projects/${encodeURIComponent(a.name)}`" class="block truncate font-medium hover:underline" @click.stop>{{ a.name }}</RouterLink>
                   <p class="flex items-center gap-1.5 text-xs text-slate-500">
@@ -369,9 +368,7 @@ const totals = computed(() => ({ managed: apps.value.filter((a) => a.kind === "m
         ]"
       >
         <header class="flex items-start gap-3">
-          <span :class="['flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-lg', a.kind === 'managed' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500']" :title="a.kind === 'managed' ? 'Gérée par la console' : 'Observée : le fichier Compose n\'est pas connu de la console'">
-            <FaIcon :icon="['fas', a.kind === 'managed' ? 'boxes-stacked' : 'eye']" />
-          </span>
+          <AppIcon :stack-id="a.stackId" :kind="a.kind" :icon-tag="a.iconTag" :icon-color="a.iconColor" :title="a.kind === 'managed' ? 'Gérée par la console' : 'Observée : le fichier Compose n\'est pas connu de la console'" />
           <div class="min-w-0 flex-1">
             <h2 class="truncate font-semibold">
               <RouterLink v-if="a.stackId" :to="`/stacks/${a.stackId}`" class="hover:underline">{{ a.name }}</RouterLink>

@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ApiError, api, type StackDetail } from "../api";
+import AppIcon from "../components/AppIcon.vue";
+import AppearanceTab from "./stack/AppearanceTab.vue";
 import ComposeTab from "./stack/ComposeTab.vue";
 import FilesTab from "./stack/FilesTab.vue";
 import HistoryTab from "./stack/HistoryTab.vue";
@@ -38,6 +40,7 @@ const SECTIONS_BASE: Record<string, { key: string; label: string; icon: string }
     { key: "compose", label: "Compose", icon: "file-code" },
     { key: "variables", label: "Variables", icon: "sliders" },
     { key: "files", label: "Fichiers", icon: "folder-open" },
+    { key: "appearance", label: "Apparence", icon: "palette" },
   ],
   history: [
     { key: "revisions", label: "Révisions", icon: "clock-rotate-left" },
@@ -81,7 +84,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <div>
         <RouterLink to="/stacks" class="text-sm text-slate-500 hover:underline">← Applications</RouterLink>
         <h1 class="mt-1 flex items-center gap-3 text-2xl font-semibold">
-          <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-lg text-blue-700"><FaIcon :icon="['fas', 'boxes-stacked']" /></span>
+          <AppIcon :stack-id="stack.id" :icon-tag="stack.iconTag" :icon-color="stack.iconColor" />
           {{ stack.name }}
         </h1>
         <p class="text-sm text-slate-500">
@@ -135,7 +138,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <KeepAlive v-else-if="tab === 'config'">
         <ComposeTab v-if="section === 'compose'" :stack="stack" @changed="load" />
         <VariablesTab v-else-if="section === 'variables'" :stack="stack" @changed="load" />
-        <FilesTab v-else :stack="stack" @changed="load" />
+        <FilesTab v-else-if="section === 'files'" :stack="stack" @changed="load" />
+        <AppearanceTab v-else :stack="stack" @changed="load" />
       </KeepAlive>
       <SecurityTab v-else-if="tab === 'security'" :stack="stack" @changed="load" />
       <MetricsTab v-else-if="tab === 'metrics'" :stack="stack" />

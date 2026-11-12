@@ -11,12 +11,14 @@ import {
   validateTraefikExposure,
   validateEnvironmentName,
   validateFilePath,
+  normalizeIconColor,
+  validateSvgIcon,
   validateVariableValue,
   type Container,
 } from "@infra/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { Pool } from "./db.js";
+import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { getTraefikSettings, type TraefikSettings } from "./traefik-routes.js";
 import { Group as ExtractGroup, planCreationExtraction } from "./variable-extract-routes.js";
@@ -123,6 +125,8 @@ interface StackListRow {
   deployed_at: Date | null;
   updated_at: Date;
   managed_by: string | null;
+  icon_tag: string | null;
+  icon_color: string | null;
   inventory: Container[] | null;
   inventory_observed_at: Date | null;
 }
@@ -152,6 +156,9 @@ export function registerStackRoutes(
       description: r.description,
       // Module qui génère et entretient cette application (contenu non modifiable à la main), ou null.
       managedBy: r.managed_by,
+      // Icône personnalisée (empreinte du SVG, couleur de fond) ; null : réglage par défaut.
+      iconTag: r.icon_tag,
+      iconColor: r.icon_color,
       currentRevision: r.current_revision,
       deployedRevision: r.deployed_revision,
       // Configuration enregistrée mais pas (encore) déployée.
@@ -170,7 +177,8 @@ export function registerStackRoutes(
   };
 
   const STACK_SELECT = `SELECT s.id, s.name, s.host_id, h.name AS host_name, s.description,
-           s.current_revision, s.deployed_revision, s.deployed_at, s.updated_at, s.managed_by,
+           s.current_revision, s.deployed_revision, s.deployed_at, s.updated_at, s.managed_by, s.icon_color,
+           CASE WHEN s.icon_svg IS NULL THEN NULL ELSE left(md5(s.icon_svg), 12) END AS icon_tag,
            h.inventory, h.inventory_observed_at
       FROM stacks s JOIN hosts h ON h.id = s.host_id`;
 
@@ -244,6 +252,57 @@ export function registerStackRoutes(
       composeSensitive: rev.composeSensitive,
       containers: mine,
     };
+  });
+
+  // --- Icône personnalisée (SVG et couleur de fond) -------------------------------------------------------
+  // Hors des révisions : un changement d'icône ne crée pas de révision et n'appelle aucun déploiement.
+
+  // Le SVG n'est jamais interprété par la page : seulement chargé par une balise <img>, avec une CSP qui interdit tout.
+  app.get("/api/v1/stacks/:id/icon", { preHandler: auth }, async (request, reply) => {
+    const { id } = IdParams.parse(request.params);
+    const { rows } = await pool.query<{ icon_svg: string | null }>("SELECT icon_svg FROM stacks WHERE id = $1", [id]);
+    if (!rows[0]) throw new HttpError(404, "stack_not_found", "Stack introuvable");
+    if (rows[0].icon_svg === null) throw new HttpError(404, "icon_not_found", "Aucune icône personnalisée");
+    return reply
+      .header("Content-Type", "image/svg+xml; charset=utf-8")
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+      .header("Cache-Control", "private, max-age=3600")
+      .send(rows[0].icon_svg);
+  });
+
+  // `svg` et `color` : absents = inchangés ; null = retour au réglage par défaut.
+  const IconBody = z.object({ svg: z.string().max(200_000).nullable().optional(), color: z.string().max(20).nullable().optional() });
+  app.put("/api/v1/stacks/:id/icon", { preHandler: auth }, async (request) => {
+    const { id } = IdParams.parse(request.params);
+    const body = IconBody.parse(request.body);
+    const sets: string[] = [];
+    const values: unknown[] = [id];
+    if (body.svg !== undefined) {
+      let svg: string | null = null;
+      if (body.svg !== null) {
+        const checked = validateSvgIcon(body.svg);
+        if (!checked.ok) throw new HttpError(400, "invalid_icon", checked.error);
+        svg = checked.svg;
+      }
+      values.push(svg);
+      sets.push(`icon_svg = $${values.length}`);
+    }
+    if (body.color !== undefined) {
+      let color: string | null = null;
+      if (body.color !== null) {
+        color = normalizeIconColor(body.color);
+        if (color === null) throw new HttpError(400, "invalid_color", "Couleur invalide : « #rrggbb » attendu.");
+      }
+      values.push(color);
+      sets.push(`icon_color = $${values.length}`);
+    }
+    if (sets.length === 0) throw new HttpError(400, "invalid_icon", "Rien à modifier : indiquez « svg » et/ou « color ».");
+    const { rows } = await pool.query(`UPDATE stacks SET ${sets.join(", ")} WHERE id = $1 RETURNING id`, values);
+    if (!rows[0]) throw new HttpError(404, "stack_not_found", "Stack introuvable");
+    await audit(pool, request.actor, "stack.icon", id, "success");
+    const stack = await loadStack(id);
+    return { iconTag: stack.icon_tag, iconColor: stack.icon_color };
   });
 
   app.put("/api/v1/stacks/:id/compose", { preHandler: auth }, async (request) => {

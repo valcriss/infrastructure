@@ -174,10 +174,13 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "no-referrer");
-    reply.header(
-      "Content-Security-Policy",
-      `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'${ws}; frame-ancestors 'none'`,
-    );
+    // Une route peut poser une politique plus stricte (ex. l'icône SVG d'une application) : elle n'est pas remplacée.
+    if (!reply.hasHeader("Content-Security-Policy")) {
+      reply.header(
+        "Content-Security-Policy",
+        `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'${ws}; frame-ancestors 'none'`,
+      );
+    }
   });
 
   app.setErrorHandler(async (err: Error & { statusCode?: number }, _request, reply) => {

@@ -5558,6 +5558,163 @@
         }
       }
     },
+    "/api/v1/stacks/{id}/icon": {
+      "get": {
+        "summary": "Icône personnalisée d'une application",
+        "description": "404 sans icône personnalisée. À charger par une balise img uniquement : le SVG n'est jamais inséré dans la page.",
+        "tags": [
+          "Stacks"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Le SVG (image/svg+xml), servi avec nosniff et une CSP « default-src 'none' ; sandbox »",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Personnaliser l'icône et la couleur d'une application",
+        "description": "Opérateur. « svg » et « color » : absents = inchangés ; null = retour au réglage par défaut. Hors des révisions : aucune révision n'est créée et aucun déploiement n'est nécessaire. Le SVG est validé par liste d'éléments et d'attributs (32 Kio au plus, viewBox obligatoire ; scripts, liens, ressources externes, DOCTYPE refusés) puis normalisé.",
+        "tags": [
+          "Stacks"
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "svg": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "color": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "iconTag (empreinte du SVG, null sans icône) et iconColor (« #rrggbb », null par défaut)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stacks/{id}/services/{service}/candidate-scans": {
       "post": {
         "summary": "Comparer les vulnérabilités d'une autre version d'image",

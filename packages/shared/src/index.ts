@@ -15,3 +15,4 @@ export * from "./compose-traefik.js";
 export * from "./traefik-dynamic.js";
 export * from "./registry.js";
 export * from "./remediation.js";
+export * from "./svg-icon.js";
