@@ -26,7 +26,11 @@ export const NotificationBody = z.object({
 export function registerNotificationRoutes(app: FastifyInstance, deps: { pool: Pool; auth: Guard; notifier: Notifier }): void {
   const { pool, auth, notifier } = deps;
 
-  app.get("/api/v1/settings/notifications", { preHandler: auth }, async () => ({ settings: await notifier.view(), deliveries: await notifier.deliveries(), eventTypes: EVENT_TYPES }));
+  // Le nom d'hôte du webhook (qui révèle le service utilisé) n'est montré qu'aux administrateurs.
+  app.get("/api/v1/settings/notifications", { preHandler: auth }, async (request) => {
+    const settings = await notifier.view();
+    return { settings: request.user?.role === "admin" ? settings : { ...settings, urlHost: null, baseUrl: null }, deliveries: await notifier.deliveries(), eventTypes: EVENT_TYPES };
+  });
 
   app.put("/api/v1/settings/notifications", { preHandler: auth }, async (request) => {
     const body = NotificationBody.parse(request.body);

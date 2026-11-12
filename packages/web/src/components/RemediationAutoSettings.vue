@@ -71,6 +71,17 @@ async function runNow() {
       Quand une image utilisée par une application gérée devient corrigeable, la console peut <strong>préparer</strong> un correctif (copie dans le registre privé, correctif des paquets du système, nouveau scan). Le résultat est signalé « à relire » sur la page Images : il n'est <strong>jamais</strong> appliqué à une application ni déployé tout seul.
       Une image n'est préparée qu'une fois par contenu, dans la limite du plafond par 24 h ; trois échecs consécutifs suspendent la préparation pendant 24 h.
     </p>
+    <details class="mt-3 rounded border border-slate-200 p-3 text-sm">
+      <summary class="cursor-pointer font-medium">Rien ne se prépare ? Ce qu'il faut réunir</summary>
+      <ol class="mt-2 list-decimal space-y-1 pl-5 text-slate-600">
+        <li>Le registre privé est <strong>déployé et prêt</strong> (Paramètres → Registry → « Tester l'accès »).</li>
+        <li>L'image est utilisée par une <strong>application gérée</strong> (pas seulement observée) sur un hôte <strong>en ligne</strong> avec un agent à jour.</li>
+        <li>L'image a un <strong>scan réussi</strong> récent, avec des CVE corrigeables dans les paquets du système (Alpine ou Debian, version encore maintenue).</li>
+        <li>L'image n'est <strong>ni exclue</strong> ci-dessous, ni déjà préparée (une seule fois par contenu d'image), et le <strong>plafond</strong> des 24 h n'est pas atteint.</li>
+        <li>La préparation n'est pas <strong>en pause</strong> après trois échecs de suite.</li>
+      </ol>
+      <p class="mt-2 text-xs text-slate-500">« Lancer un passage maintenant » applique les mêmes conditions et dit pourquoi rien n'est parti.</p>
+    </details>
     <p v-if="error" role="alert" class="mt-2 text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="mt-2 text-sm text-green-700">{{ info }}</p>
 

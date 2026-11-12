@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { api, describeError } from "../../api";
+import { registryNextStep } from "../../guide";
 import CopyButton from "../../components/CopyButton.vue";
+import NextStep from "../../components/NextStep.vue";
 import PanelCard from "../../components/PanelCard.vue";
 import RegistryImages from "../../components/RegistryImages.vue";
 
@@ -44,6 +46,21 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
 const application = computed(() => (state.value?.application && !("missing" in state.value.application) ? state.value.application : null));
 const missing = computed(() => !!state.value?.application && "missing" in state.value.application);
 const traefik = computed(() => state.value?.traefik ?? null);
+// Prochaine étape de la mise en place, d'après l'état et le dernier test d'accès.
+const next = computed(() =>
+  state.value
+    ? registryNextStep(
+        {
+          traefik: state.value.traefik.available ? { available: true, deployed: state.value.traefik.deployed, production: state.value.traefik.production } : { available: false },
+          hasApplication: !!application.value,
+          deployed: !!application.value?.deployed,
+          separated: state.value.separated,
+          managed: !!application.value?.managed,
+        },
+        probe.value,
+      )
+    : null,
+);
 
 async function load() {
   try {
@@ -125,6 +142,7 @@ const stepLabels: [keyof Omit<Probe, "ready">, string][] = [
     <p v-if="error" role="alert" class="text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="text-sm text-green-700">{{ info }}</p>
     <p v-if="!state && !error" class="text-slate-500">Chargement…</p>
+    <NextStep v-if="next" :hint="next" />
 
     <template v-if="state && traefik && !traefik.available">
       <PanelCard title="Registry" icon="box" subtitle="Registre d'images privé, servi en HTTPS par Traefik">

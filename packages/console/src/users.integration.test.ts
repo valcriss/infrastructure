@@ -120,6 +120,17 @@ describe.skipIf(!url)("utilisateurs, rôles et deuxième facteur (intégration)"
     expect((await call("POST", "/api/v1/stacks", { cookie: operator.cookie, body: {} })).status).toBe(403);
   });
 
+  it("ne montre le nom d'hôte du webhook de notification qu'aux administrateurs", async () => {
+    const viewer = await newUser("viewer-notif@example.com", "viewer");
+    const put = await call("PUT", "/api/v1/settings/notifications", { cookie: admin, body: { enabled: false, url: "https://hooks.exemple.fr/services/secret", baseUrl: "https://console.exemple.fr", events: { "remediation.ready": true, "remediation.failed": true, "remediation.auto_paused": true, "registry.gc_failed": true }, allowPrivate: false, maxPerHour: 20 } });
+    expect(put.status).toBe(200);
+    expect((await call("GET", "/api/v1/settings/notifications", { cookie: admin })).json.settings).toMatchObject({ configured: true, urlHost: "hooks.exemple.fr", baseUrl: "https://console.exemple.fr" });
+    const seen = await call("GET", "/api/v1/settings/notifications", { cookie: viewer.cookie });
+    expect(seen.status).toBe(200);
+    expect(seen.json.settings).toMatchObject({ configured: true, urlHost: null, baseUrl: null });
+    expect(JSON.stringify(seen.json)).not.toContain("hooks.exemple.fr");
+  });
+
   it("protège le dernier administrateur et son propre compte", async () => {
     const me = (await call("GET", "/api/v1/users", { cookie: admin })).json.users.find((u: any) => u.email === "boss@example.com");
     expect((await call("PATCH", `/api/v1/users/${me.id}`, { cookie: admin, body: { role: "viewer" } })).status).toBe(409);

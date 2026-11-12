@@ -110,6 +110,7 @@ describe.skipIf(!url)("notifications (intégration)", () => {
       config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir: join(tmpdir(), "infra-data-test"), gitCaFile: null, metricsIntervalSec: 30, metricsRetentionDays: 7, registryCaFile: null },
       pool,
     });
+    built.remediation.digestCheck = undefined; // registre fictif
     baseUrl = await built.app.listen({ host: "127.0.0.1", port: 0 });
     const setup = await fetch(baseUrl + "/api/v1/setup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupToken: built.setup.token, username: "boss@example.com", password: "mot-de-passe-solide-1" }) });
     admin = (setup.headers.get("set-cookie") ?? "").split(";")[0] ?? "";

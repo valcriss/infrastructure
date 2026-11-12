@@ -33,7 +33,7 @@ import { registerRemediationAutoRoutes } from "./remediation-auto.js";
 import { registerRemediationVerifyRoutes } from "./remediation-verify.js";
 import { registerImageRoutes } from "./image-routes.js";
 import { RegistryStore } from "./registries.js";
-import { RegistryClient, createFetch } from "./registry.js";
+import { RegistryClient, RegistryError, createFetch } from "./registry.js";
 import { ScanService } from "./scans.js";
 import { listApplications } from "./applications.js";
 import { registerDashboardRoutes } from "./dashboard-routes.js";
@@ -452,6 +452,14 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   const registryImages = new RegistryImages(pool, registryClient);
   const notifier = new Notifier(pool, box, { log: { error: (o, m) => app.log.error(o as object, m) } });
   remediation.notifier = notifier;
+  remediation.digestCheck = async (registry, repository, tag) => {
+    try {
+      return (await registryClient.headManifest({ registry, apiHost: registry, repository, tag: null, digest: null, dockerHub: false }, tag)).digest;
+    } catch (err) {
+      if (err instanceof RegistryError && err.code === "not_found") return null;
+      throw err;
+    }
+  };
   const registryGc = new RegistryGc(pool, gateway, (held) => remediation.hold(held), (o) =>
     notifier.notify({ type: "registry.gc_failed", title: "Ramasse-miettes du registre en échec", text: `Le ramasse-miettes du registre est ${o.status === "unknown" ? "indéterminé" : "en échec"}${o.dryRun ? " (simulation)" : ""}. Consultez la page Registry.`, severity: "warning", path: "/settings?tab=registry", status: o.status }),
   );

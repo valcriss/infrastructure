@@ -83,5 +83,25 @@ Le registre du lot A est retenu tel quel : application `registry:3` gérée derr
 ## 7. Conséquences
 
 - Le lot suivant porte le modèle de données et l'exécution côté agent (messages versionnés, runner BuildKit+Copa+Trivy, rapport), adossé au registre du lot A.
-- Avant de publier automatiquement, compléter le registre : comptes lecture / publication, liste des images, rétention.
+- Avant de publier automatiquement, compléter le registre : comptes lecture / publication, liste des images, rétention (**fait**, voir §8).
 - `remediation.md` §5.1 (« `docker save` n'est pas une entrée valide ») est confirmé : l'entrée valide est une image en registre, désignée par digest.
+
+## 8. Évolutions depuis le spike (12 novembre 2026)
+
+Décisions prises à l'implémentation, avec ce qui les motive. Le détail d'usage est dans `docs/exploitation.md` (« Correctifs d'images », « Registre d'images privé »).
+
+1. **Le verdict reste celui du rescan** (§4.2) et s'y ajoutent deux contrôles que le moteur ne fait pas : une **vérification de démarrage** facultative par image (même commande sur l'image d'origine et sur l'image corrigée, dans un conteneur jetable sans réseau, en lecture seule, sans capacités, sans volume ni variable d'environnement ; refus en cas de régression) et la **confirmation de l'image par le registre** : la console interroge elle-même le registre et écarte un résultat dont le digest annoncé par l'agent n'y figure pas ou diffère. L'agent n'est donc pas cru sur parole pour ce qui devient une référence de déploiement.
+2. **Aucun déploiement automatique, jamais.** « Utiliser l'image corrigée » crée une révision **non déployée** (référence par digest, ou changement de la variable qui porte l'image) ; le déploiement reste une action explicite. La préparation planifiée (désactivée par défaut) ne fait que **préparer** : une fois par contenu d'image, plafond par 24 h, pause après trois échecs, résultat « à relire ».
+3. **Registre : deux comptes** (publication et lecture seule). Le registre ne sait pas limiter un compte à la lecture ; Traefik l'impose par un second routeur (toute méthode sauf GET et HEAD, `basicAuth` limité au compte de publication), vérifié sur Traefik 3.7 et registry 3.0. Seul le compte de lecture est transmis aux déploiements. **Limite assumée** : un registre joint sans passer par Traefik n'a que l'authentification du registre.
+4. **Nettoyage du registre** : suppression par digest, jamais d'une image utilisée (révision courante, déployée ou ancienne, conteneur, correctif actif) ; rétention par nombre de correctifs conservés (proposée par défaut, automatique en option) ; **ramasse-miettes lancé par l'agent**, commande fixe dans le seul conteneur du registre officiel, jamais pendant un correctif, qui suspend le démarrage des correctifs pendant l'opération.
+5. **Annulation** : l'arrêt est demandé à l'agent et n'est jamais affirmé avant sa confirmation ; sans confirmation, le résultat est « indéterminé ».
+6. **Notifications** : webhook HTTPS sortant, signé, sans secret dans les messages, avec refus des adresses privées à l'enregistrement et à chaque envoi (résolution de nom comprise).
+7. **Confidentialité** : les sorties d'outils (vérification, ramasse-miettes en notification) ne sont jamais transmises ni conservées, seulement ce qu'elles prouvent ; l'adresse et le secret du webhook sont chiffrés et jamais renvoyés ; les écritures de réglages sont réservées aux administrateurs.
+
+### Revue de sécurité (lot Q1)
+
+Revue de l'ensemble des routes (rôles), des messages console → agent, de la gestion des secrets et des appels sortants. Constats et suites :
+
+- **Corrigé** : l'image annoncée par l'agent n'était pas recoupée avec le registre (voir 1) ; la liste des images du registre, ouverte à tout utilisateur, interrogeait le registre à chaque appel (mise en cache de 10 s) ; le nom d'hôte du webhook était visible des lecteurs (réservé aux administrateurs).
+- **Vérifié sans écart** : aucune requête SQL construite par concaténation de données ; aucun `v-html` ni shell dans le code ajouté ; chaque route d'écriture exige au moins opérateur, chaque réglage administrateur ; les identifiants de registre ne passent que par un dossier temporaire 0700 (fichier 0600) supprimé à la fin ; messages agent → console liés à l'hôte et au job (résultats étrangers ou rejoués ignorés).
+- **Risque résiduel assumé** : un agent compromis, qui détient déjà les droits de l'hôte, peut publier une image malveillante dans le registre avec les identifiants de son propre correctif ; le recoupement par la console limite la confiance accordée à ses résultats sans la supprimer. La signature des images (cosign) n'est pas implémentée.

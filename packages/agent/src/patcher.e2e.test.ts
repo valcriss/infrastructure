@@ -80,7 +80,8 @@ describe.skipIf(!enabled)("correctif d'image (Docker réel)", () => {
     const image = (await dockerGet(socket, `/images/${encodeURIComponent(SOURCE)}/json`)) as { Id: string; Os: string; Architecture: string };
     const stages: string[] = [];
     const patcher = newPatcher();
-    const msg = message(image, "3.22.0-patch.1");
+    // Vérification de démarrage réelle : `apk --version` doit réussir sur l'image d'origine ET sur l'image corrigée.
+    const msg: PatchMessage = { ...message(image, "3.22.0-patch.1"), verify: { command: ["apk", "--version"], expectExit: 0, outputContains: "apk-tools" } };
 
     const result: PatchResult = await patcher.patch(msg, (m) => {
       if (m.type === "patch_progress") stages.push(m.stage);
@@ -106,6 +107,11 @@ describe.skipIf(!enabled)("correctif d'image (Docker réel)", () => {
     expect(bilan.cves.resolved).toBeGreaterThan(0);
     expect(bilan.cves.newHighOrCritical).toBe(0);
     expect(bilan.verdict).toBe("validated");
+    // La vérification de démarrage a tourné dans deux conteneurs isolés, et les deux ont réussi.
+    expect(result.verification).toEqual({
+      source: { ok: true, exitCode: 0, timedOut: false, outputMatched: true },
+      patched: { ok: true, exitCode: 0, timedOut: false, outputMatched: true },
+    });
   }, 900_000);
 
   it("annule un correctif en cours : processus arrêté, conteneurs éphémères supprimés, aucun résultat de succès", async () => {

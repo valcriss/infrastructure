@@ -190,6 +190,31 @@ describe.skipIf(!url)("images du registre (intégration)", () => {
     await expect(images.remove({ repository: REPO, digest: D_SRC }, "admin")).rejects.toMatchObject({ status: 409, code: "image_in_use" });
   });
 
+  it("la liste de l'API de lecture est mise en cache quelques secondes, et relue à neuf après une suppression", async () => {
+    await pool.query("DELETE FROM remediation_jobs WHERE status = 'patching'"); // le correctif actif du test précédent bloquerait la suppression
+    let catalogCalls = 0;
+    const counting = new RegistryImages(pool, { ...fake, catalog: async () => (catalogCalls++, fake.catalog()) });
+    const t0 = 1_000_000;
+    // Appels simultanés : un seul passage sur le registre.
+    await Promise.all([counting.listCached(t0), counting.listCached(t0), counting.listCached(t0 + 100)]);
+    expect(catalogCalls).toBe(1);
+    await counting.listCached(t0 + 9_000);
+    expect(catalogCalls).toBe(1);
+    await counting.listCached(t0 + 10_500);
+    expect(catalogCalls).toBe(2);
+    // Une suppression invalide le cache.
+    await counting.remove({ repository: REPO, digest: D_SRC }, "admin");
+    await counting.listCached(t0 + 10_600);
+    expect(catalogCalls).toBeGreaterThanOrEqual(4); // remove relit à neuf, puis la liste est recalculée
+    // Un échec n'est pas conservé.
+    let fail = true;
+    const flaky = new RegistryImages(pool, { ...fake, catalog: async () => { if (fail) throw new RegistryError("network", "Registre injoignable."); return fake.catalog(); } });
+    expect((await flaky.listCached(t0)).reachable).toBe(false);
+    fail = false;
+    expect((await flaky.listCached(t0 + 1)).reachable).toBe(false); // l'échec (une vue « injoignable ») reste en cache 10 s : pas de martèlement
+    expect((await flaky.listCached(t0 + 11_000)).reachable).toBe(true);
+  });
+
   it("signale un registre injoignable sans lever d'erreur", async () => {
     const down = new RegistryImages(pool, { ...fake, catalog: async () => { throw new RegistryError("network", "Registre injoignable."); } });
     expect(await down.list()).toMatchObject({ reachable: false, error: "Registre injoignable.", repositories: [] });

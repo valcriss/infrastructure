@@ -99,6 +99,7 @@ export class RegistryImages {
     private readonly client: Pick<RegistryClient, "catalog" | "listTags" | "headManifest" | "manifestSize" | "deleteManifest">,
   ) {}
 
+
   private async settings(): Promise<RegistrySettings> {
     const s = await getRegistrySettings(this.pool);
     if (!s) throw new HttpError(409, "registry_not_configured", "Aucune application registry n'est configurée.");
@@ -131,6 +132,23 @@ export class RegistryImages {
       if (refs.some((ref) => mentions(r.compose, ref))) out.push({ stackId: r.stackId, stackName: r.stackName, revision: r.revision, kind: r.kind });
     }
     return out;
+  }
+
+  private cache: { at: number; view: Promise<RegistryImagesView> } | null = null;
+
+  /**
+   * Liste pour l'API de lecture : mise en cache 10 s (et mutualisée entre appels simultanés), car elle interroge le
+   * registre pour chaque tag et est ouverte à tout utilisateur. Les suppressions et la rétention relisent toujours à neuf.
+   */
+  listCached(now = Date.now()): Promise<RegistryImagesView> {
+    if (this.cache && now - this.cache.at < 10_000) return this.cache.view;
+    const view = this.list();
+    this.cache = { at: now, view };
+    // Un échec n'est pas conservé : le prochain appel réessaie.
+    view.catch(() => {
+      if (this.cache?.view === view) this.cache = null;
+    });
+    return view;
   }
 
   async list(): Promise<RegistryImagesView> {
@@ -259,6 +277,7 @@ export class RegistryImages {
       "UPDATE remediation_jobs SET registry_deleted_at = now() WHERE registry_host = $1 AND repository = $2 AND patched_digest = $3 AND registry_deleted_at IS NULL",
       [s.host, input.repository, input.digest],
     );
+    this.cache = null;
     await audit(this.pool, actor, "registry.image.delete", `${input.repository}@${input.digest}`, "success");
     return { deleted: true, tags: img.tags, gcCommand: GARBAGE_COLLECT_COMMAND };
   }
@@ -273,6 +292,6 @@ export const RemoveImageBody = z.object({
 /** Lecture : tout utilisateur ; suppression : administrateur (routes de réglages). */
 export function registerRegistryImageRoutes(app: FastifyInstance, deps: { auth: Guard; images: RegistryImages }): void {
   const { auth, images } = deps;
-  app.get("/api/v1/settings/registry/images", { preHandler: auth }, async () => images.list());
+  app.get("/api/v1/settings/registry/images", { preHandler: auth }, async () => images.listCached());
   app.post("/api/v1/settings/registry/images/delete", { preHandler: auth }, async (request) => images.remove(RemoveImageBody.parse(request.body), request.actor));
 }

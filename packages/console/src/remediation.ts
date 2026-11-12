@@ -200,6 +200,11 @@ export class RemediationService {
   private timer: NodeJS.Timeout | undefined;
   /** Préparation planifiée des correctifs (désactivée par défaut). */
   readonly auto: RemediationAuto;
+  /**
+   * Digest que le REGISTRE connaît pour un tag (null s'il n'existe pas ; exception si le registre est injoignable) :
+   * l'image annoncée par l'agent n'est acceptée que si le registre la confirme. Branché par l'application.
+   */
+  digestCheck: ((registry: string, repository: string, tag: string) => Promise<string | null>) | undefined;
   /** Notifications (webhook) : branchées par l'application ; absentes, rien n'est notifié. */
   notifier: Pick<Notifier, "notify"> | undefined;
   /** Démarrage des correctifs suspendu (ramasse-miettes du registre en cours) : les jobs restent en file. */
@@ -505,6 +510,9 @@ export class RemediationService {
     // Résultat inconnu, d'un autre hôte, ou déjà traité (rejeu) : ignoré. Un job « indéterminé » accepte son résultat tardif.
     if (!job || !(RUNNING as string[]).concat(["unknown"]).includes(job.status)) return;
 
+    // L'agent est cru sur parole le moins possible : l'image annoncée doit exister dans le registre, avec ce digest.
+    msg = await this.confirmed(job, msg);
+
     if (msg.status === "cancelled") {
       const by = job.cancel_requested_by;
       await this.pool.query("UPDATE remediation_jobs SET status = 'cancelled', finished_at = now(), error = $2, tools = $3 WHERE id = $1", [
@@ -560,6 +568,20 @@ export class RemediationService {
       this.notifier?.notify({ type: "remediation.failed", title: `Correctif refusé : ${job.image_ref}`, text: `Le correctif de ${job.image_ref} (${job.platform}) a été refusé : ${bilan.reasons.slice(0, 2).join(" ; ")}. Il n'est pas utilisable.`, severity: "warning", path: "/images", image: job.image_ref, status: "rejected" });
     }
     void this.pumpAny().catch(() => undefined);
+  }
+
+  /** Un résultat « réussi » dont le registre ne confirme pas l'image devient un échec explicite, jamais un verdict. */
+  private async confirmed(job: DbRow, msg: PatchResult): Promise<PatchResult> {
+    if (msg.status !== "succeeded" || !msg.patched || !this.digestCheck) return msg;
+    let problem: string | null = null;
+    try {
+      const known = await this.digestCheck(job.registry_host, job.repository, job.patched_tag);
+      if (known !== msg.patched.digest) problem = known === null ? "introuvable dans le registre" : "digest différent de celui annoncé";
+    } catch (err) {
+      problem = `registre injoignable (${err instanceof Error ? err.message : "erreur"})`;
+    }
+    if (!problem) return msg;
+    return { type: "patch_result", jobId: msg.jobId, status: "failed", error: `Le registre ne confirme pas l'image annoncée par l'agent (${problem}) : correctif écarté par sécurité. Vérifiez le registre (Paramètres → Registry → Tester l'accès) puis relancez.` };
   }
 
   /** Connexion perdue : le résultat réel est indéterminé (le travail a pu aboutir). Réconcilié si le résultat arrive plus tard. */

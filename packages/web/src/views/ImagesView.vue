@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { ago, api, describeError, fmtDate, shortId, type ImageView, type RemediationJob } from "../api";
 import RemediationDialog from "../components/RemediationDialog.vue";
+import RemediationGuide from "../components/RemediationGuide.vue";
 import { latestByImage, statusClass, statusLabel } from "../remediation";
 import { useSession } from "../stores/session";
 import ScanAllDialog, { type BatchResult } from "../components/ScanAllDialog.vue";
@@ -16,6 +17,8 @@ const jobs = ref<RemediationJob[]>([]);
 const latestJob = computed(() => latestByImage(jobs.value));
 // Correctifs préparés automatiquement par la planification, utilisables, que personne n'a encore relus.
 const toReview = computed(() => jobs.value.filter((j) => j.automatic && !j.reviewedAt && !j.imageDeleted && (j.status === "validated" || j.status === "partial")));
+const scannedImages = computed(() => images.value.filter((i) => i.scan.current !== null).length);
+const appliedCount = computed(() => jobs.value.filter((j) => j.applied.length > 0).length);
 const imageOfJob = (j: RemediationJob): ImageView | undefined => images.value.find((i) => i.imageId === j.imageId && i.platform === j.platform);
 const fixing = ref<ImageView | null>(null);
 const error = ref("");
@@ -177,6 +180,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </select>
       </div>
     </div>
+    <RemediationGuide :scanned-images="scannedImages" :jobs="jobs.length" :to-review="toReview.length" :applied="appliedCount" />
     <section v-if="toReview.length > 0" aria-label="Correctifs à relire" class="rounded-xl border border-green-300 bg-green-50 p-4 text-sm text-green-900">
       <p class="font-medium">{{ toReview.length }} correctif(s) préparé(s) automatiquement, à relire</p>
       <p class="text-xs">Rien n'a été appliqué ni déployé : relisez le bilan, puis utilisez l'image corrigée dans une application si vous le souhaitez.</p>

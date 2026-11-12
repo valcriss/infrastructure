@@ -102,6 +102,12 @@ const rotate = () =>
       La console peut appeler un <strong>webhook HTTPS</strong> (Slack, Discord, Teams via un flux, n8n…) pour les correctifs à relire, refusés ou en échec, la pause de la préparation automatique et un ramasse-miettes en échec.
       Les messages ne contiennent <strong>ni secret, ni valeur de variable, ni sortie d'outil</strong> : un titre, l'image, un statut et un lien.
     </p>
+    <ol class="mt-3 list-decimal space-y-1 pl-5 text-sm text-slate-600" aria-label="Pour commencer">
+      <li :class="loaded?.settings.configured ? 'text-green-700' : ''">Créez un <strong>webhook entrant</strong> dans votre outil (Slack, Discord, n8n…) et collez son adresse HTTPS ci-dessous.</li>
+      <li>Cliquez <strong>Enregistrer</strong>, puis <strong>Envoyer un message de test</strong> : vous devez le voir arriver.</li>
+      <li :class="loaded?.settings.enabled ? 'text-green-700' : ''">Cochez <strong>Envoyer les notifications</strong> et enregistrez. Choisissez les événements qui vous intéressent.</li>
+      <li>Côté destinataire (facultatif) : vérifiez la signature avec le secret (« Afficher le secret de signature »).</li>
+    </ol>
     <p v-if="error" role="alert" class="mt-2 text-sm text-red-700">{{ error }}</p>
     <p v-if="info" role="status" class="mt-2 text-sm text-green-700">{{ info }}</p>
 

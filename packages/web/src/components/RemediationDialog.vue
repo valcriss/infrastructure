@@ -4,10 +4,12 @@ import {
   api, ago, describeError, fmtDate, shortId,
   type ImageView, type RemediationEligibility, type RemediationJob, type RemediationTarget,
 } from "../api";
+import { eligibilityHint, jobHint } from "../guide";
 import { majorJump, STAGES, stageIndex, statusClass, statusLabel } from "../remediation";
 import { useSession } from "../stores/session";
 import CopyButton from "./CopyButton.vue";
 import DiffView from "./DiffView.vue";
+import NextStep from "./NextStep.vue";
 
 // Correctif d'une image : éligibilité, exécution suivie en direct, bilan avant / après, puis proposition de l'image
 // corrigée à une application (nouvelle révision, jamais déployée ici). Voir docs/adr/0002-remediation-images.md.
@@ -31,6 +33,9 @@ const label = computed(() => props.image.refs[0] ?? shortId(props.image.imageId)
 const startHosts = computed(() => (eligibility.value?.hosts ?? []).filter((h) => h.online && h.capable));
 const usable = computed(() => job.value !== null && !job.value.imageDeleted && (job.value.status === "validated" || job.value.status === "partial"));
 const platformJobs = computed(() => jobs.value.filter((j) => j.platform === props.image.platform));
+// Messages qui disent quoi faire à chaque étape (scan, registre, hôte, relecture, utilisation, déploiement).
+const eligGuide = computed(() => eligibilityHint(eligibility.value, session.canOperate, platformJobs.value.length > 0));
+const jobGuide = computed(() => jobHint(job.value, targets.value));
 
 async function loadEligibility() {
   eligibility.value = await api<RemediationEligibility>(`${imageUrl.value}/remediation/eligibility?platform=${encodeURIComponent(props.image.platform)}`);
@@ -204,12 +209,7 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
               {{ eligibility.fixableOs }} CVE avec correctif dans les paquets du système · {{ eligibility.fixableApp }} dans des dépendances applicatives (correction manuelle, hors correctif automatique) · {{ eligibility.unfixable }} sans correctif publié.
               Une CVE peut toucher plusieurs paquets : le bilan distingue CVE uniques et constats par paquet.
             </p>
-            <p v-if="eligibility.eligible && !eligibility.registry.ready" class="mt-2 rounded bg-amber-50 p-2 text-amber-900">
-              {{ eligibility.registry.reason }} <RouterLink to="/settings?tab=registry" class="underline" @click="emit('close')">Paramètres → Registry</RouterLink>
-            </p>
-            <p v-if="eligibility.eligible && eligibility.registry.ready && startHosts.length === 0 && !eligibility.activeJob" class="mt-2 rounded bg-amber-50 p-2 text-amber-900">
-              Aucun hôte en ligne avec un agent à jour (capacité de correctif) ne porte cette image.
-            </p>
+            <div v-if="eligGuide" class="mt-3"><NextStep :hint="eligGuide" @navigate="emit('close')" /></div>
             <div v-if="session.canOperate && eligibility.canStart" class="mt-3 flex flex-wrap items-end gap-3">
               <label v-if="startHosts.length > 1" class="text-xs">
                 <span class="block font-medium">Hôte qui exécute le correctif</span>
@@ -245,6 +245,8 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
             <h3 class="font-semibold">Correctif <span class="font-mono text-sm">{{ job.patchedTag }}</span> <span :class="['ml-2 rounded-full px-2 py-0.5 text-xs font-medium', statusClass(job.status)]">{{ statusLabel(job.status) }}</span></h3>
             <button v-if="session.canOperate && job.active" :class="ghost" :disabled="busy || job.cancelRequested" @click="cancel">{{ job.status === "unknown" ? "Abandonner" : job.status === "queued" ? "Annuler" : job.cancelRequested ? "Arrêt demandé…" : "Arrêter le correctif" }}</button>
           </div>
+
+          <NextStep v-if="jobGuide" :hint="jobGuide" @navigate="emit('close')" />
 
           <ol v-if="job.active && job.status !== 'unknown'" class="flex flex-wrap gap-2 text-xs" aria-label="Étapes">
             <li v-for="(s, n) in STAGES" :key="s.status" :class="['rounded-full px-3 py-1', n < stageIndex(job.status) ? 'bg-green-100 text-green-800' : n === stageIndex(job.status) ? 'bg-blue-600 font-medium text-white' : 'bg-slate-100 text-slate-500']" :aria-current="n === stageIndex(job.status) ? 'step' : undefined">{{ s.label }}</li>

@@ -111,6 +111,7 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       config: { host: "127.0.0.1", port: 0, databaseUrl: url as string, sharedDir, webDir: null, secureCookies: false, dataDir: join(tmpdir(), "infra-data-test"), gitCaFile: null, metricsIntervalSec: 30, metricsRetentionDays: 7, registryCaFile: null },
       pool,
     });
+    built.remediation.digestCheck = undefined; // registre fictif : seul le groupe « confirmation » active le contrôle
     baseUrl = await built.app.listen({ host: "127.0.0.1", port: 0 });
     const setup = await fetch(baseUrl + "/api/v1/setup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupToken: built.setup.token, username: "boss@example.com", password: "mot-de-passe-solide-1" }) });
     admin = (setup.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
@@ -427,6 +428,48 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       expect(job.error).toContain("n'a pas confirmé");
       ws.send(JSON.stringify({ type: "patch_result", jobId: id, status: "cancelled", error: "arrêté" }));
       await waitFor(async () => (await status(id)).status === "cancelled");
+    });
+  });
+
+  describe("confirmation de l'image par le registre", () => {
+    let check: ((registry: string, repository: string, tag: string) => Promise<string | null>) | undefined;
+    beforeAll(() => {
+      check = built.remediation.digestCheck;
+    });
+    afterAll(() => {
+      built.remediation.digestCheck = check;
+    });
+    const run = async (confirm: () => Promise<string | null>) => {
+      const calls: string[] = [];
+      built.remediation.digestCheck = async (registry, repository, tag) => (calls.push(`${registry}/${repository}:${tag}`), confirm());
+      const { wait } = await start();
+      const msg = await wait();
+      finish(msg.jobId);
+      await waitFor(async () => !(await status(msg.jobId)).active);
+      return { job: await status(msg.jobId), calls };
+    };
+
+    it("accepte l'image quand le registre confirme le digest annoncé", async () => {
+      const { job, calls } = await run(async () => sha("2"));
+      expect(job.status).toBe("validated");
+      expect(calls).toEqual([expect.stringMatching(/^registry\.exemple\.invalid\/patched\/.+:3\.22\.0-patch\.\d+$/)]);
+    });
+
+    it("écarte l'image quand le registre ne la connaît pas, ou la connaît avec un autre digest", async () => {
+      const missing = await run(async () => null);
+      expect(missing.job).toMatchObject({ status: "failed", patchedDigest: null, patchedRef: null });
+      expect(missing.job.error).toContain("introuvable dans le registre");
+      const other = await run(async () => sha("9"));
+      expect(other.job.status).toBe("failed");
+      expect(other.job.error).toContain("digest différent");
+      // Jamais de verdict ni de référence utilisable pour une image non confirmée.
+      expect(other.job.bilan).toBeNull();
+    });
+
+    it("écarte l'image quand le registre est injoignable", async () => {
+      const { job } = await run(async () => { throw new Error("ECONNREFUSED"); });
+      expect(job.status).toBe("failed");
+      expect(job.error).toContain("registre injoignable");
     });
   });
 
