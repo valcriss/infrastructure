@@ -7,7 +7,7 @@
  * rechargement automatique de la configuration dynamique.
  */
 
-import { isMap, parseDocument } from "yaml";
+import { isMap, parse, parseDocument } from "yaml";
 import type { YAMLMap } from "yaml";
 import { editServiceHealthcheck, type HealthcheckSpec } from "./compose-edit.js";
 
@@ -20,6 +20,9 @@ export const TRAEFIK_STACK_NAME = "traefik";
 export const TRAEFIK_STATIC_FILE = "traefik.yml";
 export const TRAEFIK_DYNAMIC_FILE = "dynamic/dynamic.yml";
 
+export const TRAEFIK_LOG_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"] as const;
+export type TraefikLogLevel = (typeof TRAEFIK_LOG_LEVELS)[number];
+
 export interface TraefikOptions {
   /** Adresse utilisée par Let's Encrypt pour les avis d'expiration. */
   email: string;
@@ -28,6 +31,8 @@ export interface TraefikOptions {
   httpEntryPoint: string;
   httpsEntryPoint: string;
   certResolver: string;
+  /** Niveau de journalisation de Traefik. */
+  logLevel: TraefikLogLevel;
   network: {
     /** « create » : le réseau est créé avec l'application ; « existing » : il existe déjà sur l'hôte. */
     mode: "create" | "existing";
@@ -41,6 +46,7 @@ export const TRAEFIK_DEFAULTS: TraefikOptions = {
   httpEntryPoint: "web",
   httpsEntryPoint: "websecure",
   certResolver: "letsencrypt",
+  logLevel: "INFO",
   network: { mode: "create", name: "traefik-public" },
 };
 
@@ -64,6 +70,7 @@ export function validateTraefikOptions(o: TraefikOptions): string | null {
   if (o.httpEntryPoint === o.httpsEntryPoint) return "Les entrypoints HTTP et HTTPS doivent avoir des noms différents.";
   if (PREDEFINED_NETWORKS.has(o.network.name)) return "Ce réseau est un réseau prédéfini de Docker : choisissez un réseau dédié.";
   if (o.network.mode !== "create" && o.network.mode !== "existing") return "Mode de réseau invalide.";
+  if (!TRAEFIK_LOG_LEVELS.includes(o.logLevel)) return "Niveau de journalisation invalide (DEBUG, INFO, WARN ou ERROR).";
   return null;
 }
 
@@ -173,7 +180,7 @@ global:
   sendAnonymousUsage: false
 
 log:
-  level: INFO
+  level: ${o.logLevel}
 
 # Tableau de bord désactivé : l'exposer demande un domaine et une authentification.
 api:
@@ -228,4 +235,74 @@ tls:
 `;
 
   return { compose, files: { [TRAEFIK_STATIC_FILE]: staticConfig, [TRAEFIK_DYNAMIC_FILE]: dynamicConfig } };
+}
+
+// --- Application gérée : lecture d'une configuration existante, comparaison -------------------------------
+
+/** Autorité de test de Let's Encrypt : sa présence (caServer) signifie « certificats de test ». */
+export const TRAEFIK_STAGING_CA = "https://acme-staging-v02.api.letsencrypt.org/directory";
+
+export interface TraefikFileReading {
+  email: string | null;
+  /** true : production ; false : autorité de test ; null : autre autorité (caServer personnalisé), non reprise par la console. */
+  production: boolean | null;
+  logLevel: string | null;
+}
+
+/** Réglages que la console sait relire dans un traefik.yml existant ; null si le fichier n'est pas un YAML exploitable. */
+export function readTraefikStatic(staticConfig: string, certResolver: string): TraefikFileReading | null {
+  interface StaticShape {
+    certificatesResolvers?: Record<string, { acme?: { email?: unknown; caServer?: unknown } } | null>;
+    log?: { level?: unknown } | null;
+  }
+  let doc: StaticShape | null;
+  try {
+    doc = parse(staticConfig, { maxAliasCount: 100 }) as StaticShape | null;
+  } catch {
+    return null;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
+  const acme = doc.certificatesResolvers?.[certResolver]?.acme;
+  const email = typeof acme?.email === "string" ? acme.email : null;
+  const ca = acme?.caServer;
+  const production = ca === undefined ? true : ca === TRAEFIK_STAGING_CA ? false : null;
+  const level = doc.log?.level;
+  return { email, production, logLevel: typeof level === "string" ? level.toUpperCase() : null };
+}
+
+/** Mode du réseau « proxy » d'un Compose Traefik : réseau existant (external) ou créé avec l'application ; null si absent. */
+export function traefikNetworkMode(compose: string): "create" | "existing" | null {
+  try {
+    const net = (parse(compose, { maxAliasCount: 100 }) as { networks?: Record<string, { external?: unknown } | null> } | null)?.networks?.proxy;
+    if (net === undefined) return null;
+    return net?.external === true ? "existing" : "create";
+  } catch {
+    return null;
+  }
+}
+
+/** Compose généré, avec l'image courante de l'application plutôt que celle de la génération (elle a pu être mise à jour). */
+export function keepTraefikImage(generated: string, current: string | null): string {
+  return current && current !== TRAEFIK_IMAGE ? generated.replace(`image: ${TRAEFIK_IMAGE}`, `image: ${current}`) : generated;
+}
+
+const stable = (v: unknown): unknown =>
+  Array.isArray(v) ? v.map(stable) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => [k, stable(x)])) : v;
+
+/** Deux textes YAML ont-ils le même contenu (commentaires, ordre des clés et mise en forme ignorés) ? */
+export function sameYaml(a: string, b: string): boolean {
+  try {
+    return JSON.stringify(stable(parse(a, { maxAliasCount: 100 }))) === JSON.stringify(stable(parse(b, { maxAliasCount: 100 })));
+  } catch {
+    return false;
+  }
+}
+
+/** La configuration actuelle équivaut-elle à ce que la console générerait (l'image courante mise à part) ? */
+export function traefikEquivalent(current: { compose: string; staticConfig: string | null }, generated: GeneratedTraefik, currentImage: string | null): boolean {
+  return (
+    current.staticConfig !== null &&
+    sameYaml(current.compose, keepTraefikImage(generated.compose, currentImage)) &&
+    sameYaml(current.staticConfig, generated.files[TRAEFIK_STATIC_FILE] as string)
+  );
 }

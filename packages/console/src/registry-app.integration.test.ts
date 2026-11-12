@@ -150,6 +150,13 @@ describe.skipIf(!url)("application registry (intégration)", () => {
     expect(again.json.code ?? again.json.error?.code).toBe("registry_already_configured");
   });
 
+  it("lit l'exposition de l'application générée sous le routeur « registry » (et non « registry-registry »)", async () => {
+    const r = await call("GET", `/api/v1/stacks/${stackId}/traefik`, { cookie: admin });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ available: true, managedBy: "registry" });
+    expect(r.json.services).toEqual([expect.objectContaining({ service: "registry", routerName: "registry", exposure: expect.objectContaining({ hosts: [HOST], port: 5000 }) })]);
+  });
+
   it("refuse toute modification manuelle de l'application (423) mais autorise le changement d'étiquette d'image", async () => {
     const rev = await revisionOf();
     const detail = await stack();

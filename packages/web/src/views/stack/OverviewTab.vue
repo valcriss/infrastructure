@@ -92,7 +92,7 @@ onMounted(() => {
 });
 
 // Exposition par Traefik : visible dès que Traefik est configuré ; les actions demandent le même hôte.
-interface TraefikState { available: boolean; reason: string | null; settings: TraefikSettingsView | null; services: TraefikService[] }
+interface TraefikState { available: boolean; reason: string | null; managedBy: string | null; settings: TraefikSettingsView | null; services: TraefikService[] }
 const traefik = ref<TraefikState | null>(null);
 const traefikTarget = ref<TraefikService | null>(null);
 async function loadTraefik() {
@@ -326,7 +326,7 @@ Supprimer…
               <span v-else class="ml-2 text-xs text-slate-400">non exposé</span>
             </div>
             <button
-              v-if="session.canOperate"
+              v-if="session.canOperate && !traefik.managedBy"
               class="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100"
               @click="traefikTarget = s"
             >
@@ -334,7 +334,11 @@ Supprimer…
             </button>
           </li>
         </ul>
-        <p class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+        <p v-if="traefik.managedBy" class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+          Application générée par la console : son exposition suit ses paramètres (domaine, entrypoint, certificat) et ne se modifie pas ici.
+          <RouterLink :to="`/settings?tab=${traefik.managedBy}`" class="text-blue-600 underline">Ouvrir ses paramètres</RouterLink>
+        </p>
+        <p v-else class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
           Les labels sont écrits dans une révision du Compose ; le routage ne change qu'après le déploiement. Le service est rattaché au réseau « {{ traefik.settings.network }} ».
         </p>
       </template>

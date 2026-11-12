@@ -1,5 +1,6 @@
 import {
   ComposeEditError,
+  REGISTRY_STACK_NAME,
   RESERVED_STACK_NAMES,
   editServiceEnvironment,
   editServiceHealthcheck,
@@ -391,6 +392,9 @@ export function registerStackRoutes(
     return { available: true, reason: null };
   };
 
+  /** Nom du routeur Traefik d'un service : celui que la console a écrit pour une application générée (registre), sinon <application>-<service>. */
+  const routerNameOf = (stack: StackListRow, service: string): string => (stack.managed_by === "registry" ? REGISTRY_STACK_NAME : traefikRouterName(stack.name, service));
+
   const traefikEdit = (compose: string, stack: StackListRow, settings: TraefikSettings | null, service: string, body: z.infer<typeof TraefikBody>): string => {
     const avail = traefikAvailability(stack, settings);
     if (!avail.available || !settings) throw new HttpError(409, "traefik_unavailable", avail.reason ?? "Traefik indisponible.");
@@ -399,7 +403,7 @@ export function registerStackRoutes(
       const invalid = validateTraefikExposure(exposure);
       if (invalid) throw new HttpError(400, "invalid_exposure", invalid);
     }
-    const ctx = { routerName: traefikRouterName(stack.name, service), entryPoint: settings.httpsEntryPoint, certResolver: settings.certResolver, network: settings.network };
+    const ctx = { routerName: routerNameOf(stack, service), entryPoint: settings.httpsEntryPoint, certResolver: settings.certResolver, network: settings.network };
     try {
       return editServiceTraefik(compose, service, ctx, body.expose ? exposure : null);
     } catch (e) {
@@ -424,9 +428,11 @@ export function registerStackRoutes(
     const mine = (stack.inventory ?? []).filter((c) => c.composeProject === stack.name);
     return {
       ...avail,
+      // Application générée par la console : l'exposition se lit mais ne se modifie pas ici (elle suit ses paramètres).
+      managedBy: stack.managed_by,
       settings: settings ? { httpsEntryPoint: settings.httpsEntryPoint, certResolver: settings.certResolver, network: settings.network } : null,
       services: listComposeServices(rev.compose).map((s) => {
-        const routerName = traefikRouterName(stack.name, s.name);
+        const routerName = routerNameOf(stack, s.name);
         const read = readServiceTraefik(rev.compose, s.name, routerName);
         const ports = [...new Set(mine.filter((c) => c.composeService === s.name).flatMap((c) => (c.ports ?? []).map((p) => p.privatePort)))].sort((a, b) => a - b);
         return { service: s.name, routerName, exposure: read?.exposure ?? null, customRule: read?.customRule ?? false, ports };

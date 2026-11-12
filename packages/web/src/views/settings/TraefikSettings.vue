@@ -2,14 +2,15 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { api, describeError } from "../../api";
 import CopyButton from "../../components/CopyButton.vue";
+import DiffView from "../../components/DiffView.vue";
 import PanelCard from "../../components/PanelCard.vue";
 import TraefikDynamic from "../../components/TraefikDynamic.vue";
 
 // Traefik (reverse proxy) : création d'une application préconfigurée, puis rappel des noms choisis.
 interface Candidate { name: string; driver: string; usedBy: string[]; suggested: boolean }
 interface HostOption { id: string; name: string; online: boolean; networks: Candidate[] | null; portConflicts: { port: number; container: string }[] }
-interface Settings { stackId: string; hostId: string; httpEntryPoint: string; httpsEntryPoint: string; certResolver: string; network: string; production: boolean }
-interface Application { id: string; name: string; hostId: string; hostName: string | null; currentRevision: number; deployedRevision: number | null; deployed: boolean; healthcheck: boolean }
+interface Settings { stackId: string; hostId: string; httpEntryPoint: string; httpsEntryPoint: string; certResolver: string; network: string; production: boolean; email?: string; logLevel?: string }
+interface Application { id: string; name: string; hostId: string; hostName: string | null; currentRevision: number; deployedRevision: number | null; deployed: boolean; healthcheck: boolean; managed: boolean }
 interface State {
   settings: Settings | null;
   application: Application | { missing: true } | null;
@@ -19,6 +20,8 @@ interface State {
   hosts: HostOption[];
 }
 interface Preview { compose: string; files: Record<string, string> }
+interface Adoption { equivalent: boolean; notes: string[]; compose: { before: string; after: string }; staticConfig: { before: string; after: string } }
+const LOG_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"];
 
 const state = ref<State | null>(null);
 const error = ref("");
@@ -111,20 +114,73 @@ async function makeSnippet() {
   }
 }
 
-async function addHealthcheck() {
-  if (!window.confirm("Ajouter le healthcheck à l'application Traefik ? Le Compose reçoit un healthcheck et traefik.yml la ligne « ping » ; vos autres réglages sont conservés. Une nouvelle révision est créée ; redéployez ensuite l'application (redémarrage bref de Traefik).")) return;
+// Réglages d'une application gérée : brouillon rempli depuis l'état enregistré.
+const opts = reactive({ email: "", production: false, logLevel: "INFO" });
+function resetOptions() {
+  const st = state.value?.settings;
+  Object.assign(opts, { email: st?.email ?? "", production: st?.production ?? false, logLevel: st?.logLevel ?? "INFO" });
+}
+const optionsDirty = computed(() => {
+  const st = state.value?.settings;
+  return !!st && (opts.email.trim() !== (st.email ?? "") || opts.production !== st.production || opts.logLevel !== (st.logLevel ?? "INFO"));
+});
+watch(() => state.value?.settings, resetOptions, { immediate: true });
+
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  return api<T>(path, { method: "POST", ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+}
+async function run(fn: () => Promise<void>) {
   error.value = info.value = "";
   busy.value = true;
   try {
-    const r = await api<{ changed: boolean; notes: string[] }>("/api/v1/settings/traefik/healthcheck", { method: "POST" });
-    info.value = (r.changed ? "Healthcheck ajouté dans une nouvelle révision. Redéployez l'application Traefik pour l'appliquer." : "Aucune modification.") + (r.notes.length ? ` ${r.notes.join(" ")}` : "");
-    await load();
+    await fn();
   } catch (err) {
     error.value = describeError(err);
   } finally {
     busy.value = false;
   }
 }
+
+const saveOptions = () => {
+  if (!window.confirm("Enregistrer ces réglages ? Une nouvelle révision est créée ; redéployez ensuite l'application Traefik pour les appliquer (redémarrage bref de Traefik, les certificats déjà obtenus sont conservés).")) return;
+  return run(async () => {
+    await post("/api/v1/settings/traefik/options", { email: opts.email.trim(), production: opts.production, logLevel: opts.logLevel });
+    info.value = "Réglages enregistrés dans une nouvelle révision. Redéployez l'application Traefik pour les appliquer.";
+    await load();
+  });
+};
+const detach = () => {
+  if (!window.confirm("Détacher l'application de la gestion automatique ? Elle devient modifiable à la main (Compose, traefik.yml), et la console ne la régénère plus.")) return;
+  return run(async () => {
+    await post("/api/v1/settings/traefik/detach");
+    info.value = "Application détachée : elle se modifie désormais comme les autres.";
+    await load();
+  });
+};
+const addHealthcheck = () => {
+  const text = application.value?.managed
+    ? "Régénérer l'application pour y ajouter le healthcheck ? Vos réglages et la configuration dynamique sont conservés. Une nouvelle révision est créée ; redéployez ensuite l'application (redémarrage bref de Traefik)."
+    : "Ajouter le healthcheck à l'application Traefik ? Le Compose reçoit un healthcheck et traefik.yml la ligne « ping » ; vos autres réglages sont conservés. Une nouvelle révision est créée ; redéployez ensuite l'application (redémarrage bref de Traefik).";
+  if (!window.confirm(text)) return;
+  return run(async () => {
+    const r = await post<{ changed: boolean; notes: string[] }>("/api/v1/settings/traefik/healthcheck");
+    info.value = (r.changed ? "Healthcheck ajouté dans une nouvelle révision. Redéployez l'application Traefik pour l'appliquer." : "Aucune modification.") + (r.notes.length ? " " + r.notes.join(" ") : "");
+    await load();
+  });
+};
+
+// Prise en charge d'une application existante : aperçu de ce qui changerait, puis confirmation.
+const adoption = ref<Adoption | null>(null);
+const previewAdoption = () => run(async () => { adoption.value = await post<Adoption>("/api/v1/settings/traefik/adopt/preview"); });
+const adopt = () => run(async () => {
+  const r = await post<{ revision: number; changed: boolean; notes: string[] }>("/api/v1/settings/traefik/adopt", { confirm: true });
+  adoption.value = null;
+  info.value = r.changed
+    ? "Application prise en charge. Une nouvelle révision a été créée : relisez-la puis redéployez."
+    : "Application prise en charge : sa configuration correspondait déjà, rien à redéployer.";
+  if (r.notes.length) info.value += " " + r.notes.join(" ");
+  await load();
+});
 
 async function create() {
   error.value = info.value = "";
@@ -171,9 +227,58 @@ async function create() {
         <button :class="ghost" class="ml-2" :disabled="busy" @click="addHealthcheck">Ajouter le healthcheck</button>
       </p>
       <p v-if="state.settings.production === false" class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-900">
-        Les certificats viennent de l'autorité de test de Let's Encrypt : les navigateurs les refusent. Pour passer en production, modifiez <code>traefik.yml</code>
-        dans les fichiers de l'application (retirez la ligne <code>caServer</code>) et redéployez.
+        Les certificats viennent de l'autorité de test de Let's Encrypt : les navigateurs les refusent.
+        <template v-if="application.managed">Passez en production dans les réglages ci-dessous, puis redéployez.</template>
+        <template v-else>Pour passer en production, confiez l'application à la console (ci-dessous) ou retirez la ligne <code>caServer</code> de <code>traefik.yml</code>, puis redéployez.</template>
       </p>
+
+      <div v-if="application.managed" class="mt-4 border-t border-slate-100 pt-4">
+        <h3 class="text-sm font-semibold">Réglages</h3>
+        <p class="mt-1 text-xs text-slate-500">Application générée et entretenue par la console : son Compose et <code>traefik.yml</code> viennent de ces réglages. La configuration dynamique (middlewares, routes) est conservée.</p>
+        <form class="mt-3 space-y-3 text-sm" @submit.prevent="saveOptions">
+          <label class="block max-w-md">
+            <span class="font-medium">Adresse e-mail Let's Encrypt</span>
+            <input v-model="opts.email" type="email" required autocomplete="off" :class="field" />
+          </label>
+          <fieldset>
+            <legend class="font-medium">Certificats</legend>
+            <label class="mt-1 flex items-start gap-2"><input v-model="opts.production" type="radio" :value="false" class="mt-1" /><span>Autorité de test <span class="block text-xs text-slate-500">Certificats non reconnus par les navigateurs, sans limite de débit.</span></span></label>
+            <label class="mt-1 flex items-start gap-2"><input v-model="opts.production" type="radio" :value="true" class="mt-1" /><span>Production <span class="block text-xs text-slate-500">Certificats valides ; Let's Encrypt limite les demandes en cas d'erreurs répétées.</span></span></label>
+          </fieldset>
+          <label class="block max-w-xs">
+            <span class="font-medium">Niveau de journalisation</span>
+            <select v-model="opts.logLevel" :class="field"><option v-for="l in LOG_LEVELS" :key="l" :value="l">{{ l }}</option></select>
+          </label>
+          <p class="text-xs text-slate-500">Les entrypoints (<span class="font-mono">{{ state.settings.httpEntryPoint }}</span>, <span class="font-mono">{{ state.settings.httpsEntryPoint }}</span>), le résolveur et le réseau ne se modifient pas ici : les applications exposées y font référence.</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <button class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" :disabled="busy || !optionsDirty || !opts.email.trim()">Enregistrer</button>
+            <button type="button" :class="ghost" :disabled="busy || !optionsDirty" @click="resetOptions">Annuler</button>
+            <button type="button" :class="ghost" :disabled="busy" @click="detach">Détacher de la gestion automatique</button>
+          </div>
+        </form>
+      </div>
+
+      <div v-else class="mt-4 border-t border-slate-100 pt-4">
+        <h3 class="text-sm font-semibold">Gestion par la console</h3>
+        <p class="mt-1 text-sm text-slate-600">
+          Cette application se modifie à la main. La console peut la prendre en charge : les réglages (certificats, e-mail, journalisation) se changent alors ici, sans éditer de fichier.
+          Vous relisez d'abord ce qui changerait ; la configuration dynamique et la version de l'image sont conservées, et vous pouvez la détacher ensuite.
+        </p>
+        <button class="mt-2" :class="ghost" :disabled="busy" @click="previewAdoption">Confier à la console…</button>
+        <div v-if="adoption" class="mt-3 space-y-3 rounded border border-slate-200 p-3 text-sm">
+          <p v-if="adoption.equivalent" role="status" class="text-green-700">La configuration actuelle correspond déjà à ce que la console générerait : la prise en charge ne change rien.</p>
+          <template v-else>
+            <p role="note" class="rounded bg-amber-50 p-2 text-xs text-amber-900">Votre configuration diffère de ce que la console génère : la prise en charge la remplace par la version « après » ci-dessous (une nouvelle révision, non déployée). Les modifications faites à la main dans ces deux fichiers seront perdues ; vous pouvez détacher l'application ensuite pour les refaire.</p>
+            <div><p class="mb-1 text-xs font-medium">docker-compose.yml</p><DiffView :before="adoption.compose.before" :after="adoption.compose.after" /></div>
+            <div><p class="mb-1 text-xs font-medium">traefik.yml</p><DiffView :before="adoption.staticConfig.before" :after="adoption.staticConfig.after" /></div>
+          </template>
+          <p v-for="n in adoption.notes" :key="n" class="text-xs text-amber-800">{{ n }}</p>
+          <div class="flex flex-wrap gap-2">
+            <button class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" :disabled="busy" @click="adopt">{{ adoption.equivalent ? "Confier à la console" : "Remplacer et confier à la console" }}</button>
+            <button :class="ghost" :disabled="busy" @click="adoption = null">Annuler</button>
+          </div>
+        </div>
+      </div>
 
       <div class="mt-4 border-t border-slate-100 pt-4">
         <h3 class="text-sm font-semibold">Exposer la console elle-même</h3>

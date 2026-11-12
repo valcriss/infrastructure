@@ -189,7 +189,8 @@ export function registerTraefikDynamicRoutes(app: FastifyInstance, deps: { pool:
       files: { ...c.files, [TRAEFIK_DYNAMIC_FILE]: next },
       // Les empreintes de mots de passe ne doivent pas figurer en clair dans la sauvegarde Git.
       sensitiveFiles: hasBasicAuth(next) && !c.sensitiveFiles.includes(TRAEFIK_DYNAMIC_FILE) ? [...c.sensitiveFiles, TRAEFIK_DYNAMIC_FILE] : c.sensitiveFiles,
-    }));
+      // Application gérée par la console : la configuration dynamique est la seule partie que l'utilisateur modifie (ici).
+    }), { allowManaged: true });
     await audit(pool, request.actor, "settings.traefik.dynamic", `${body.change.kind} ${body.change.name}`, "success");
     return { ...result, sensitive: hasBasicAuth(next) || loaded.sensitive };
   });

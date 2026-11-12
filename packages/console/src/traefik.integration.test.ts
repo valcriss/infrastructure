@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, type BuiltApp } from "./app.js";
 import { createPool, migrate, type Pool } from "./db.js";
+import { requiredRole } from "./permissions.js";
 import { digestOf } from "./stacks.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -183,6 +184,91 @@ describe.skipIf(!url)("application Traefik (intégration)", () => {
     expect((await pool.query("SELECT count(*)::int AS n FROM audit_events WHERE action = 'settings.traefik.healthcheck'")).rows[0]?.n).toBeGreaterThanOrEqual(1);
   });
 
+  it("crée l'application gérée par la console, avec l'e-mail et la journalisation mémorisés", async () => {
+    const s = await settings();
+    expect(s.application).toMatchObject({ managed: true });
+    expect(s.settings).toMatchObject({ email: "admin@exemple.fr", production: false });
+    expect((await pool.query("SELECT managed_by FROM stacks WHERE id = $1", [s.application.id])).rows[0]?.managed_by).toBe("traefik");
+    // Contenu protégé : pas de modification manuelle du Compose ni de traefik.yml.
+    const rev = (await pool.query<{ current_revision: number }>("SELECT current_revision FROM stacks WHERE id = $1", [s.application.id])).rows[0]!.current_revision;
+    expect((await call("PUT", `/api/v1/stacks/${s.application.id}/files/traefik.yml`, { cookie: admin, body: { expectedRevision: rev, content: "log: {}\n" } })).status).toBe(423);
+  });
+
+  const latest = async (id: string) =>
+    (await pool.query<{ revision: number; compose: string; files: Record<string, string> }>("SELECT revision, compose, files FROM stack_revisions WHERE stack_id = $1 ORDER BY revision DESC LIMIT 1", [id])).rows[0]!;
+
+  it("modifie les réglages d'une application gérée : traefik.yml et Compose régénérés, configuration dynamique conservée", async () => {
+    const id = (await settings()).application.id as string;
+    const before = await latest(id);
+    const r = await call("POST", "/api/v1/settings/traefik/options", { cookie: admin, body: { email: " autre@exemple.fr ", production: true, logLevel: "DEBUG" } });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ changed: true, revision: before.revision + 1 });
+    const after = await latest(id);
+    expect(after.files["traefik.yml"]).toContain("level: DEBUG");
+    expect(after.files["traefik.yml"]).toContain('"autre@exemple.fr"');
+    expect(after.files["traefik.yml"]).not.toContain("caServer");
+    expect(after.files["dynamic/dynamic.yml"]).toBe(before.files["dynamic/dynamic.yml"]);
+    expect(after.compose).toContain("traefik healthcheck --ping");
+    expect((await settings()).settings).toMatchObject({ email: "autre@exemple.fr", production: true, logLevel: "DEBUG", certResolver: "letsencrypt", network: "proxy-existant" });
+    expect(after.compose).toContain("external: true"); // mode « réseau existant » conservé
+    expect((await call("POST", "/api/v1/settings/traefik/options", { cookie: admin, body: { email: "autre@exemple.fr", production: true, logLevel: "DEBUG" } })).json).toMatchObject({ changed: false });
+    expect((await call("POST", "/api/v1/settings/traefik/options", { cookie: admin, body: { email: "pas-un-email", production: true, logLevel: "DEBUG" } })).status).toBe(400);
+    expect((await call("POST", "/api/v1/settings/traefik/options", { cookie: admin, body: { email: "a@exemple.fr", production: true, logLevel: "TRACE" } })).status).toBe(400);
+    expect((await pool.query("SELECT count(*)::int AS n FROM audit_events WHERE action = 'settings.traefik.options'")).rows[0]?.n).toBeGreaterThanOrEqual(1);
+  });
+
+  it("détache puis reprend en charge : aperçu des changements, confirmation exigée, contenu manuel remplacé", async () => {
+    const id = (await settings()).application.id as string;
+    // Gérée : ni prise en charge ni aperçu.
+    expect((await call("POST", "/api/v1/settings/traefik/adopt/preview", { cookie: admin })).json.error.code).toBe("traefik_already_managed");
+    expect((await call("POST", "/api/v1/settings/traefik/detach", { cookie: admin })).json).toEqual({ detached: true });
+    expect((await call("POST", "/api/v1/settings/traefik/detach", { cookie: admin })).json.error.code).toBe("traefik_detached");
+    expect((await call("POST", "/api/v1/settings/traefik/options", { cookie: admin, body: { email: "a@exemple.fr", production: true, logLevel: "INFO" } })).json.error.code).toBe("traefik_detached");
+    expect((await settings()).application).toMatchObject({ managed: false });
+
+    // Détachée et inchangée : équivalente, la prise en charge ne crée aucune révision.
+    const same = await call("POST", "/api/v1/settings/traefik/adopt/preview", { cookie: admin });
+    expect(same.status).toBe(200);
+    expect(same.json).toMatchObject({ equivalent: true });
+    const rev0 = (await latest(id)).revision;
+    expect((await call("POST", "/api/v1/settings/traefik/adopt", { cookie: admin, body: {} })).json).toMatchObject({ changed: false, revision: rev0 });
+    expect((await settings()).application).toMatchObject({ managed: true });
+
+    // Modification manuelle (application détachée) : l'aperçu montre le diff et l'adoption demande confirmation.
+    await call("POST", "/api/v1/settings/traefik/detach", { cookie: admin });
+    const cur = await latest(id);
+    const edited = `${cur.files["traefik.yml"]}\naccessLog: {}\n`;
+    expect((await call("PUT", `/api/v1/stacks/${id}/files/traefik.yml`, { cookie: admin, body: { expectedRevision: cur.revision, content: edited } })).status).toBe(200);
+    const preview = await call("POST", "/api/v1/settings/traefik/adopt/preview", { cookie: admin });
+    expect(preview.json).toMatchObject({ equivalent: false });
+    expect(preview.json.staticConfig.before).toContain("accessLog");
+    expect(preview.json.staticConfig.after).not.toContain("accessLog");
+    expect(preview.json.staticConfig.after).toContain("level: DEBUG"); // réglages relus du fichier
+    const refused = await call("POST", "/api/v1/settings/traefik/adopt", { cookie: admin, body: {} });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("adoption_changes");
+    expect((await settings()).application).toMatchObject({ managed: false });
+    const adopted = await call("POST", "/api/v1/settings/traefik/adopt", { cookie: admin, body: { confirm: true } });
+    expect(adopted.json).toMatchObject({ changed: true, revision: cur.revision + 2 });
+    expect((await latest(id)).files["traefik.yml"]).not.toContain("accessLog");
+    expect((await settings()).application).toMatchObject({ managed: true });
+    expect((await call("POST", "/api/v1/settings/traefik/adopt", { cookie: admin, body: { confirm: true } })).json.error.code).toBe("traefik_already_managed");
+
+    // Fichier illisible : la prise en charge est refusée avec un message clair ; on le rétablit ensuite.
+    const good = (await latest(id)).files["traefik.yml"] as string;
+    await call("POST", "/api/v1/settings/traefik/detach", { cookie: admin });
+    const rev = (await latest(id)).revision;
+    await call("PUT", `/api/v1/stacks/${id}/files/traefik.yml`, { cookie: admin, body: { expectedRevision: rev, content: "- pas\n- un mapping\n" } });
+    expect((await call("POST", "/api/v1/settings/traefik/adopt/preview", { cookie: admin })).json.error.code).toBe("static_unreadable");
+    await call("PUT", `/api/v1/stacks/${id}/files/traefik.yml`, { cookie: admin, body: { expectedRevision: rev + 1, content: good } });
+    expect((await call("POST", "/api/v1/settings/traefik/adopt", { cookie: admin, body: {} })).status).toBe(200);
+    expect((await settings()).application).toMatchObject({ managed: true });
+  });
+
+  it("réserve les réglages aux administrateurs", () => {
+    for (const p of ["options", "adopt", "adopt/preview", "detach", "healthcheck"]) expect(requiredRole("POST", `/api/v1/settings/traefik/${p}`)).toBe("admin");
+  });
+
   it("expose un service par Traefik : aperçu, révision, relecture, retrait, et refus hors périmètre", async () => {
     const compose = 'services:\n  web:\n    image: ghost:5\n    ports:\n      - "2368"\n  db:\n    image: mysql:8\n';
     const stack = await call("POST", "/api/v1/stacks", { cookie: admin, body: { name: "blog", hostId, compose } });
@@ -331,6 +417,10 @@ describe.skipIf(!url)("application Traefik (intégration)", () => {
     rev += 1;
     expect((await files(traefikId, rev))?.files["dynamic/dynamic.yml"]).not.toContain("http:");
     expect((await call("GET", `/api/v1/stacks/${traefikId}/revisions`, { cookie: admin })).json.revisions[0].message).toBe("Traefik : middleware « auth » supprimé");
+
+    // Application gérée : le fichier ne se modifie pas à la main (423). Détachée, il redevient libre.
+    expect((await call("PUT", `/api/v1/stacks/${traefikId}/files/dynamic/dynamic.yml`, { cookie: admin, body: { expectedRevision: rev, content: "http: [" } })).status).toBe(423);
+    expect((await call("POST", "/api/v1/settings/traefik/detach", { cookie: admin })).json).toEqual({ detached: true });
 
     // Fichier modifié à la main et devenu illisible : lecture signalée, écriture refusée.
     await call("PUT", `/api/v1/stacks/${traefikId}/files/dynamic/dynamic.yml`, { cookie: admin, body: { expectedRevision: rev, content: "http: [" } });

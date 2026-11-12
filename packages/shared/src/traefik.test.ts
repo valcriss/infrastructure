@@ -2,7 +2,7 @@ import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { validateCompose } from "./compose.js";
 import { validateFilePath } from "./stack.js";
-import { addTraefikHealthcheck, generateTraefik, TRAEFIK_DEFAULTS, TRAEFIK_DYNAMIC_FILE, TRAEFIK_IMAGE, TRAEFIK_STATIC_FILE, validateTraefikOptions, type TraefikOptions } from "./traefik.js";
+import { addTraefikHealthcheck, generateTraefik, keepTraefikImage, readTraefikStatic, sameYaml, TRAEFIK_DEFAULTS, TRAEFIK_DYNAMIC_FILE, TRAEFIK_IMAGE, TRAEFIK_STATIC_FILE, traefikEquivalent, traefikNetworkMode, validateTraefikOptions, type TraefikOptions } from "./traefik.js";
 
 const base: TraefikOptions = { ...TRAEFIK_DEFAULTS, email: "admin@exemple.fr" };
 const staticOf = (o: TraefikOptions) => parse(generateTraefik(o).files[TRAEFIK_STATIC_FILE] as string) as Record<string, any>;
@@ -139,5 +139,54 @@ describe("healthcheck de Traefik", () => {
     const broken = addTraefikHealthcheck(compose, "- pas\n- un mapping\n");
     expect(broken.compose).toBe(compose);
     expect(broken.changed).toBe(false);
+  });
+});
+
+describe("application gérée : relecture et comparaison", () => {
+  it("génère le niveau de journalisation demandé et refuse un niveau inconnu", () => {
+    expect(staticOf({ ...base, logLevel: "DEBUG" }).log.level).toBe("DEBUG");
+    expect(validateTraefikOptions({ ...base, logLevel: "TRACE" as never })).toMatch(/journalisation/);
+  });
+
+  it("relit l'e-mail, le mode (production ou test) et la journalisation d'un traefik.yml", () => {
+    const prod = generateTraefik({ ...base, production: true, logLevel: "WARN" }).files[TRAEFIK_STATIC_FILE] as string;
+    expect(readTraefikStatic(prod, "letsencrypt")).toEqual({ email: "admin@exemple.fr", production: true, logLevel: "WARN" });
+    const test = generateTraefik(base).files[TRAEFIK_STATIC_FILE] as string;
+    expect(readTraefikStatic(test, "letsencrypt")).toMatchObject({ production: false });
+    expect(readTraefikStatic(test.replace(/caServer: .*/, "caServer: https://acme.zerossl.com/v2/DV90"), "letsencrypt")).toMatchObject({ production: null });
+    expect(readTraefikStatic(test, "autre-resolveur")).toEqual({ email: null, production: true, logLevel: "INFO" });
+    expect(readTraefikStatic("- pas\n- un mapping\n", "letsencrypt")).toBeNull();
+    expect(readTraefikStatic("a: [", "letsencrypt")).toBeNull();
+  });
+
+  it("reconnaît le mode du réseau : créé avec l'application ou existant", () => {
+    expect(traefikNetworkMode(generateTraefik(base).compose)).toBe("create");
+    expect(traefikNetworkMode(generateTraefik({ ...base, network: { mode: "existing", name: "proxy" } }).compose)).toBe("existing");
+    expect(traefikNetworkMode("services: {}\n")).toBeNull();
+  });
+
+  it("conserve l'image courante d'une application dont la version a été mise à jour", () => {
+    const g = generateTraefik(base);
+    expect(keepTraefikImage(g.compose, "traefik:v3.9.0")).toContain("image: traefik:v3.9.0");
+    expect(keepTraefikImage(g.compose, null)).toBe(g.compose);
+    expect(keepTraefikImage(g.compose, TRAEFIK_IMAGE)).toBe(g.compose);
+  });
+
+  it("compare des YAML sans tenir compte des commentaires, de l'ordre et de la mise en forme", () => {
+    expect(sameYaml("a: 1\nb: [x, y]\n", "# note\nb:\n  - x\n  - y\na: 1 # fin\n")).toBe(true);
+    expect(sameYaml("a: 1\n", "a: 2\n")).toBe(false);
+    expect(sameYaml("a: [", "a: 1\n")).toBe(false);
+  });
+
+  it("juge équivalente une configuration que la console aurait générée, même retouchée en surface", () => {
+    const g = generateTraefik(base);
+    const staticText = g.files[TRAEFIK_STATIC_FILE] as string;
+    expect(traefikEquivalent({ compose: g.compose, staticConfig: staticText }, g, null)).toBe(true);
+    // Commentaires et image mise à jour : toujours équivalente.
+    expect(traefikEquivalent({ compose: g.compose.replace(TRAEFIK_IMAGE, "traefik:v3.9.0") + "# note\n", staticConfig: staticText.replace("log:", "# niveau\nlog:") }, g, "traefik:v3.9.0")).toBe(true);
+    // Un réglage ajouté à la main, ou un fichier absent : différente.
+    expect(traefikEquivalent({ compose: g.compose, staticConfig: staticText + "accessLog: {}\n" }, g, null)).toBe(false);
+    expect(traefikEquivalent({ compose: g.compose.replace('"80:80"', '"8080:80"'), staticConfig: staticText }, g, null)).toBe(false);
+    expect(traefikEquivalent({ compose: g.compose, staticConfig: null }, g, null)).toBe(false);
   });
 });
