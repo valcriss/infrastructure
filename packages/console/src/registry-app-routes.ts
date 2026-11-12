@@ -1,11 +1,14 @@
 import {
+  composeServiceImage,
   generateRegistry,
   REGISTRY_AUTH_FILE,
   REGISTRY_IMAGE,
+  REGISTRY_PULL_USERNAME,
   REGISTRY_STACK_NAME,
   REGISTRY_USERNAME,
   validateRegistryOptions,
   type GeneratedRegistry,
+  type RegistryAccounts,
   type RegistryOptions,
 } from "@infra/shared";
 import bcrypt from "bcryptjs";
@@ -41,18 +44,34 @@ export async function getRegistrySettings(pool: Pick<Pool, "query">): Promise<Re
   return rows[0]?.value ?? null;
 }
 
+/** Compose généré, avec l'image courante de l'application plutôt que celle de la génération. */
+export function keepImage(generated: string, current: string | null): string {
+  return current && current !== REGISTRY_IMAGE ? generated.replace(`image: ${REGISTRY_IMAGE}`, `image: ${current}`) : generated;
+}
+
 // --- Mot de passe -------------------------------------------------------------------------------------
 
 /** Mot de passe aléatoire de 40 caractères (240 bits), jamais saisi par l'utilisateur. */
 export const newRegistryPassword = (): string => randomBytes(30).toString("base64url");
 
 /**
- * Ligne `htpasswd` du compte unique. L'empreinte est écrite `$2a$` (accepté par tous les lecteurs bcrypt, dont celui
+ * Ligne `htpasswd` d'un compte. L'empreinte est écrite `$2a$` (accepté par tous les lecteurs bcrypt, dont celui
  * du registre) : pour un mot de passe de moins de 72 octets, l'algorithme est identique à `$2b$`.
  */
-export async function htpasswdLine(password: string): Promise<string> {
+export async function htpasswdLine(password: string, user: string = REGISTRY_USERNAME): Promise<string> {
   const hash = await bcrypt.hash(password, 10);
-  return `${REGISTRY_USERNAME}:${hash.replace(/^\$2b\$/, "$2a$")}`;
+  return `${user}:${hash.replace(/^\$2b\$/, "$2a$")}`;
+}
+
+/** Deux mots de passe aléatoires (publication et lecture) et leurs lignes `htpasswd`. */
+async function newAccounts(): Promise<{ publishPassword: string; pullPassword: string; accounts: RegistryAccounts }> {
+  const publishPassword = newRegistryPassword();
+  const pullPassword = newRegistryPassword();
+  return {
+    publishPassword,
+    pullPassword,
+    accounts: { publish: await htpasswdLine(publishPassword, REGISTRY_USERNAME), pull: await htpasswdLine(pullPassword, REGISTRY_PULL_USERNAME) },
+  };
 }
 
 // --- Vérification de l'accès public -------------------------------------------------------------------
@@ -71,6 +90,12 @@ export interface ProbeResult {
   anonymous: ProbeStep;
   /** Avec les identifiants de la console, le registre répond 200. */
   authenticated: ProbeStep;
+  /** Comptes séparés : le compte de lecture lit (200). Absent tant que les comptes ne sont pas séparés. */
+  pullRead?: ProbeStep;
+  /** Comptes séparés : le compte de lecture est refusé pour une écriture (401 ou 403). */
+  pullWriteDenied?: ProbeStep;
+  /** Comptes séparés : le compte de publication peut écrire (écriture non refusée). */
+  publishWrite?: ProbeStep;
   ready: boolean;
 }
 
@@ -78,11 +103,11 @@ interface ProbeResponse {
   status: number;
 }
 
-/** GET https://hôte/v2/ avec vérification TLS complète (aucune exception). */
-function getV2(host: string, authorization?: string): Promise<ProbeResponse> {
+/** Requête https://hôte/chemin avec vérification TLS complète (aucune exception). */
+function getV2(host: string, authorization?: string, method = "GET", path = "/v2/"): Promise<ProbeResponse> {
   return new Promise((resolve, reject) => {
     const req = httpsRequest(
-      { host, port: 443, path: "/v2/", method: "GET", rejectUnauthorized: true, servername: host, timeout: 10_000, headers: { host, ...(authorization ? { authorization } : {}) } },
+      { host, port: 443, path, method, rejectUnauthorized: true, servername: host, timeout: 10_000, headers: { host, ...(authorization ? { authorization } : {}) } },
       (res) => {
         res.resume();
         resolve({ status: res.statusCode ?? 0 });
@@ -96,8 +121,19 @@ function getV2(host: string, authorization?: string): Promise<ProbeResponse> {
 
 const TLS_CODES = /CERT|SELF_SIGNED|UNABLE_TO|ERR_TLS|DEPTH_ZERO|HOSTNAME_MISMATCH|EPROTO/i;
 
-/** Contrôle ce que verront les hôtes : DNS, certificat, authentification obligatoire, identifiants valides. */
-export async function probeRegistry(host: string, credentials: { username: string; password: string } | null): Promise<ProbeResult> {
+const basic = (c: { username: string; password: string }): string => `Basic ${Buffer.from(`${c.username}:${c.password}`).toString("base64")}`;
+/** Écriture sans effet : suppression d'un manifeste inexistant (404 si l'écriture est autorisée, 401 ou 403 sinon). */
+const WRITE_PROBE = `/v2/console-probe/manifests/sha256:${"0".repeat(64)}`;
+
+/**
+ * Contrôle ce que verront les hôtes : DNS, certificat, authentification obligatoire, identifiants valides, et, quand les
+ * comptes sont séparés, que le compte de lecture lit mais n'écrit pas et que le compte de publication écrit.
+ */
+export async function probeRegistry(
+  host: string,
+  credentials: { username: string; password: string } | null,
+  pull: { username: string; password: string } | null = null,
+): Promise<ProbeResult> {
   const skipped: ProbeStep = { ok: false, detail: "Non vérifié." };
   const result: ProbeResult = { dns: skipped, tls: skipped, anonymous: skipped, authenticated: skipped, ready: false };
 
@@ -141,6 +177,27 @@ export async function probeRegistry(host: string, credentials: { username: strin
     result.authenticated = { ok: false, detail: `Connexion impossible (${err instanceof Error ? err.message : "erreur"}).` };
   }
   result.ready = result.dns.ok && result.tls.ok && result.anonymous.ok && result.authenticated.ok;
+
+  if (pull && credentials) {
+    try {
+      const read = await getV2(host, basic(pull));
+      result.pullRead = read.status === 200 ? { ok: true, detail: "Le compte de lecture est accepté (200)." } : { ok: false, detail: `Compte de lecture refusé (${read.status}) : redéployez l'application registry pour appliquer les nouveaux mots de passe.` };
+      const denied = await getV2(host, basic(pull), "DELETE", WRITE_PROBE);
+      result.pullWriteDenied = denied.status === 401 || denied.status === 403
+        ? { ok: true, detail: `Écriture refusée au compte de lecture (${denied.status}).` }
+        : { ok: false, detail: `Le compte de lecture n'est pas refusé en écriture (réponse ${denied.status}) : redéployez l'application registry (routeur Traefik d'écriture absent ?).` };
+      const write = await getV2(host, basic(credentials), "DELETE", WRITE_PROBE);
+      result.publishWrite = write.status !== 401 && write.status !== 403
+        ? { ok: true, detail: `Écriture acceptée au compte de publication (réponse ${write.status}).` }
+        : { ok: false, detail: `Le compte de publication est refusé en écriture (${write.status}).` };
+    } catch (err) {
+      const failed = { ok: false, detail: `Connexion impossible (${err instanceof Error ? err.message : "erreur"}).` };
+      result.pullRead ??= failed;
+      result.pullWriteDenied ??= failed;
+      result.publishWrite ??= failed;
+    }
+    result.ready = result.ready && !!result.pullRead?.ok && !!result.pullWriteDenied?.ok && !!result.publishWrite?.ok;
+  }
   return result;
 }
 
@@ -148,8 +205,8 @@ export async function probeRegistry(host: string, credentials: { username: strin
 
 export const RegistryAppBody = z.object({ host: z.string().max(253) });
 
-/** Empreinte factice de l'aperçu : le vrai mot de passe n'existe qu'à la création. */
-const PREVIEW_LINE = `${REGISTRY_USERNAME}:$2a$10$${".".repeat(53)}`;
+/** Empreintes factices de l'aperçu : les vrais mots de passe n'existent qu'à la création. */
+const PREVIEW_ACCOUNTS: RegistryAccounts = { publish: `${REGISTRY_USERNAME}:$2a$10$${".".repeat(53)}`, pull: `${REGISTRY_PULL_USERNAME}:$2a$10$${".".repeat(53)}` };
 
 export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Pool; auth: Guard; registries: RegistryStore }): void {
   const { pool, auth, registries } = deps;
@@ -184,6 +241,7 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
     const [traefik, settings] = await Promise.all([traefikContext(), getRegistrySettings(pool)]);
     let application: unknown = null;
     let hasPassword = false;
+    let separated = false;
     if (settings) {
       const s = await stackOf(settings.stackId);
       application = s
@@ -199,14 +257,18 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
           }
         : { missing: true };
       hasPassword = (await registries.credentials(settings.host))?.password != null;
+      separated = (await registries.pullCredentials(settings.host)) !== null;
     }
     return {
       settings,
       application,
       hasPassword,
+      /** Comptes séparés : un compte de lecture seule existe (sinon, un seul compte fait tout). */
+      separated,
       stackName: REGISTRY_STACK_NAME,
       image: REGISTRY_IMAGE,
       username: REGISTRY_USERNAME,
+      pullUsername: REGISTRY_PULL_USERNAME,
       traefik: traefik.ok
         ? {
             available: true,
@@ -237,8 +299,11 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
   // Aperçu des fichiers qui seraient créés : même validation que la création, aucun mot de passe n'est généré.
   app.post("/api/v1/settings/registry/preview", { preHandler: auth }, async (request): Promise<GeneratedRegistry> => {
     const { opts } = await prepare(request.body);
-    const g = generateRegistry(opts, PREVIEW_LINE);
-    return { compose: g.compose, files: { [REGISTRY_AUTH_FILE]: `${REGISTRY_USERNAME}:<empreinte bcrypt d'un mot de passe aléatoire, générée à la création>\n` } };
+    const g = generateRegistry(opts, PREVIEW_ACCOUNTS);
+    return {
+      compose: g.compose,
+      files: { [REGISTRY_AUTH_FILE]: `${REGISTRY_USERNAME}:<empreinte bcrypt d'un mot de passe aléatoire, générée à la création>\n${REGISTRY_PULL_USERNAME}:<idem, compte de lecture seule>\n` },
+    };
   });
 
   // Crée l'application registry (révision 1, non déployée), son mot de passe et l'enregistrement du registre.
@@ -253,8 +318,8 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
       throw new HttpError(409, "registry_credentials_exist", `Des identifiants existent déjà pour « ${registry} » : supprimez-les d'abord dans les registres d'images.`);
     }
 
-    const password = newRegistryPassword();
-    const generated = generateRegistry(opts, await htpasswdLine(password));
+    const { publishPassword: password, pullPassword, accounts } = await newAccounts();
+    const generated = generateRegistry(opts, accounts);
     const { id } = await createStack(pool, {
       name: REGISTRY_STACK_NAME,
       hostId: traefik.stack.host_id,
@@ -263,6 +328,8 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
       variables: {},
       files: generated.files,
       sensitiveFiles: [REGISTRY_AUTH_FILE],
+      // L'empreinte du compte de publication figure aussi dans les labels Traefik du Compose.
+      composeSensitive: true,
       managedBy: "registry",
       author: request.actor,
     });
@@ -277,6 +344,7 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
     };
     try {
       await registries.upsert(registry, { username: REGISTRY_USERNAME, password, insecure: false }, request.actor);
+      await registries.setPull(registry, { username: REGISTRY_PULL_USERNAME, password: pullPassword });
       await pool.query(
         `INSERT INTO app_settings (key, value) VALUES ('registry', $1)
          ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`,
@@ -308,7 +376,8 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
     if (!creds?.password) throw new HttpError(409, "registry_password_missing", "Le mot de passe n'est plus disponible : renouvelez-le.");
     await audit(pool, request.actor, "settings.registry.reveal", settings.host, "success");
     reply.header("Cache-Control", "no-store");
-    return { registry: settings.host, username: REGISTRY_USERNAME, password: creds.password };
+    const pull = await registries.pullCredentials(settings.host);
+    return { registry: settings.host, username: REGISTRY_USERNAME, password: creds.password, pull: pull ? { username: pull.username, password: pull.password } : null };
   });
 
   // Nouveau mot de passe : nouvelle révision (non déployée) et nouveaux identifiants enregistrés.
@@ -317,27 +386,38 @@ export function registerRegistryAppRoutes(app: FastifyInstance, deps: { pool: Po
     if (stack.managed_by !== "registry") throw new HttpError(409, "registry_detached", "L'application est détachée de la gestion automatique : modifiez-la à la main.");
     const traefik = await traefikContext();
     if (!traefik.ok) throw new HttpError(409, "traefik_not_configured", traefik.reason);
-    const password = newRegistryPassword();
-    const line = await htpasswdLine(password);
+    // Les deux comptes sont régénérés ; le Compose l'est aussi (l'empreinte du compte de publication figure dans les labels
+    // Traefik). Une application créée avant la séparation des comptes obtient ainsi son compte de lecture et son routeur d'écriture.
+    const wasSeparated = (await registries.pullCredentials(settings.host)) !== null;
+    const { publishPassword: password, pullPassword, accounts } = await newAccounts();
+    const generated = generateRegistry({ host: settings.host, traefik: { entryPoint: settings.entryPoint, certResolver: settings.certResolver, network: settings.network } }, accounts);
     const result = await changeStack(
       pool,
       stack.id,
       stack.current_revision,
       request.actor,
-      "Mot de passe du registre renouvelé",
-      (c) => ({ ...c, files: { ...c.files, [REGISTRY_AUTH_FILE]: `${line}\n` }, sensitiveFiles: [...new Set([...c.sensitiveFiles, REGISTRY_AUTH_FILE])] }),
+      wasSeparated ? "Mots de passe du registre renouvelés" : "Comptes du registre séparés (publication et lecture seule)",
+      (c) => ({
+        ...c,
+        // La version de l'image du registre est conservée (elle a pu être mise à jour depuis la création).
+        compose: keepImage(generated.compose, composeServiceImage(c.compose, REGISTRY_STACK_NAME)),
+        files: { ...c.files, ...generated.files },
+        sensitiveFiles: [...new Set([...c.sensitiveFiles, REGISTRY_AUTH_FILE])],
+        composeSensitive: true,
+      }),
       { allowManaged: true },
     );
     await registries.upsert(settings.host, { username: REGISTRY_USERNAME, password, insecure: false }, request.actor);
+    await registries.setPull(settings.host, { username: REGISTRY_PULL_USERNAME, password: pullPassword });
     await audit(pool, request.actor, "settings.registry.rotate", settings.host, "success");
-    return { revision: result.revision, changed: result.changed };
+    return { revision: result.revision, changed: result.changed, separated: true, newlySeparated: !wasSeparated };
   });
 
   // Contrôle ce que verront les hôtes : DNS, certificat, authentification.
   app.post("/api/v1/settings/registry/test", { preHandler: auth }, async () => {
     const { settings } = await configured();
     const creds = await registries.credentials(settings.host);
-    return probeRegistry(settings.host, creds?.username && creds.password ? { username: creds.username, password: creds.password } : null);
+    return probeRegistry(settings.host, creds?.username && creds.password ? { username: creds.username, password: creds.password } : null, await registries.pullCredentials(settings.host));
   });
 
   // Rend l'application modifiable à la main : la console n'en régénère plus le contenu.

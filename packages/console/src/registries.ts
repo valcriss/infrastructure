@@ -10,6 +10,8 @@ export interface RegistryView {
   registry: string;
   username: string | null;
   hasPassword: boolean;
+  /** Un compte de lecture seule existe (registre privé géré par la console). */
+  separated: boolean;
   insecure: boolean;
 }
 
@@ -42,9 +44,32 @@ export class RegistryStore {
     return { username: r.username, password, insecure: r.insecure };
   }
 
+  /** Compte de lecture seule d'un registre (registre privé géré par la console), ou null. */
+  async pullCredentials(registry: string): Promise<{ username: string; password: string } | null> {
+    const { rows } = await this.pool.query<{ pull_username: string | null; pull_password_enc: string | null }>(
+      "SELECT pull_username, pull_password_enc FROM registry_credentials WHERE registry = $1",
+      [registry],
+    );
+    const r = rows[0];
+    if (!r?.pull_username || !r.pull_password_enc) return null;
+    try {
+      return { username: r.pull_username, password: this.box.open(r.pull_password_enc) };
+    } catch {
+      return null; // clé maître modifiée : le compte est à régénérer
+    }
+  }
+
+  /** Enregistre le compte de lecture seule (le registre doit déjà avoir ses identifiants de publication). */
+  async setPull(registry: string, input: { username: string; password: string }): Promise<void> {
+    const res = await this.pool.query("UPDATE registry_credentials SET pull_username = $2, pull_password_enc = $3, updated_at = now() WHERE registry = $1", [registry, input.username, this.box.seal(input.password)]);
+    if ((res.rowCount ?? 0) === 0) throw new HttpError(404, "registry_not_found", "Registre introuvable.");
+  }
+
   /**
    * Identifiants à transmettre à l'agent pour télécharger ces images : uniquement ceux des registres utilisés
-   * (déduits des références, ou cités littéralement dans les textes fournis) et seulement s'ils sont complets.
+   * (déduits des références, ou cités littéralement dans les textes fournis) et seulement s'ils sont complets. Pour un
+   * registre qui a un compte de lecture seule, c'est celui-là qui est transmis : le compte de publication ne quitte pas
+   * la console, hors correctif.
    */
   async authsFor(refs: string[], texts: string[] = []): Promise<RegistryAuth[]> {
     const used = registriesOf(refs);
@@ -52,6 +77,11 @@ export class RegistryStore {
     const out: RegistryAuth[] = [];
     for (const { registry } of rows) {
       if (!used.has(registry) && !(registry !== "docker.io" && texts.some((t) => t.includes(registry)))) continue;
+      const pull = await this.pullCredentials(registry);
+      if (pull) {
+        out.push({ registry, username: pull.username, password: pull.password });
+        continue;
+      }
       const c = await this.credentials(registry);
       if (c?.username && c.password) out.push({ registry, username: c.username, password: c.password });
     }
@@ -59,10 +89,10 @@ export class RegistryStore {
   }
 
   async list(): Promise<RegistryView[]> {
-    const { rows } = await this.pool.query<{ registry: string; username: string | null; password_enc: string | null; insecure: boolean }>(
-      "SELECT registry, username, password_enc, insecure FROM registry_credentials ORDER BY registry",
+    const { rows } = await this.pool.query<{ registry: string; username: string | null; password_enc: string | null; pull_password_enc: string | null; insecure: boolean }>(
+      "SELECT registry, username, password_enc, pull_password_enc, insecure FROM registry_credentials ORDER BY registry",
     );
-    return rows.map((r) => ({ registry: r.registry, username: r.username, hasPassword: r.password_enc !== null, insecure: r.insecure }));
+    return rows.map((r) => ({ registry: r.registry, username: r.username, hasPassword: r.password_enc !== null, separated: r.pull_password_enc !== null, insecure: r.insecure }));
   }
 
   async upsert(rawRegistry: string, input: { username?: string | null; password?: string | null; insecure: boolean }, actor: string): Promise<RegistryView> {
@@ -75,7 +105,7 @@ export class RegistryStore {
     if (input.password && (input.password.length > 1024 || /\p{Cc}/u.test(input.password))) {
       throw new HttpError(400, "invalid_password", "Mot de passe ou jeton invalide.");
     }
-    const existing = await this.pool.query<{ password_enc: string | null }>("SELECT password_enc FROM registry_credentials WHERE registry = $1", [registry]);
+    const existing = await this.pool.query<{ password_enc: string | null; pull_password_enc: string | null }>("SELECT password_enc, pull_password_enc FROM registry_credentials WHERE registry = $1", [registry]);
     // Un mot de passe absent de la requête conserve l'existant (jamais renvoyé par l'API).
     const passwordEnc = input.password ? this.box.seal(input.password) : (existing.rows[0]?.password_enc ?? null);
     if (username && !passwordEnc) throw new HttpError(400, "invalid_password", "Un mot de passe ou jeton est requis avec l'identifiant.");
@@ -86,7 +116,7 @@ export class RegistryStore {
       [registry, username, username ? passwordEnc : null, input.insecure],
     );
     await audit(this.pool, actor, "registry.configure", registry, "success");
-    return { registry, username, hasPassword: username !== null && passwordEnc !== null, insecure: input.insecure };
+    return { registry, username, hasPassword: username !== null && passwordEnc !== null, separated: existing.rows[0]?.pull_password_enc != null, insecure: input.insecure };
   }
 
   async remove(rawRegistry: string, actor: string): Promise<void> {

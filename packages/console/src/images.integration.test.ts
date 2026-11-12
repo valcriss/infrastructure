@@ -305,7 +305,7 @@ describe.skipIf(!url)("images, scans Trivy et suivi des versions (intégration)"
     expect(put.json).toMatchObject({ registry: registry.host, username: "alice", hasPassword: true, insecure: true });
     expect(JSON.stringify(put.json)).not.toContain("secret");
     const list = (await call("GET", "/api/v1/registries")).json.registries as any[];
-    expect(list).toEqual([{ registry: registry.host, username: "alice", hasPassword: true, insecure: true }]);
+    expect(list).toEqual([{ registry: registry.host, username: "alice", hasPassword: true, separated: false, insecure: true }]);
     const row = (await pool.query("SELECT password_enc FROM registry_credentials")).rows[0];
     expect(row.password_enc).toMatch(/^v1:/);
     expect(row.password_enc).not.toContain("secret");

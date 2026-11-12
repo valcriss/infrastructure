@@ -11,6 +11,9 @@ interface Application { id: string; name: string; hostId: string; hostName: stri
 type TraefikInfo = { available: true; hostId: string; hostName: string | null; deployed: boolean; production: boolean; entryPoint: string; certResolver: string; network: string } | { available: false; reason: string };
 interface State {
   settings: Settings | null;
+  /** Un compte de lecture seule existe (sinon un seul compte fait tout). */
+  separated: boolean;
+  pullUsername: string;
   application: Application | { missing: true } | null;
   hasPassword: boolean;
   stackName: string;
@@ -20,7 +23,7 @@ interface State {
 }
 interface Preview { compose: string; files: Record<string, string> }
 interface Step { ok: boolean; detail: string }
-interface Probe { dns: Step; tls: Step; anonymous: Step; authenticated: Step; ready: boolean }
+interface Probe { dns: Step; tls: Step; anonymous: Step; authenticated: Step; pullRead?: Step; pullWriteDenied?: Step; publishWrite?: Step; ready: boolean }
 
 const emit = defineEmits<{ "go-traefik": [] }>();
 
@@ -32,7 +35,7 @@ const busy = ref(false);
 const host = ref("");
 const preview = ref<Preview | null>(null);
 const probe = ref<Probe | null>(null);
-const credentials = ref<{ registry: string; username: string; password: string } | null>(null);
+const credentials = ref<{ registry: string; username: string; password: string; pull: { username: string; password: string } | null } | null>(null);
 
 const field = "mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm";
 const ghost = "rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50";
@@ -78,15 +81,18 @@ const create = () =>
     },
   );
 const test = () => run(() => api<Probe>("/api/v1/settings/registry/test", { method: "POST" }), (r) => (probe.value = r));
-const reveal = () => run(() => api<{ registry: string; username: string; password: string }>("/api/v1/settings/registry/credentials", { method: "POST" }), (r) => (credentials.value = r));
+const reveal = () => run(() => api<{ registry: string; username: string; password: string; pull: { username: string; password: string } | null }>("/api/v1/settings/registry/credentials", { method: "POST" }), (r) => (credentials.value = r));
 function rotate() {
-  if (!window.confirm("Renouveler le mot de passe ? Une nouvelle révision est créée : tant que vous n'avez pas redéployé l'application registry, les accès échouent. Les hôtes connectés à la main devront se reconnecter.")) return;
+  const text = state.value?.separated
+    ? "Renouveler les mots de passe ? Une nouvelle révision est créée : tant que vous n'avez pas redéployé l'application registry, les accès échouent. Les hôtes connectés à la main devront se reconnecter."
+    : "Séparer les comptes ? Un compte de lecture seule est créé et les deux mots de passe sont renouvelés : seul le compte de lecture sera transmis aux déploiements, et seul le compte de publication pourra écrire. Une nouvelle révision est créée : tant que vous n'avez pas redéployé l'application registry, les accès échouent. Les hôtes connectés à la main devront se reconnecter.";
+  if (!window.confirm(text)) return;
   return run(
     () => api("/api/v1/settings/registry/rotate", { method: "POST" }),
     async () => {
       credentials.value = null;
       probe.value = null;
-      info.value = "Nouveau mot de passe enregistré dans une nouvelle révision. Redéployez l'application registry pour l'appliquer.";
+      info.value = "Nouveaux mots de passe enregistrés dans une nouvelle révision. Redéployez l'application registry pour les appliquer.";
       await load();
     },
   );
@@ -102,12 +108,15 @@ function detach() {
   );
 }
 
-const loginCommand = computed(() => (credentials.value ? `docker login ${credentials.value.registry} -u ${credentials.value.username}` : ""));
+const loginCommand = computed(() => (credentials.value ? `docker login ${credentials.value.registry} -u ${credentials.value.pull?.username ?? credentials.value.username}` : ""));
 const stepLabels: [keyof Omit<Probe, "ready">, string][] = [
   ["dns", "Nom de domaine"],
   ["tls", "Certificat reconnu"],
   ["anonymous", "Accès anonyme refusé"],
   ["authenticated", "Identifiants acceptés"],
+  ["pullRead", "Compte de lecture : lit"],
+  ["pullWriteDenied", "Compte de lecture : écriture refusée"],
+  ["publishWrite", "Compte de publication : écrit"],
 ];
 </script>
 
@@ -138,9 +147,22 @@ const stepLabels: [keyof Omit<Probe, "ready">, string][] = [
             </dd>
           </div>
           <div><dt class="text-xs text-slate-500">Gestion</dt><dd>{{ application.managed ? "automatique (contenu protégé)" : "détachée (modifiable à la main)" }}</dd></div>
-          <div><dt class="text-xs text-slate-500">Compte</dt><dd class="font-mono">{{ state.username }} <span class="font-sans text-xs text-slate-500">({{ state.hasPassword ? "mot de passe enregistré" : "mot de passe manquant" }})</span></dd></div>
+          <div>
+            <dt class="text-xs text-slate-500">Comptes</dt>
+            <dd>
+              <span class="font-mono">{{ state.username }}</span> <span class="text-xs text-slate-500">(publication, {{ state.hasPassword ? "mot de passe enregistré" : "mot de passe manquant" }})</span>
+              <template v-if="state.separated"><br /><span class="font-mono">{{ state.pullUsername }}</span> <span class="text-xs text-slate-500">(lecture seule, transmis aux déploiements)</span></template>
+              <span v-else class="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">comptes non séparés</span>
+            </dd>
+          </div>
           <div><dt class="text-xs text-slate-500">Image</dt><dd class="font-mono">{{ state.image }}</dd></div>
         </dl>
+        <p v-if="!state.separated && application.managed" role="note" class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-900">
+          Un seul compte fait tout, et il est transmis aux déploiements. « Séparer les comptes » crée un compte de lecture seule (seul transmis aux déploiements) et réserve l'écriture au compte de publication ; redéployez ensuite l'application registry.
+        </p>
+        <p v-else-if="state.separated" role="note" class="mt-3 rounded bg-slate-50 p-2 text-xs text-slate-600">
+          L'écriture est réservée au compte de publication par Traefik : elle ne vaut que pour les accès qui passent par Traefik (un registre joint directement sur un réseau interne n'a que l'authentification du registre).
+        </p>
         <p v-if="!application.deployed" class="mt-3 text-sm text-slate-600">Rien n'est déployé tant que vous ne l'avez pas demandé : ouvrez l'application, relisez ses fichiers, puis déployez.</p>
         <p v-if="traefik && traefik.available && !traefik.production" role="note" class="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-900">
           Traefik utilise l'autorité de test de Let's Encrypt : les démons Docker refuseront ce certificat. Passez Traefik en production (retirez <code>caServer</code> de <code>traefik.yml</code>) avant d'utiliser le registre.
@@ -148,20 +170,28 @@ const stepLabels: [keyof Omit<Probe, "ready">, string][] = [
         <div class="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
           <button :class="primary" :disabled="busy || !application.deployed" :title="application.deployed ? '' : 'Déployez d\'abord l\'application'" @click="test">Tester l'accès</button>
           <button :class="ghost" :disabled="busy || !state.hasPassword" @click="reveal">Afficher les identifiants</button>
-          <button v-if="application.managed" :class="ghost" :disabled="busy" @click="rotate">Renouveler le mot de passe</button>
+          <button v-if="application.managed" :class="ghost" :disabled="busy" @click="rotate">{{ state.separated ? "Renouveler les mots de passe" : "Séparer les comptes" }}</button>
           <button v-if="application.managed" :class="ghost" :disabled="busy" @click="detach">Détacher de la gestion automatique</button>
         </div>
 
         <ul v-if="probe" class="mt-4 space-y-1 text-sm" aria-label="Résultat du test">
-          <li v-for="[key, label] in stepLabels" :key="key" class="flex items-start gap-2">
-            <FaIcon :icon="['fas', probe[key].ok ? 'circle-check' : 'circle-xmark']" :class="probe[key].ok ? 'text-green-600' : 'text-red-600'" class="mt-0.5" />
-            <span><span class="font-medium">{{ label }}</span> <span class="text-slate-600">— {{ probe[key].detail }}</span></span>
-          </li>
+          <template v-for="[key, label] in stepLabels" :key="key">
+            <li v-if="probe[key]" class="flex items-start gap-2">
+              <FaIcon :icon="['fas', probe[key]?.ok ? 'circle-check' : 'circle-xmark']" :class="probe[key]?.ok ? 'text-green-600' : 'text-red-600'" class="mt-0.5" />
+              <span><span class="font-medium">{{ label }}</span> <span class="text-slate-600">— {{ probe[key]?.detail }}</span></span>
+            </li>
+          </template>
           <li class="pt-1 font-medium" :class="probe.ready ? 'text-green-700' : 'text-red-700'">{{ probe.ready ? "Le registre est prêt : les hôtes peuvent s'y connecter." : "Le registre n'est pas prêt." }}</li>
         </ul>
 
         <div v-if="credentials" class="mt-4 rounded border border-slate-200 bg-slate-50 p-3 text-sm">
           <p class="text-xs text-slate-500">À ne copier que là où c'est nécessaire (un « docker login » à la main). La console le transmet seule à ses propres déploiements.</p>
+          <template v-if="credentials.pull">
+            <p class="mt-2 font-medium">Lecture seule (hôtes, « docker pull »)</p>
+            <p>Identifiant : <code>{{ credentials.pull.username }}</code></p>
+            <p class="mt-1">Mot de passe : <code class="break-all">{{ credentials.pull.password }}</code><CopyButton :text="credentials.pull.password" label="Copier le mot de passe de lecture" /></p>
+            <p class="mt-3 font-medium">Publication (lecture et écriture, « docker push »)</p>
+          </template>
           <p class="mt-2">Identifiant : <code>{{ credentials.username }}</code></p>
           <p class="mt-1">Mot de passe : <code class="break-all">{{ credentials.password }}</code><CopyButton :text="credentials.password" label="Copier le mot de passe" /></p>
           <p class="mt-2 font-mono text-xs">{{ loginCommand }}<CopyButton :text="loginCommand" label="Copier la commande" /></p>

@@ -3114,7 +3114,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Identifiant et mot de passe (administrateur, journalisé, jamais mis en cache)",
+            "description": "Identifiants de publication (username, password) et de lecture seule (pull : username, password, ou null tant que les comptes ne sont pas séparés)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3158,8 +3158,8 @@
     },
     "/api/v1/settings/registry/rotate": {
       "post": {
-        "summary": "Renouveler le mot de passe du registre",
-        "description": "Redéployer l'application registry pour appliquer le nouveau mot de passe ; les hôtes qui avaient mémorisé l'ancien doivent se reconnecter.",
+        "summary": "Renouveler les mots de passe du registre (et séparer les comptes)",
+        "description": "Deux comptes : « infrastructure » (publication, lecture et écriture) et « infrastructure-pull » (lecture seule, seul transmis aux déploiements). L'écriture est réservée au compte de publication par Traefik (second routeur : toute méthode sauf GET et HEAD) ; elle ne vaut que pour les accès qui passent par Traefik. Redéployer l'application registry pour appliquer ; les hôtes qui avaient mémorisé l'ancien mot de passe doivent se reconnecter.",
         "tags": [
           "Registry"
         ],
@@ -3171,7 +3171,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Nouvelle révision (non déployée) ; les identifiants enregistrés sont remplacés",
+            "description": "Nouvelle révision (non déployée) ; les deux mots de passe et le Compose (empreinte du compte de publication dans les labels Traefik) sont régénérés, l'image du registre est conservée ; newlySeparated=true si l'application n'avait qu'un compte",
             "content": {
               "application/json": {
                 "schema": {
@@ -3865,7 +3865,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "DNS, certificat reconnu, accès anonyme refusé, identifiants acceptés, et verdict global (ready)",
+            "description": "DNS, certificat reconnu, accès anonyme refusé, identifiants acceptés ; comptes séparés : compte de lecture accepté (pullRead), écriture refusée au compte de lecture (pullWriteDenied), écriture acceptée au compte de publication (publishWrite) ; verdict global (ready)",
             "content": {
               "application/json": {
                 "schema": {

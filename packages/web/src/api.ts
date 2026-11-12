@@ -448,6 +448,8 @@ export interface RegistryEntry {
   registry: string;
   username: string | null;
   hasPassword: boolean;
+  /** Un compte de lecture seule existe (registre privé géré par la console). */
+  separated?: boolean;
   insecure: boolean;
 }
 
