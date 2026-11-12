@@ -3964,7 +3964,7 @@
         },
         "responses": {
           "200": {
-            "description": "Compose avant et après (seule la référence d'image du service change), rien n'est enregistré",
+            "description": "Avant / après : le Compose (image en clair) ou les variables de la stack (image portée par une variable, mode « variable » : le Compose ne change pas) ; rien n'est enregistré",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,4 +1,4 @@
-import { ComposeEditError, RESERVED_STACK_NAMES, composeServiceImage, editServiceImageRef } from "@infra/shared";
+import { ComposeEditError, RESERVED_STACK_NAMES, composeServiceImage, editServiceImageRef, editServiceImageVariable, effectiveImageValue, serviceImageVariable } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
 import { loadUsedImages } from "./images.js";
@@ -15,8 +15,17 @@ export interface StackTarget {
   hostName: string;
   currentRevision: number;
   deployedRevision: number | null;
-  /** Image écrite dans le Compose de la révision courante. */
+  /** Image écrite dans le Compose de la révision courante (peut être une variable : `${NOM:-défaut}`). */
   currentImage: string | null;
+  /**
+   * « image » : l'image est écrite en clair, le Compose change ; « variable » : l'image est portée par une variable de la
+   * stack, seule cette variable change (le Compose reste identique).
+   */
+  mode: "image" | "variable";
+  /** Nom de la variable qui porte l'image (mode « variable »). */
+  variable: string | null;
+  /** Image réellement utilisée après interpolation (variable ou défaut), si elle est connue. */
+  effectiveImage: string | null;
   canApply: boolean;
   /** Pourquoi l'image corrigée ne peut pas être proposée à ce service (null si elle le peut). */
   reason: string | null;
@@ -34,10 +43,20 @@ export interface ApplyRequest {
 }
 
 export interface Preview {
+  /** Texte avant / après : le Compose (mode « image ») ou les variables de la stack (mode « variable »). */
   before: string;
   after: string;
   from: string;
   to: string;
+  mode: "image" | "variable";
+  /** Ce que montre le texte avant / après. */
+  subject: "compose" | "variables";
+  variable: string | null;
+}
+
+/** Variables de la stack en `NOM=valeur` (les valeurs sensibles sont masquées), pour l'aperçu. */
+export function renderVariables(vars: Record<string, { value: string; sensitive: boolean }>): string {
+  return Object.keys(vars).sort().map((k) => `${k}=${vars[k]!.sensitive ? "••••••••" : vars[k]!.value}`).join("\n") + "\n";
 }
 
 /**
@@ -82,7 +101,9 @@ export class RemediationApply {
       if (!s) continue;
       const rev = await getRevision(this.pool, u.stackId, s.current_revision);
       const currentImage = rev ? composeServiceImage(rev.compose, u.service) : null;
-      const alreadyApplied = currentImage === job.patchedRef;
+      const imageVar = rev ? serviceImageVariable(rev.compose, u.service) : null;
+      const effectiveImage = imageVar && rev ? effectiveImageValue(imageVar, rev.variables) : currentImage;
+      const alreadyApplied = effectiveImage === job.patchedRef;
       let reason: string | null = null;
       if (RESERVED_STACK_NAMES.includes(u.stackName)) reason = "La console et son agent ne sont pas modifiés depuis leur propre interface.";
       else if (s.managed_by) reason = `Application générée et entretenue par la console (${s.managed_by}) : son contenu n'est pas modifiable à la main.`;
@@ -91,7 +112,8 @@ export class RemediationApply {
       else if (alreadyApplied) reason = "Ce service utilise déjà cette image corrigée.";
       else {
         try {
-          editServiceImageRef(rev.compose, u.service, job.patchedRef);
+          if (imageVar) editServiceImageVariable(rev.compose, u.service, job.patchedRef, rev.variables);
+          else editServiceImageRef(rev.compose, u.service, job.patchedRef);
         } catch (err) {
           if (!(err instanceof ComposeEditError)) throw err;
           reason = err.message;
@@ -100,6 +122,7 @@ export class RemediationApply {
       targets.push({
         stackId: u.stackId, stackName: u.stackName, service: u.service, hostId: u.hostId, hostName: u.hostName,
         currentRevision: s.current_revision, deployedRevision: s.deployed_revision, currentImage,
+        mode: imageVar ? "variable" : "image", variable: imageVar?.name ?? null, effectiveImage,
         canApply: reason === null, reason, alreadyApplied,
       });
     }
@@ -125,8 +148,12 @@ export class RemediationApply {
     if (stack.rows[0]?.current_revision !== req.expectedRevision) throw new HttpError(409, "revision_conflict", "La stack a une révision plus récente : rechargez la page.");
     const rev = await getRevision(this.pool, req.stackId, req.expectedRevision);
     if (!rev) throw new Error("révision courante introuvable");
+    if (serviceImageVariable(rev.compose, req.service)) {
+      const out = this.editVariable(rev.compose, req.service, job.patchedRef, rev.variables);
+      return { before: renderVariables(rev.variables), after: renderVariables(out.variables), from: out.from ?? "(aucune valeur)", to: out.to, mode: "variable", subject: "variables", variable: out.name };
+    }
     const out = this.edit(rev.compose, req.service, job.patchedRef);
-    return { before: rev.compose, after: out.compose, from: out.from, to: out.to };
+    return { before: rev.compose, after: out.compose, from: out.from, to: out.to, mode: "image", subject: "compose", variable: null };
   }
 
   async apply(id: string, req: ApplyRequest, actor: string): Promise<{ revision: number; changed: boolean; stackId: string }> {
@@ -136,8 +163,12 @@ export class RemediationApply {
       req.stackId,
       req.expectedRevision,
       actor,
-      req.message ?? `Image du service ${req.service} : image corrigée (${job.patchedTag})`,
-      (c) => ({ ...c, compose: this.edit(c.compose, req.service, job.patchedRef).compose }),
+      req.message ?? (target.mode === "variable" ? `Variable ${target.variable} (service ${req.service}) : image corrigée (${job.patchedTag})` : `Image du service ${req.service} : image corrigée (${job.patchedTag})`),
+      // Le mode est recalculé sur le contenu courant de la transaction : jamais d'après un état périmé.
+      (c) =>
+        serviceImageVariable(c.compose, req.service)
+          ? { ...c, variables: this.editVariable(c.compose, req.service, job.patchedRef, c.variables).variables }
+          : { ...c, compose: this.edit(c.compose, req.service, job.patchedRef).compose },
     );
     await this.pool.query("UPDATE remediation_jobs SET applied = applied || $2::jsonb WHERE id = $1", [
       id,
@@ -145,6 +176,17 @@ export class RemediationApply {
     ]);
     await audit(this.pool, actor, "remediation.apply", `${id} ${target.stackName}/${req.service}@${result.revision}`, "success");
     return { ...result, stackId: req.stackId };
+  }
+
+  private editVariable(compose: string, service: string, ref: string, variables: Record<string, { value: string; sensitive: boolean }>): ReturnType<typeof editServiceImageVariable> {
+    try {
+      return editServiceImageVariable(compose, service, ref, variables);
+    } catch (err) {
+      if (err instanceof ComposeEditError) {
+        throw new HttpError(err.code === "service_not_found" ? 404 : 422, err.code === "service_not_found" ? "service_not_found" : "unsupported_compose_structure", err.message);
+      }
+      throw err;
+    }
   }
 
   private edit(compose: string, service: string, ref: string): { compose: string; from: string; to: string } {

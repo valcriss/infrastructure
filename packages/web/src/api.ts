@@ -817,6 +817,11 @@ export interface RemediationTarget {
   currentRevision: number;
   deployedRevision: number | null;
   currentImage: string | null;
+  /** « image » : le Compose change ; « variable » : seule la variable de la stack qui porte l'image change. */
+  mode: "image" | "variable";
+  variable: string | null;
+  /** Image réellement utilisée après interpolation. */
+  effectiveImage: string | null;
   canApply: boolean;
   reason: string | null;
   alreadyApplied: boolean;

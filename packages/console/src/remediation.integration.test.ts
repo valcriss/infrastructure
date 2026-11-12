@@ -71,7 +71,7 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
   });
   const info = (id: string, tag: string): ImageInfo => ({ id, repoTags: [tag], repoDigests: [], size: 5_000_000, os: "linux", arch: "amd64" });
   const sendInventory = async () => {
-    const containers = [ctr("web", "alpine:3.22.0", IMG), ctr("old", "alpine:3.12", IMG_EOL), ctr("api", "alpine:3.22.0", IMG, "app2")];
+    const containers = [ctr("web", "alpine:3.22.0", IMG), ctr("old", "alpine:3.12", IMG_EOL), ctr("api", "alpine:3.22.0", IMG, "app2"), ctr("shared", "alpine:3.22.0", IMG, "app3"), ctr("secret", "alpine:3.22.0", IMG, "app4"), ctr("multi", "alpine:3.22.0", IMG, "app5")];
     const images = [info(IMG, "alpine:3.22.0"), info(IMG_EOL, "alpine:3.12")];
     ws.send(JSON.stringify({ type: "inventory", inventory: { observedAt: new Date().toISOString(), dockerVersion: "29", containers, images } }));
     await waitFor(async () => ((await pool.query("SELECT jsonb_array_length(images) AS n FROM hosts WHERE id = $1", [hostId])).rows[0]?.n ?? 0) === 2);
@@ -246,6 +246,7 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
     let validatedId = "";
     let stackId = "";
     let apiStackId = "";
+    let sharedStackId = "";
     const patchedRef = `${REGISTRY}/patched/docker-io-library-alpine@${sha("2")}`;
     const rev = async (id: string) => (await call("GET", `/api/v1/stacks/${id}`)).json;
 
@@ -255,6 +256,10 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       expect(created.status).toBe(201);
       stackId = created.json.id;
       apiStackId = (await call("POST", "/api/v1/stacks", { name: "app2", hostId, description: "", compose: "services:\n  api:\n    image: ${IMG:-alpine:3.22.0}\n", variables: {}, adopt: true })).json.id;
+      // Cas refusés : variable utilisée ailleurs, variable sensible, image composée de plusieurs variables.
+      sharedStackId = (await call("POST", "/api/v1/stacks", { name: "app3", hostId, description: "", compose: "services:\n  shared:\n    image: ${S}\n    environment:\n      A: ${S}\n", variables: { S: "alpine:3.22.0" }, adopt: true })).json.id;
+      await call("POST", "/api/v1/stacks", { name: "app4", hostId, description: "", compose: "services:\n  secret:\n    image: ${T}\n", variables: { T: { value: "alpine:3.22.0", sensitive: true } }, adopt: true });
+      await call("POST", "/api/v1/stacks", { name: "app5", hostId, description: "", compose: "services:\n  multi:\n    image: ${R:-reg.fr}/a:${V:-3.22.0}\n", variables: {}, adopt: true });
 
       // Le service reconnecté revient en ligne avec ses identifiants (la connexion a été coupée plus haut).
       ws = await connect({ kind: "credentials", ...(creds as object) }, ["scan.trivy", "image.patch"]);
@@ -265,8 +270,15 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       const web = t.json.targets.find((x: any) => x.service === "web");
       expect(web).toMatchObject({ stackName: "app", currentRevision: 1, deployedRevision: null, currentImage: "alpine:3.22.0", canApply: true, reason: null, alreadyApplied: false });
       const api = t.json.targets.find((x: any) => x.service === "api");
-      expect(api).toMatchObject({ canApply: false });
-      expect(api.reason).toContain("variable");
+      expect(api).toMatchObject({ canApply: true, reason: null, mode: "variable", variable: "IMG", currentImage: "${IMG:-alpine:3.22.0}", effectiveImage: "alpine:3.22.0" });
+      expect(web).toMatchObject({ mode: "image", variable: null });
+      const byService = (n: string) => t.json.targets.find((x: any) => x.service === n);
+      expect(byService("shared")).toMatchObject({ canApply: false, mode: "variable" });
+      expect(byService("shared").reason).toContain("utilisée ailleurs");
+      expect(byService("secret")).toMatchObject({ canApply: false });
+      expect(byService("secret").reason).toContain("sensible");
+      expect(byService("multi")).toMatchObject({ canApply: false, mode: "image" });
+      expect(byService("multi").reason).toContain("plusieurs variables");
       // Le service qui utilise une autre image n'est pas concerné.
       expect(t.json.targets.some((x: any) => x.service === "old")).toBe(false);
       // Un correctif refusé ne propose rien.
@@ -284,9 +296,35 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       expect((await rev(stackId)).currentRevision).toBe(1);
       expect((await call("POST", `/api/v1/remediations/${validatedId}/stack-revision/preview`, { ...body, expectedRevision: 9 })).status).toBe(409);
       expect((await call("POST", `/api/v1/remediations/${validatedId}/stack-revision/preview`, { ...body, service: "db" })).status).toBe(409);
-      const variable = await call("POST", `/api/v1/remediations/${validatedId}/stack-revision`, { stackId: apiStackId, service: "api", expectedRevision: 1 });
-      expect(variable.status).toBe(409);
-      expect(variable.json.error?.code ?? variable.json.code).toBe("target_not_applicable");
+      const refused = await call("POST", `/api/v1/remediations/${validatedId}/stack-revision`, { stackId: sharedStackId, service: "shared", expectedRevision: 1 });
+      expect(refused.status).toBe(409);
+      expect(refused.json.error?.code ?? refused.json.code).toBe("target_not_applicable");
+    });
+
+    it("image portée par une variable : l'aperçu montre la variable, pas le Compose, et rien n'est enregistré", async () => {
+      const p = await call("POST", `/api/v1/remediations/${validatedId}/stack-revision/preview`, { stackId: apiStackId, service: "api", expectedRevision: 1 });
+      expect(p.status).toBe(200);
+      expect(p.json).toMatchObject({ mode: "variable", subject: "variables", variable: "IMG", from: "alpine:3.22.0", to: patchedRef });
+      expect(p.json.before).not.toContain("IMG=");
+      expect(p.json.after).toBe(`IMG=${patchedRef}\n`);
+      expect((await rev(apiStackId)).currentRevision).toBe(1);
+    });
+
+    it("image portée par une variable : crée une révision non déployée qui ne change que la variable", async () => {
+      const before = await rev(apiStackId);
+      const r = await call("POST", `/api/v1/remediations/${validatedId}/stack-revision`, { stackId: apiStackId, service: "api", expectedRevision: 1 });
+      expect(r.status).toBe(201);
+      expect(r.json).toMatchObject({ revision: 2, changed: true, deployed: false });
+      const after = await rev(apiStackId);
+      expect(after.compose).toBe(before.compose);
+      expect(after).toMatchObject({ currentRevision: 2, deployedRevision: null });
+      const vars = (await pool.query<{ variables: Record<string, { value: string; sensitive: boolean }> }>("SELECT variables FROM stack_revisions WHERE stack_id = $1 AND revision = 2", [apiStackId])).rows[0]!.variables;
+      expect(vars).toEqual({ IMG: { value: patchedRef, sensitive: false } });
+      expect((await pool.query("SELECT count(*)::int AS n FROM operations")).rows[0].n).toBe(0);
+      const job = await status(validatedId);
+      expect(job.applied).toEqual(expect.arrayContaining([expect.objectContaining({ stackName: "app2", service: "api", revision: 2 })]));
+      const again = (await call("GET", `/api/v1/remediations/${validatedId}/stack-targets`)).json.targets.find((x: any) => x.service === "api");
+      expect(again).toMatchObject({ alreadyApplied: true, canApply: false, effectiveImage: patchedRef });
     });
 
     it("crée une nouvelle révision NON déployée qui ne change que l'image, et mémorise le lien", async () => {
@@ -299,7 +337,7 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
       expect((await pool.query("SELECT count(*)::int AS n FROM operations")).rows[0].n).toBe(0);
 
       const job = await status(validatedId);
-      expect(job.applied).toEqual([expect.objectContaining({ stackId, stackName: "app", service: "web", revision: 2, by: "boss@example.com" })]);
+      expect(job.applied).toEqual(expect.arrayContaining([expect.objectContaining({ stackId, stackName: "app", service: "web", revision: 2, by: "boss@example.com" })]));
       // Rejeu ou concurrence : plus rien à proposer / révision périmée.
       expect((await call("POST", `/api/v1/remediations/${validatedId}/stack-revision`, { stackId, service: "web", expectedRevision: 2 })).status).toBe(409);
       const again = (await call("GET", `/api/v1/remediations/${validatedId}/stack-targets`)).json.targets.find((x: any) => x.service === "web");

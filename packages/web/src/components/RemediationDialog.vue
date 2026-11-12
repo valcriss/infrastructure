@@ -113,7 +113,7 @@ async function open(id: string) {
 
 // --- Utiliser l'image corrigée ---------------------------------------------------------------------------
 const applying = ref<RemediationTarget | null>(null);
-const preview = ref<{ before: string; after: string } | null>(null);
+const preview = ref<{ before: string; after: string; subject: "compose" | "variables"; variable: string | null } | null>(null);
 const acceptPartial = ref(false);
 const applyBody = (t: RemediationTarget) => ({ stackId: t.stackId, service: t.service, expectedRevision: t.currentRevision, ...(acceptPartial.value ? { acceptPartial: true } : {}) });
 
@@ -128,7 +128,7 @@ async function startApply(t: RemediationTarget) {
 async function showPreview(t: RemediationTarget) {
   if (!job.value) return;
   try {
-    preview.value = await api<{ before: string; after: string }>(`/api/v1/remediations/${job.value.id}/stack-revision/preview`, { method: "POST", body: JSON.stringify(applyBody(t)) });
+    preview.value = await api<{ before: string; after: string; subject: "compose" | "variables"; variable: string | null }>(`/api/v1/remediations/${job.value.id}/stack-revision/preview`, { method: "POST", body: JSON.stringify(applyBody(t)) });
   } catch (err) {
     error.value = describeError(err);
   }
@@ -303,13 +303,14 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
           <!-- Utiliser l'image corrigée -->
           <section v-if="usable && job.patchedRef" aria-label="Utiliser l'image corrigée" class="space-y-3 border-t border-slate-100 pt-4">
             <h3 class="font-semibold">Utiliser l'image corrigée</h3>
-            <p class="text-xs text-slate-500">Crée une <strong>nouvelle révision non déployée</strong> qui ne change que l'image du service. Le déploiement reste une action explicite de l'application. Un service épinglé sur cette image n'est plus suivi par la détection de nouvelles étiquettes : relancez un correctif quand l'image officielle change.</p>
+            <p class="text-xs text-slate-500">Crée une <strong>nouvelle révision non déployée</strong> qui ne change que l'image du service (ou, si l'image est portée par une variable de la stack, que cette variable). Le déploiement reste une action explicite de l'application. Un service épinglé sur cette image n'est plus suivi par la détection de nouvelles étiquettes : relancez un correctif quand l'image officielle change.</p>
             <p v-if="!targets.length" class="text-slate-500">Aucun service d'une application gérée n'utilise actuellement cette image.</p>
             <ul v-else class="divide-y divide-slate-100 rounded-lg border border-slate-200">
               <li v-for="t in targets" :key="t.stackId + t.service" class="flex flex-wrap items-center gap-3 px-3 py-2">
                 <div class="min-w-0 flex-1">
                   <RouterLink :to="`/stacks/${t.stackId}`" class="font-medium underline" @click="emit('close')">{{ t.stackName }}/{{ t.service }}</RouterLink>
                   <span class="text-xs text-slate-500"> · {{ t.hostName }} · révision {{ t.currentRevision }}{{ t.deployedRevision === t.currentRevision ? " (déployée)" : "" }}</span>
+                  <p v-if="t.mode === 'variable'" class="text-xs text-slate-500">Image portée par la variable <code class="font-mono">{{ t.variable }}</code> : seule cette variable changera, le Compose reste identique.</p>
                   <p v-if="t.reason" class="text-xs" :class="t.alreadyApplied ? 'text-green-700' : 'text-amber-700'">{{ t.reason }}</p>
                 </div>
                 <button v-if="session.canOperate && t.canApply" :class="ghost" :disabled="busy" @click="startApply(t)">Utiliser l'image corrigée</button>
@@ -317,11 +318,12 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
             </ul>
 
             <div v-if="applying" class="space-y-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
-              <p class="font-medium">{{ applying.stackName }}/{{ applying.service }} : <code class="font-mono text-xs">{{ applying.currentImage }}</code> → image corrigée</p>
+              <p class="font-medium">{{ applying.stackName }}/{{ applying.service }} : <code class="font-mono text-xs">{{ applying.mode === 'variable' ? `${applying.variable} = ${applying.effectiveImage ?? '(aucune valeur)'}` : applying.currentImage }}</code> → image corrigée</p>
               <label v-if="job.status === 'partial'" class="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 p-2 text-amber-900">
                 <input v-model="acceptPartial" type="checkbox" class="mt-1" @change="acceptPartial ? showPreview(applying) : (preview = null)" />
                 <span>Je comprends que des vulnérabilités corrigeables subsistent dans cette image (verdict « partiel ») et je veux quand même l'utiliser.</span>
               </label>
+              <p v-if="preview?.subject === 'variables'" class="text-xs text-slate-600">Variables de l'application (les valeurs sensibles sont masquées) : le fichier Compose n'est pas modifié.</p>
               <DiffView v-if="preview" :before="preview.before" :after="preview.after" />
               <div class="flex flex-wrap gap-2">
                 <button :class="primary" :disabled="busy || !preview" @click="confirmApply">Créer la révision (sans déployer)</button>
