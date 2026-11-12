@@ -3377,6 +3377,188 @@
         }
       }
     },
+    "/api/v1/settings/remediation": {
+      "get": {
+        "summary": "Préparation planifiée des correctifs : réglages et état",
+        "tags": [
+          "Remédiation"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Réglages (enabled, maxPerDay, excluded), correctifs créés sur 24 h, pause éventuelle après des échecs répétés, dernier passage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Modifier la préparation planifiée des correctifs",
+        "description": "Administrateurs uniquement. Désactivée par défaut. Prépare des correctifs sans jamais les appliquer ni déployer ; au plus une fois par contenu d'image, dans la limite maxPerDay par 24 h, avec une pause de 24 h après trois échecs consécutifs.",
+        "tags": [
+          "Remédiation"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "maxPerDay": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "excluded": {
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "maxPerDay",
+                  "excluded"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Réglages enregistrés et état",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/remediation/run": {
+      "post": {
+        "summary": "Lancer un passage de préparation maintenant",
+        "description": "Administrateurs uniquement ; mêmes limites que la planification.",
+        "tags": [
+          "Remédiation"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Nombre de correctifs lancés (started), raison d'un passage vide (skipped : disabled, paused, daily_limit) et état",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/registry/test": {
       "post": {
         "summary": "Tester l'accès public au registre",
@@ -3636,6 +3818,125 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Introuvable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remediations/to-review": {
+      "get": {
+        "summary": "Correctifs préparés automatiquement, à relire",
+        "tags": [
+          "Remédiation"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Correctifs validés ou partiels lancés par la planification et pas encore relus (automatic=true, reviewedAt=null)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remediations/{id}/review": {
+      "post": {
+        "summary": "Marquer un correctif comme relu",
+        "description": "Sans effet sur l'image : la relecture retire seulement le correctif de la liste « à relire ». 409 tant que le correctif n'est pas terminé.",
+        "tags": [
+          "Remédiation"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Correctif relu (reviewedAt, reviewedBy)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
                 }
               }
             }

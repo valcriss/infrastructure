@@ -72,6 +72,19 @@ onMounted(() => {
 });
 onBeforeUnmount(() => window.clearInterval(timer));
 
+async function markReviewed() {
+  if (!job.value) return;
+  busy.value = true;
+  try {
+    job.value = await api<RemediationJob>(`/api/v1/remediations/${job.value.id}/review`, { method: "POST" });
+    emit("changed");
+  } catch (err) {
+    error.value = describeError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function start() {
   error.value = info.value = "";
   busy.value = true;
@@ -236,6 +249,11 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
           <ol v-if="job.active && job.status !== 'unknown'" class="flex flex-wrap gap-2 text-xs" aria-label="Étapes">
             <li v-for="(s, n) in STAGES" :key="s.status" :class="['rounded-full px-3 py-1', n < stageIndex(job.status) ? 'bg-green-100 text-green-800' : n === stageIndex(job.status) ? 'bg-blue-600 font-medium text-white' : 'bg-slate-100 text-slate-500']" :aria-current="n === stageIndex(job.status) ? 'step' : undefined">{{ s.label }}</li>
           </ol>
+          <p v-if="job.automatic" role="note" class="flex flex-wrap items-center gap-2 rounded border border-green-200 bg-green-50 p-2 text-xs text-green-900">
+            Préparé automatiquement par la planification : rien n'a été appliqué ni déployé.
+            <span v-if="job.reviewedAt" class="text-green-800">Relu par {{ job.reviewedBy }}.</span>
+            <button v-else-if="session.canOperate && !job.active" :class="ghost" :disabled="busy" @click="markReviewed">Marquer comme relu</button>
+          </p>
           <p v-if="job.active && job.status !== 'unknown'" class="text-xs text-slate-500">Suivi en direct.<template v-if="job.cancelRequested"> Arrêt demandé à l'agent : le correctif passe à « annulé » dès qu'il le confirme, sinon à « indéterminé » au bout de deux minutes.</template></p>
 
           <p v-if="job.status === 'unknown'" role="alert" class="rounded border border-orange-300 bg-orange-50 p-3 text-orange-900">{{ job.error }} Il n'est jamais relancé automatiquement.</p>

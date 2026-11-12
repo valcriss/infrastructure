@@ -19,6 +19,7 @@ import { HttpError } from "./http-error.js";
 import { loadUsedImages } from "./images.js";
 import { parseImageRef } from "./image-ref.js";
 import type { RegistryStore } from "./registries.js";
+import { AUTO_ACTOR, RemediationAuto } from "./remediation-auto.js";
 import { getRegistrySettings } from "./registry-app-routes.js";
 import type { ScanService } from "./scans.js";
 
@@ -78,6 +79,8 @@ interface DbRow {
   registry_deleted_at: Date | null;
   cancel_requested_at: Date | null;
   cancel_requested_by: string | null;
+  reviewed_at: Date | null;
+  reviewed_by: string | null;
   created_at: Date;
   started_at: Date | null;
   finished_at: Date | null;
@@ -115,6 +118,11 @@ export interface JobView {
   imageDeleted: boolean;
   /** Une annulation a été demandée à l'agent et n'est pas encore confirmée. */
   cancelRequested: boolean;
+  /** Préparé par la planification (et non à la demande d'un utilisateur). */
+  automatic: boolean;
+  /** Relu par un utilisateur (un correctif automatique est « à relire » tant qu'il ne l'est pas). */
+  reviewedAt: string | null;
+  reviewedBy: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -122,7 +130,7 @@ export interface JobView {
 
 const COLUMNS = `id, image_id, platform, host_id, image_ref, source_scan_id, policy, policy_version, status, requested_by, registry_host,
   repository, source_tag, patched_tag, patch_number, source_digest, patched_digest, tools, bilan, package_changes, config_changes,
-  labels_added, vex_statements, error, applied, registry_deleted_at, cancel_requested_at, cancel_requested_by, created_at, started_at, finished_at`;
+  labels_added, vex_statements, error, applied, registry_deleted_at, cancel_requested_at, cancel_requested_by, reviewed_at, reviewed_by, created_at, started_at, finished_at`;
 
 const toView = (r: DbRow, detail: boolean): JobView => ({
   id: r.id,
@@ -152,6 +160,9 @@ const toView = (r: DbRow, detail: boolean): JobView => ({
   applied: r.applied ?? [],
   imageDeleted: r.registry_deleted_at !== null,
   cancelRequested: r.cancel_requested_at !== null && (RUNNING as string[]).includes(r.status),
+  automatic: r.requested_by === AUTO_ACTOR,
+  reviewedAt: r.reviewed_at?.toISOString() ?? null,
+  reviewedBy: r.reviewed_by,
   createdAt: r.created_at.toISOString(),
   startedAt: r.started_at?.toISOString() ?? null,
   finishedAt: r.finished_at?.toISOString() ?? null,
@@ -183,6 +194,8 @@ export interface CreateRequest {
  */
 export class RemediationService {
   private timer: NodeJS.Timeout | undefined;
+  /** Préparation planifiée des correctifs (désactivée par défaut). */
+  readonly auto: RemediationAuto;
 
   constructor(
     private readonly pool: Pool,
@@ -190,15 +203,19 @@ export class RemediationService {
     private readonly scans: Pick<ScanService, "latestSucceeded" | "vulnerabilities">,
     private readonly registries: Pick<RegistryStore, "credentials">,
     private readonly log: { warn(msg: string): void; error(obj: unknown, msg?: string): void } = { warn: () => {}, error: () => {} },
-  ) {}
+  ) {
+    this.auto = new RemediationAuto(pool, this, (hostId) => transport.isOnline(hostId), log);
+  }
 
   start(tickMs = 60_000): void {
     this.timer = setInterval(() => void this.tick().catch((e: unknown) => this.log.error(e, "boucle de correctifs")), tickMs);
     this.timer.unref();
+    this.auto.start();
   }
 
   close(): void {
     clearInterval(this.timer);
+    this.auto.close();
   }
 
   /** Au redémarrage de la console, un job en cours a un résultat inconnu : jamais relancé automatiquement. */
@@ -336,6 +353,32 @@ export class RemediationService {
   }
 
   // --- Annulation ------------------------------------------------------------------------------------
+
+  /** Marque un correctif terminé comme relu (sans effet s'il l'est déjà). */
+  async review(id: string, actor: string): Promise<JobView> {
+    const { rows } = await this.pool.query<DbRow>(
+      `UPDATE remediation_jobs SET reviewed_at = coalesce(reviewed_at, now()), reviewed_by = coalesce(reviewed_by, $2)
+        WHERE id = $1 AND NOT (status = ANY($3::text[])) RETURNING ${COLUMNS}`,
+      [id, actor, ACTIVE],
+    );
+    if (!rows[0]) {
+      if (!(await this.get(id))) throw new HttpError(404, "remediation_not_found", "Correctif introuvable.");
+      throw new HttpError(409, "not_finished", "Ce correctif n'est pas terminé : il ne peut pas encore être relu.");
+    }
+    await audit(this.pool, actor, "remediation.review", id, "success");
+    return toView(rows[0], true);
+  }
+
+  /** Correctifs préparés automatiquement, terminés avec une image utilisable, que personne n'a encore relus. */
+  async toReview(): Promise<JobView[]> {
+    const { rows } = await this.pool.query<DbRow>(
+      `SELECT ${COLUMNS} FROM remediation_jobs
+        WHERE requested_by = $1 AND status IN ('validated', 'partial') AND reviewed_at IS NULL AND registry_deleted_at IS NULL
+        ORDER BY finished_at DESC LIMIT 100`,
+      [AUTO_ACTOR],
+    );
+    return rows.map((r) => toView(r, false));
+  }
 
   /**
    * Un job en attente est annulé. Un job « indéterminé » (connexion perdue) est abandonné par l'utilisateur, qui

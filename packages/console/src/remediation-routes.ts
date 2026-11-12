@@ -53,6 +53,14 @@ export function registerRemediationRoutes(app: FastifyInstance, deps: { auth: Gu
     return reply.code(created ? 202 : 200).send({ remediationId: job.id, status: job.status, created, url: `/api/v1/remediations/${job.id}` });
   });
 
+  // Correctifs préparés automatiquement et pas encore relus (indicateur « à relire »).
+  app.get("/api/v1/remediations/to-review", { preHandler: auth }, async () => ({ remediations: await remediation.toReview() }));
+
+  app.post("/api/v1/remediations/:id/review", { preHandler: auth }, async (request) => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    return remediation.review(id, request.actor);
+  });
+
   app.get("/api/v1/remediations", { preHandler: auth }, async (request) => {
     const q = ListRemediationsQuery.parse(request.query);
     return { remediations: await remediation.list({ imageId: q.imageId ? normalize(q.imageId) : undefined, hostId: q.hostId, status: q.status, limit: q.limit }) };

@@ -791,6 +791,10 @@ export interface RemediationJob {
   imageDeleted: boolean;
   /** Un arrêt a été demandé à l'agent et n'est pas encore confirmé. */
   cancelRequested: boolean;
+  /** Préparé par la planification, et non à la demande d'un utilisateur. */
+  automatic: boolean;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

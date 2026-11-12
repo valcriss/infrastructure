@@ -25,6 +25,7 @@ import { RegistryImages, registerRegistryImageRoutes } from "./registry-images.j
 import { RemediationService } from "./remediation.js";
 import { registerRemediationRoutes } from "./remediation-routes.js";
 import { RemediationApply } from "./remediation-apply.js";
+import { registerRemediationAutoRoutes } from "./remediation-auto.js";
 import { registerImageRoutes } from "./image-routes.js";
 import { RegistryStore } from "./registries.js";
 import { RegistryClient, createFetch } from "./registry.js";
@@ -537,6 +538,7 @@ export async function buildApp({ config, pool, logger = false, masterKey, allowI
   registerRegistryAppRoutes(app, { pool, auth: apiAuth, registries });
   registerRegistryImageRoutes(app, { auth: apiAuth, images: new RegistryImages(pool, registryClient) });
   registerRemediationRoutes(app, { auth: apiAuth, remediation, apply: new RemediationApply(pool, remediation) });
+  registerRemediationAutoRoutes(app, { pool, auth: apiAuth, auto: remediation.auto });
   registerProjectRoutes(app, { pool, auth: apiAuth, observedWatcher, storage, metrics, logStreams, isOnline: (id) => gateway.isOnline(id), applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerDashboardRoutes(app, { auth: apiAuth, dashboard, metrics, pool, applications: () => listApplications({ pool, metrics, scans, watcher, isOnline: (id) => gateway.isOnline(id) }) });
   registerStackRoutes(app, { pool, auth: apiAuth, ops, logStreams, backup, isOnline: (id) => gateway.isOnline(id) });

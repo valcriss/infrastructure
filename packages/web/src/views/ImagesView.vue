@@ -14,6 +14,9 @@ const session = useSession();
 // Correctifs d'images (remédiation) : le plus récent par contenu d'image, et l'image dont le dialogue est ouvert.
 const jobs = ref<RemediationJob[]>([]);
 const latestJob = computed(() => latestByImage(jobs.value));
+// Correctifs préparés automatiquement par la planification, utilisables, que personne n'a encore relus.
+const toReview = computed(() => jobs.value.filter((j) => j.automatic && !j.reviewedAt && !j.imageDeleted && (j.status === "validated" || j.status === "partial")));
+const imageOfJob = (j: RemediationJob): ImageView | undefined => images.value.find((i) => i.imageId === j.imageId && i.platform === j.platform);
 const fixing = ref<ImageView | null>(null);
 const error = ref("");
 const info = ref("");
@@ -174,6 +177,17 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </select>
       </div>
     </div>
+    <section v-if="toReview.length > 0" aria-label="Correctifs à relire" class="rounded-xl border border-green-300 bg-green-50 p-4 text-sm text-green-900">
+      <p class="font-medium">{{ toReview.length }} correctif(s) préparé(s) automatiquement, à relire</p>
+      <p class="text-xs">Rien n'a été appliqué ni déployé : relisez le bilan, puis utilisez l'image corrigée dans une application si vous le souhaitez.</p>
+      <ul class="mt-2 space-y-1">
+        <li v-for="j in toReview" :key="j.id" class="flex flex-wrap items-center gap-2">
+          <span class="font-mono text-xs">{{ j.imageRef }}</span>
+          <span :class="['rounded-full px-2 py-0.5 text-xs font-medium', statusClass(j.status)]">{{ statusLabel(j.status) }}</span>
+          <button v-if="imageOfJob(j)" class="rounded border border-green-400 px-2 py-0.5 text-xs hover:bg-green-100" @click="fixing = imageOfJob(j) ?? null">Relire</button>
+        </li>
+      </ul>
+    </section>
     <section v-if="queue.pending + queue.running > 0" class="rounded-xl border border-blue-300 bg-blue-50 p-4 text-sm text-blue-900" role="status" aria-live="polite">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="flex items-center gap-2 font-medium">
