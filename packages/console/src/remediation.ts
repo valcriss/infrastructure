@@ -13,6 +13,7 @@ import {
   type PatchResult,
   type PatchStage,
   type RegistryAuth,
+  type VerifyCheck,
 } from "@infra/shared";
 import { audit, type Pool } from "./db.js";
 import { HttpError } from "./http-error.js";
@@ -21,6 +22,7 @@ import { parseImageRef } from "./image-ref.js";
 import type { RegistryStore } from "./registries.js";
 import type { Notifier } from "./notifications.js";
 import { AUTO_ACTOR, RemediationAuto } from "./remediation-auto.js";
+import { verifyCheckFor } from "./remediation-verify.js";
 import { getRegistrySettings } from "./registry-app-routes.js";
 import type { ScanService } from "./scans.js";
 
@@ -78,6 +80,7 @@ interface DbRow {
   error: string | null;
   applied: JobView["applied"] | null;
   registry_deleted_at: Date | null;
+  verify_check: VerifyCheck | null;
   cancel_requested_at: Date | null;
   cancel_requested_by: string | null;
   reviewed_at: Date | null;
@@ -131,7 +134,7 @@ export interface JobView {
 
 const COLUMNS = `id, image_id, platform, host_id, image_ref, source_scan_id, policy, policy_version, status, requested_by, registry_host,
   repository, source_tag, patched_tag, patch_number, source_digest, patched_digest, tools, bilan, package_changes, config_changes,
-  labels_added, vex_statements, error, applied, registry_deleted_at, cancel_requested_at, cancel_requested_by, reviewed_at, reviewed_by, created_at, started_at, finished_at`;
+  labels_added, vex_statements, error, applied, registry_deleted_at, verify_check, cancel_requested_at, cancel_requested_by, reviewed_at, reviewed_by, created_at, started_at, finished_at`;
 
 const toView = (r: DbRow, detail: boolean): JobView => ({
   id: r.id,
@@ -465,6 +468,7 @@ export class RemediationService {
       return true;
     }
     const auth: RegistryAuth = { registry: job.registry_host, username: creds.username, password: creds.password };
+    const check = await verifyCheckFor(this.pool, job.image_ref);
     const message: PatchMessage = {
       type: "patch",
       jobId: job.id,
@@ -475,8 +479,10 @@ export class RemediationService {
       target: { registry: job.registry_host, repository: job.repository, sourceTag: job.source_tag, patchedTag: job.patched_tag },
       registryAuths: [auth],
       timeoutSec: PATCH_TIMEOUT_SEC,
+      // Vérification de démarrage configurée pour cette image (facultative) : conservée avec le job pour la provenance.
+      ...(check ? { verify: check } : {}),
     };
-    await client.query("UPDATE remediation_jobs SET status = 'preparing', started_at = now() WHERE id = $1 AND status = 'queued'", [job.id]);
+    await client.query("UPDATE remediation_jobs SET status = 'preparing', started_at = now(), verify_check = $2 WHERE id = $1 AND status = 'queued'", [job.id, check ? JSON.stringify(check) : null]);
     if (!this.transport.send(job.host_id, message)) {
       await client.query("UPDATE remediation_jobs SET status = 'queued', started_at = NULL WHERE id = $1", [job.id]);
       return false;
@@ -522,7 +528,14 @@ export class RemediationService {
       void this.pumpAny().catch(() => undefined);
       return;
     }
-    const bilan = evaluateRemediation({ before: msg.before, after: msg.after, configChanges: msg.configChanges ?? [], labelsAdded: msg.labelsAdded ?? [] });
+    const bilan = evaluateRemediation({
+      before: msg.before,
+      after: msg.after,
+      configChanges: msg.configChanges ?? [],
+      labelsAdded: msg.labelsAdded ?? [],
+      // Une vérification configurée mais sans résultat (agent ancien) est « non effectuée », jamais « réussie ».
+      verification: job.verify_check ? { check: job.verify_check, source: msg.verification?.source ?? null, patched: msg.verification?.patched ?? null } : null,
+    });
     await this.pool.query(
       `UPDATE remediation_jobs SET status = $2, finished_at = now(), error = NULL, source_digest = $3, patched_digest = $4, tools = $5, bilan = $6,
               package_changes = $7, config_changes = $8, labels_added = $9, vex_statements = $10 WHERE id = $1`,

@@ -451,6 +451,31 @@ export const PatchScanSchema = z.object({
 });
 export type PatchScan = z.infer<typeof PatchScanSchema>;
 
+/**
+ * Vérification de démarrage d'une image (facultative, par image) : une commande lancée dans un conteneur jetable et
+ * isolé (sans réseau, système de fichiers en lecture seule, sans capacités, sans volume ni variable d'environnement),
+ * sur l'image d'origine puis sur l'image corrigée. La commande est une liste d'arguments passée à l'image (après son
+ * ENTRYPOINT) : jamais de shell.
+ */
+export const VerifyCheckSchema = z.object({
+  command: z.array(z.string().min(1).max(200).regex(/^[^\0\r\n]*$/)).min(1).max(16),
+  /** Code de sortie attendu. */
+  expectExit: z.number().int().min(0).max(255),
+  /** Texte qui doit figurer dans la sortie (comparaison littérale, jamais une expression régulière). */
+  outputContains: z.string().min(1).max(200).nullable(),
+});
+export type VerifyCheck = z.infer<typeof VerifyCheckSchema>;
+
+/** Résultat d'une exécution : jamais la sortie elle-même (elle pourrait contenir des secrets), seulement ce qu'elle prouve. */
+export const VerifyRunSchema = z.object({
+  ok: z.boolean(),
+  exitCode: z.number().int().nullable(),
+  timedOut: z.boolean(),
+  /** La sortie contient le texte attendu ; null si aucun texte n'était demandé. */
+  outputMatched: z.boolean().nullable(),
+});
+export type VerifyRun = z.infer<typeof VerifyRunSchema>;
+
 export const PATCH_STAGES = ["preparing", "scanning_before", "patching", "scanning_after", "verifying"] as const;
 export type PatchStage = (typeof PATCH_STAGES)[number];
 
@@ -493,6 +518,8 @@ export const PatchResultSchema = z.object({
   labelsAdded: z.array(z.string().max(100)).max(30).optional(),
   /** Nombre de déclarations du document VEX produit par le moteur. */
   vexStatements: z.number().int().min(0).optional(),
+  /** Vérification de démarrage demandée : résultat sur l'image d'origine et sur l'image corrigée. */
+  verification: z.object({ source: VerifyRunSchema, patched: VerifyRunSchema }).optional(),
 });
 export type PatchResult = z.infer<typeof PatchResultSchema>;
 
@@ -759,6 +786,8 @@ export const PatchSchema = z.object({
   /** Identifiants du registre cible (lecture et publication). */
   registryAuths: z.array(RegistryAuthSchema).max(5).optional(),
   timeoutSec: z.number().int().min(60).max(7200),
+  /** Vérification de démarrage à exécuter sur l'image d'origine et sur l'image corrigée (capacité `image.patch.verify`). */
+  verify: VerifyCheckSchema.optional(),
 });
 export type PatchMessage = z.infer<typeof PatchSchema>;
 

@@ -6,6 +6,7 @@ import {
   type PatchResult,
   type PatchScan,
   type RegistryAuth,
+  type VerifyRun,
 } from "@infra/shared";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import { authKey, prepareDockerAuth } from "./docker-auth.js";
 import { dockerGet } from "./docker.js";
 import { dockerEnv, runCommand } from "./exec.js";
 import { normalizeReport, parseTrivyVersion, trivyProxyEnv } from "./scanner.js";
+import { runVerify, type VerifyExec } from "./verify.js";
 
 /**
  * Correctif d'une image locale (ADR 0002) : l'image source n'est jamais modifiée. Elle est copiée dans le registre cible,
@@ -415,6 +417,16 @@ export class ImagePatcher {
         /* document VEX absent : sans conséquence pour le verdict */
       }
 
+      // 8. Vérification de démarrage (facultative) : la même commande sur l'image d'origine puis sur l'image corrigée.
+      let verification: PatchResult["verification"];
+      if (msg.verify) {
+        progress("verifying", "Vérification de démarrage");
+        const check = msg.verify;
+        const exec: VerifyExec = (args, ms) => docker(args, ms, dockerEnv(cfg.dockerSocket));
+        const run = (suffix: string, image: string): Promise<VerifyRun> => runVerify(exec, `console-docker-patch-verify-${id8}-${suffix}`, image, check);
+        verification = { source: await run("src", msg.imageId), patched: await run("patched", patchedByDigest) };
+      }
+
       return {
         type: "patch_result",
         jobId: msg.jobId,
@@ -428,6 +440,7 @@ export class ImagePatcher {
         configChanges: diff.configChanges,
         labelsAdded: diff.labelsAdded,
         vexStatements,
+        ...(verification ? { verification } : {}),
       };
     } catch (err) {
       if (err instanceof CancelledError) return { type: "patch_result", jobId: msg.jobId, status: "cancelled", error: "Correctif arrêté à la demande de la console." };
@@ -436,7 +449,7 @@ export class ImagePatcher {
       // Le nettoyage ne doit jamais faire perdre le résultat, ni être interrompu par l'annulation qu'il suit.
       const quiet = dockerEnv(cfg.dockerSocket);
       const cleanup = (args: string[], ms: number): Promise<unknown> => runCommand("docker", args, { env: quiet, timeoutMs: ms }).catch(() => undefined);
-      for (const name of [`console-docker-patch-copa-${id8}`, ...Array.from({ length: 3 }, (_, i) => `console-docker-patch-trivy-${id8}-${i}`), bk]) {
+      for (const name of [`console-docker-patch-copa-${id8}`, `console-docker-patch-verify-${id8}-src`, `console-docker-patch-verify-${id8}-patched`, ...Array.from({ length: 3 }, (_, i) => `console-docker-patch-trivy-${id8}-${i}`), bk]) {
         await cleanup(["rm", "-f", name], 20_000);
       }
       try {

@@ -430,6 +430,79 @@ describe.skipIf(!url)("remédiation des images (intégration)", () => {
     });
   });
 
+  describe("vérification de démarrage (facultative)", () => {
+    const check = { image: "alpine", command: ["apk", "--version"], expectExit: 0, outputContains: "apk-tools" };
+    const run = (ok: boolean, exitCode = ok ? 0 : 1) => ({ ok, exitCode, timedOut: false, outputMatched: ok ? true : false });
+    const setChecks = (checks: unknown[]) => call("PUT", "/api/v1/settings/remediation/verification", { checks });
+
+    it("se règle par image (sans étiquette), valide la commande et refuse les doublons", async () => {
+      expect((await call("GET", "/api/v1/settings/remediation/verification")).json).toEqual({ checks: [] });
+      const put = await setChecks([check]);
+      expect(put.status).toBe(200);
+      expect(put.json.checks).toEqual([{ image: "docker.io/library/alpine", command: ["apk", "--version"], expectExit: 0, outputContains: "apk-tools" }]);
+      expect((await call("GET", "/api/v1/settings/remediation/verification")).json.checks).toHaveLength(1);
+      // Une version n'est pas une image ; deux vérifications pour la même image sont ambiguës.
+      expect((await setChecks([{ ...check, image: "alpine:3.22" }])).status).toBe(400);
+      expect((await setChecks([check, { ...check, image: "docker.io/library/alpine" }])).status).toBe(400);
+      for (const command of [[], [""], ["a\nb"], Array.from({ length: 17 }, () => "x"), ["x".repeat(201)]]) expect((await setChecks([{ ...check, command }])).status, JSON.stringify(command)).toBe(400);
+      expect((await setChecks([{ ...check, expectExit: 256 }])).status).toBe(400);
+      expect((await pool.query("SELECT 1 FROM audit_events WHERE action = 'settings.remediation.verification'")).rowCount).toBeGreaterThan(0);
+      await setChecks([check]);
+    });
+
+    it("transmet la commande à l'agent, la conserve avec le correctif, et mentionne une vérification réussie", async () => {
+      const { r, wait } = await start();
+      expect(r.status).toBe(202);
+      const msg = await wait();
+      expect(msg.verify).toEqual({ command: ["apk", "--version"], expectExit: 0, outputContains: "apk-tools" });
+      expect((await pool.query("SELECT verify_check FROM remediation_jobs WHERE id = $1", [msg.jobId])).rows[0].verify_check).toEqual(msg.verify);
+      finish(msg.jobId, { verification: { source: run(true), patched: run(true) } });
+      await waitFor(async () => (await status(msg.jobId)).status === "validated");
+      const job = await status(msg.jobId);
+      expect(job.bilan.verification).toMatchObject({ state: "passed", check: msg.verify, source: { ok: true }, patched: { ok: true } });
+      // Seuls les résultats sont conservés : jamais la sortie de la commande.
+      expect(JSON.stringify(job.bilan.verification)).not.toMatch(/output"|stdout|stderr/);
+    });
+
+    it("refuse un correctif qui régresse (réussit avant, échoue après)", async () => {
+      const { wait } = await start();
+      const msg = await wait();
+      finish(msg.jobId, { verification: { source: run(true), patched: run(false, 127) } });
+      await waitFor(async () => (await status(msg.jobId)).status === "rejected");
+      const job = await status(msg.jobId);
+      expect(job.bilan.verification.state).toBe("regression");
+      expect(job.bilan.reasons.join(" ")).toContain("Régression détectée");
+      expect(job.bilan.reasons.join(" ")).toContain("127");
+    });
+
+    it("une vérification non concluante ou non effectuée (agent ancien) ne change pas le verdict", async () => {
+      const first = await (await start()).wait();
+      finish(first.jobId, { verification: { source: run(false), patched: run(false) } });
+      await waitFor(async () => (await status(first.jobId)).status === "validated");
+      expect((await status(first.jobId)).bilan.verification.state).toBe("inconclusive");
+
+      const second = await (await start()).wait();
+      finish(second.jobId); // aucun résultat de vérification : agent qui ne la connaît pas
+      await waitFor(async () => (await status(second.jobId)).status === "validated");
+      expect((await status(second.jobId)).bilan.verification).toMatchObject({ state: "skipped", source: null, patched: null });
+    });
+
+    it("sans vérification configurée pour l'image : rien n'est demandé ni mentionné", async () => {
+      await setChecks([]);
+      const { wait } = await start();
+      const msg = await wait();
+      expect(msg).not.toHaveProperty("verify");
+      finish(msg.jobId);
+      await waitFor(async () => (await status(msg.jobId)).status === "validated");
+      expect((await status(msg.jobId)).bilan.verification).toBeNull();
+    });
+
+    it("réserve la lecture à tous et l'écriture aux administrateurs", () => {
+      expect(requiredRole("GET", "/api/v1/settings/remediation/verification")).toBe("viewer");
+      expect(requiredRole("PUT", "/api/v1/settings/remediation/verification")).toBe("admin");
+    });
+  });
+
   it("limite l'accès : lecture pour tous, lancement et annulation pour les opérateurs", () => {
     expect(requiredRole("GET", "/api/v1/images/:imageId/remediation/eligibility")).toBe("viewer");
     expect(requiredRole("GET", "/api/v1/remediations")).toBe("viewer");

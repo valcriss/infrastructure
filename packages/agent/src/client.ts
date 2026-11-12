@@ -262,7 +262,7 @@ export class AgentClient {
           protocol: PROTOCOL_VERSION,
           agentVersion: AGENT_VERSION,
           hostname: this.config.hostname,
-          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy", "image.patch", "image.patch.cancel", "registry.gc"],
+          capabilities: ["docker.standalone", "inventory", "compose.deploy", "logs.stream", "terminal.exec", "image.pull", "metrics", "scan.trivy", "image.patch", "image.patch.cancel", "image.patch.verify", "registry.gc"],
           auth: auth,
         });
       });

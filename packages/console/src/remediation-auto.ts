@@ -44,14 +44,20 @@ export async function getAutoSettings(pool: Pick<Pool, "query">): Promise<AutoSe
   return { ...DEFAULT_AUTO, ...(rows[0]?.value ?? {}) };
 }
 
+/** Clé d'une image saisie par un administrateur (exclusion, vérification) : le dépôt, jamais une version. */
+export function exclusionKey(raw: string): string {
+  const value = raw.trim();
+  // Un réglage vise toute l'image (dépôt), jamais une version : une étiquette ou un digest serait trompeur.
+  if (value.includes("@") || /:/.test(value.slice(value.lastIndexOf("/") + 1))) throw new HttpError(400, "invalid_setting", `Indiquez l'image sans étiquette ni digest : « ${raw} ».`);
+  const key = imageKey(value);
+  if (!key) throw new HttpError(400, "invalid_setting", `Image invalide : « ${raw} » (ex. postgres ou ghcr.io/org/app).`);
+  return key;
+}
+
 export async function setAutoSettings(pool: Pool, input: AutoSettings): Promise<AutoSettings> {
   const excluded: string[] = [];
   for (const raw of input.excluded) {
-    const value = raw.trim();
-    // Une exclusion vise toute l'image (dépôt), jamais une version : une étiquette ou un digest serait trompeur.
-    if (value.includes("@") || /:/.test(value.slice(value.lastIndexOf("/") + 1))) throw new HttpError(400, "invalid_setting", `Indiquez l'image sans étiquette ni digest : « ${raw} ».`);
-    const key = imageKey(value);
-    if (!key) throw new HttpError(400, "invalid_setting", `Image invalide : « ${raw} » (ex. postgres ou ghcr.io/org/app).`);
+    const key = exclusionKey(raw);
     if (!excluded.includes(key)) excluded.push(key);
   }
   const next: AutoSettings = { enabled: input.enabled, maxPerDay: input.maxPerDay, excluded };

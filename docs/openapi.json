@@ -30,10 +30,10 @@
       "name": "Registry"
     },
     {
-      "name": "Notifications"
+      "name": "Remédiation"
     },
     {
-      "name": "Remédiation"
+      "name": "Notifications"
     },
     {
       "name": "Stacks"
@@ -3252,6 +3252,166 @@
           },
           "409": {
             "description": "Conflit (révision, opération en cours, agent hors ligne…)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/remediation/verification": {
+      "get": {
+        "summary": "Vérifications de démarrage des correctifs",
+        "tags": [
+          "Remédiation"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Une vérification facultative par image (dépôt sans étiquette) : commande, code de sortie attendu, texte attendu dans la sortie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Modifier les vérifications de démarrage",
+        "description": "Administrateurs uniquement. La commande est une liste d'arguments passée à l'image (après son ENTRYPOINT), sans shell, lancée dans un conteneur jetable isolé (sans réseau, lecture seule, sans capacités, sans volume ni variable d'environnement, 30 s) sur l'image d'origine puis sur l'image corrigée. Réussie avant et en échec après : correctif refusé (régression). Échec avant : non concluante. Seuls les résultats (code de sortie, texte trouvé) sont conservés, jamais la sortie.",
+        "tags": [
+          "Remédiation"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "checks": {
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "image": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "command": {
+                          "minItems": 1,
+                          "maxItems": 16,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^[^\\0\\r\\n]*$"
+                          }
+                        },
+                        "expectExit": {
+                          "default": 0,
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 255
+                        },
+                        "outputContains": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "image",
+                        "command"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "checks"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Vérifications enregistrées (liste complète remplacée)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requête invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentification requise ou invalide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Interdit (jeton en lecture seule, origine refusée…)",
             "content": {
               "application/json": {
                 "schema": {

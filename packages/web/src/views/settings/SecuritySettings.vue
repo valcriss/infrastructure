@@ -5,6 +5,7 @@ import AcceptedRisks from "../../components/AcceptedRisks.vue";
 import PanelCard from "../../components/PanelCard.vue";
 import NotificationSettings from "../../components/NotificationSettings.vue";
 import RemediationAutoSettings from "../../components/RemediationAutoSettings.vue";
+import RemediationVerifySettings from "../../components/RemediationVerifySettings.vue";
 
 // Réglages de l'application pour la sécurité des images : périodicité des scans et registres.
 const registries = ref<RegistryEntry[]>([]);
@@ -114,6 +115,8 @@ onMounted(() => void load());
       </PanelCard>
 
       <RemediationAutoSettings />
+
+      <RemediationVerifySettings />
 
       <NotificationSettings />
 

@@ -313,6 +313,12 @@ const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-whi
               <template v-if="job.labelsAdded?.length"> · libellé(s) ajouté(s) : {{ job.labelsAdded.join(", ") }}</template>.
             </p>
 
+            <p v-if="job.bilan?.verification" class="text-xs" :class="job.bilan.verification.state === 'regression' ? 'text-red-700' : job.bilan.verification.state === 'passed' ? 'text-green-700' : 'text-amber-700'" aria-label="Vérification de démarrage">
+              Vérification de démarrage (<code class="font-mono">{{ job.bilan.verification.check.command.join(" ") }}</code>) :
+              <strong>{{ { passed: "réussie sur l'image d'origine et sur l'image corrigée", regression: "régression : réussit sur l'image d'origine, échoue sur l'image corrigée", inconclusive: "non concluante : elle échoue déjà sur l'image d'origine", skipped: "non effectuée : l'agent de l'hôte ne la connaît pas" }[job.bilan.verification.state] }}</strong>.
+            </p>
+            <p v-else class="text-xs text-slate-500">Aucune vérification de démarrage configurée pour cette image (Paramètres → Sécurité des images).</p>
+
             <section aria-label="Provenance" class="rounded bg-slate-50 p-3 text-xs text-slate-700">
               <p v-if="job.patchedRef" class="break-all"><strong>Référence immuable :</strong> <code class="font-mono">{{ job.patchedRef }}</code><CopyButton :text="job.patchedRef" label="Copier la référence" /></p>
               <p class="mt-1">Moteur Copa {{ job.tools?.copa ?? "?" }} · BuildKit {{ job.tools?.buildkit ?? "?" }} · Trivy {{ job.tools?.trivy ?? "?" }}<template v-if="job.vexStatements !== null"> · document VEX : {{ job.vexStatements }} déclaration(s)</template></p>

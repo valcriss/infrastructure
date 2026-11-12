@@ -97,4 +97,4 @@ jobs:
       # exige de les autoriser. Même réglage à faire sur un hôte réel (voir docs/exploitation.md).
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: docker build --target patcher -t "$PATCHER_IMAGE" .
-      - run: npx vitest run packages/agent/src/patcher.e2e.test.ts packages/agent/src/registry-gc.e2e.test.ts packages/console/src/registry-accounts.e2e.test.ts
+      - run: npx vitest run packages/agent/src/patcher.e2e.test.ts packages/agent/src/registry-gc.e2e.test.ts packages/console/src/registry-accounts.e2e.test.ts packages/agent/src/verify.e2e.test.ts

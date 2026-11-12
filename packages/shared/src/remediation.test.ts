@@ -105,3 +105,52 @@ describe("nommage", () => {
     expect(patchedTagFor("v1/rc 2", 1)).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/);
   });
 });
+
+describe("évaluation avec vérification de démarrage", () => {
+  const check = { command: ["nginx", "-t"], expectExit: 0, outputContains: null };
+  const run = (ok: boolean, exitCode: number | null = ok ? 0 : 1) => ({ ok, exitCode, timedOut: false, outputMatched: null });
+  const base = (verification: Parameters<typeof evaluateRemediation>[0]["verification"]) =>
+    evaluateRemediation(input([vuln("CVE-1", "HIGH", "2")], [], { verification }));
+
+  it("sans vérification configurée : aucune mention, verdict inchangé", () => {
+    const b = base(undefined);
+    expect(b.verification).toBeNull();
+    expect(b.verdict).toBe("validated");
+  });
+
+  it("réussie sur les deux images : mention positive, verdict inchangé", () => {
+    const b = base({ check, source: run(true), patched: run(true) });
+    expect(b.verification).toMatchObject({ state: "passed", check });
+    expect(b.verdict).toBe("validated");
+  });
+
+  it("régression (réussit avant, échoue après) : correctif refusé, avec le code de sortie", () => {
+    const b = base({ check, source: run(true), patched: run(false, 127) });
+    expect(b.verification?.state).toBe("regression");
+    expect(b.verdict).toBe("rejected");
+    expect(b.reasons.join(" ")).toContain("Régression détectée");
+    expect(b.reasons.join(" ")).toContain("code de sortie 127, attendu 0");
+    // Un délai dépassé est signalé comme tel.
+    expect(base({ check, source: run(true), patched: { ok: false, exitCode: null, timedOut: true, outputMatched: null } }).reasons.join(" ")).toContain("délai dépassé");
+  });
+
+  it("échec sur l'image d'origine : non concluante, sans effet sur le verdict (même si l'image corrigée échoue aussi)", () => {
+    for (const patched of [run(true), run(false)]) {
+      const b = base({ check, source: run(false), patched });
+      expect(b.verification?.state).toBe("inconclusive");
+      expect(b.verdict).toBe("validated");
+    }
+  });
+
+  it("agent ancien (résultats absents) : non effectuée, sans effet sur le verdict", () => {
+    const b = base({ check, source: null, patched: null });
+    expect(b.verification?.state).toBe("skipped");
+    expect(b.verdict).toBe("validated");
+  });
+
+  it("la régression s'ajoute aux autres raisons de refus", () => {
+    const b = evaluateRemediation(input([vuln("CVE-1", "HIGH", "2")], [], { configChanges: ["Entrypoint"], verification: { check, source: run(true), patched: run(false) } }));
+    expect(b.verdict).toBe("rejected");
+    expect(b.reasons).toHaveLength(2);
+  });
+});

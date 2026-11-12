@@ -3,7 +3,7 @@
  * Le verdict vient toujours d'un nouveau scan de l'image produite, à options identiques : jamais du résumé du moteur
  * (voir docs/adr/0002-remediation-images.md).
  */
-import type { PatchScan, PatchVulnerability, Severity } from "./protocol.js";
+import type { PatchScan, PatchVulnerability, Severity, VerifyCheck, VerifyRun } from "./protocol.js";
 
 /** Distributions que le moteur sait corriger (testées au spike). */
 export const PATCHABLE_FAMILIES = ["alpine", "debian"] as const;
@@ -83,6 +83,25 @@ export interface BilanVulnerability {
   fixed: string | null;
 }
 
+/**
+ * Vérification de démarrage : « réussie » sur les deux images, « régression » (réussit sur l'image d'origine, échoue sur
+ * l'image corrigée), « non concluante » (échoue sur l'image d'origine : rien à comparer), « non effectuée » (agent ancien).
+ */
+export type VerificationState = "passed" | "regression" | "inconclusive" | "skipped";
+
+export interface Verification {
+  state: VerificationState;
+  check: VerifyCheck;
+  source: VerifyRun | null;
+  patched: VerifyRun | null;
+}
+
+export function verificationState(source: VerifyRun | null, patched: VerifyRun | null): VerificationState {
+  if (!source || !patched) return "skipped";
+  if (!source.ok) return "inconclusive";
+  return patched.ok ? "passed" : "regression";
+}
+
 export interface Bilan {
   verdict: RemediationVerdict;
   /** Raisons lisibles du verdict (au moins une quand il n'est pas « validé »). */
@@ -104,6 +123,8 @@ export interface Bilan {
   added: BilanVulnerability[];
   /** Les listes ci-dessus sont plafonnées. */
   truncatedLists: boolean;
+  /** Vérification de démarrage, si elle était configurée pour cette image. */
+  verification: Verification | null;
 }
 
 export interface VerdictInput {
@@ -113,6 +134,8 @@ export interface VerdictInput {
   labelsAdded: string[];
   /** Exige au moins une CVE résolue (défaut). */
   requireNetDecrease?: boolean;
+  /** Vérification de démarrage configurée : sa commande et ses résultats (absents : agent ancien). */
+  verification?: { check: VerifyCheck; source: VerifyRun | null; patched: VerifyRun | null } | null;
 }
 
 const LIST_CAP = 300;
@@ -164,6 +187,13 @@ export function evaluateRemediation(input: VerdictInput): Bilan {
   if (unexpectedLabels.length > 0) reject(`Libellés inattendus ajoutés à l'image : ${unexpectedLabels.join(", ")}.`);
   if (addedSevere.length > 0) reject(`${addedSevere.length} nouvelle(s) vulnérabilité(s) élevée(s) ou critique(s) apparue(s) : ${addedSevere.slice(0, 5).map((v) => v.id).join(", ")}${addedSevere.length > 5 ? "…" : ""}.`);
   if ((input.requireNetDecrease ?? true) && resolved.length === 0) reject("Aucune vulnérabilité résolue : le correctif n'apporte aucune amélioration.");
+  const verification: Verification | null = input.verification
+    ? { state: verificationState(input.verification.source, input.verification.patched), check: input.verification.check, source: input.verification.source, patched: input.verification.patched }
+    : null;
+  if (verification?.state === "regression") {
+    const p = verification.patched;
+    reject(`Régression détectée : la commande de vérification réussit sur l'image d'origine mais échoue sur l'image corrigée${p?.timedOut ? " (délai dépassé)" : p?.exitCode !== null && p?.exitCode !== undefined ? ` (code de sortie ${p.exitCode}, attendu ${verification.check.expectExit})` : ""}.`);
+  }
   if (verdict !== "rejected") {
     if (remainingFixable.length > 0) {
       verdict = "partial";
@@ -193,5 +223,6 @@ export function evaluateRemediation(input: VerdictInput): Bilan {
     remaining: sorted([...remainingFixable, ...unfixable]).slice(0, LIST_CAP),
     added: sorted(added).slice(0, LIST_CAP),
     truncatedLists: resolved.length > LIST_CAP || remainingFixable.length + unfixable.length > LIST_CAP || added.length > LIST_CAP,
+    verification,
   };
 }

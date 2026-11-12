@@ -755,6 +755,15 @@ export type RemediationStatus =
 
 export interface RemediationBilanVuln { id: string; severity: VulnSeverity; pkg: string; installed: string; fixed: string | null }
 
+export interface RemediationVerifyRun { ok: boolean; exitCode: number | null; timedOut: boolean; outputMatched: boolean | null }
+/** Vérification de démarrage : réussie, régression (refusée), non concluante (échoue déjà sur l'image d'origine), non effectuée (agent ancien). */
+export interface RemediationVerification {
+  state: "passed" | "regression" | "inconclusive" | "skipped";
+  check: { command: string[]; expectExit: number; outputContains: string | null };
+  source: RemediationVerifyRun | null;
+  patched: RemediationVerifyRun | null;
+}
+
 export interface RemediationBilan {
   verdict: "validated" | "partial" | "rejected";
   reasons: string[];
@@ -764,6 +773,7 @@ export interface RemediationBilan {
   remaining: RemediationBilanVuln[];
   added: RemediationBilanVuln[];
   truncatedLists: boolean;
+  verification: RemediationVerification | null;
 }
 
 export interface RemediationJob {
