@@ -5,6 +5,7 @@ import { currentStep, guideSteps, type RegistrySetup } from "../guide";
 
 // Parcours d'un correctif d'image, de la mise en place du registre au déploiement : où en est-on, et quelle est la suite.
 const props = defineProps<{ scannedImages: number; jobs: number; toReview: number; applied: number }>();
+const emit = defineEmits<{ close: [] }>();
 
 const registry = ref<RegistrySetup | null>(null);
 const loaded = ref(false);
@@ -28,12 +29,15 @@ const isOpen = computed(() => open.value ?? !setupDone.value);
 </script>
 
 <template>
-  <details v-if="loaded" class="rounded-xl border border-slate-200 bg-white" :open="isOpen" @toggle="open = ($event.target as HTMLDetailsElement).open">
-    <summary class="flex cursor-pointer flex-wrap items-center gap-2 px-4 py-3 text-sm font-medium">
+  <details v-if="loaded" class="relative rounded-xl border border-slate-200 bg-white" :open="isOpen" @toggle="open = ($event.target as HTMLDetailsElement).open">
+    <summary class="flex cursor-pointer flex-wrap items-center gap-2 px-4 py-3 pr-12 text-sm font-medium">
       <FaIcon :icon="['fas', 'route']" class="text-slate-500" />
       Corriger une image : le parcours
       <span v-if="current" class="font-normal text-slate-600">· prochaine étape : <strong>{{ current.title }}</strong></span>
       <span v-else class="font-normal text-green-700">· tout est en place</span>
+      <button type="button" class="absolute right-3 top-2.5 rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label="Fermer l’aide (réaffichable dans Paramètres → Affichage)" title="Fermer (réaffichable dans Paramètres → Affichage)" @click.prevent="emit('close')">
+        <FaIcon :icon="['fas', 'xmark']" />
+      </button>
     </summary>
     <ol class="space-y-2 border-t border-slate-100 px-4 py-3 text-sm" aria-label="Étapes du correctif">
       <li v-for="(s, n) in steps" :key="s.id" class="flex items-start gap-3">

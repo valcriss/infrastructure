@@ -30,6 +30,9 @@ export function writeJson(key: string, value: unknown, s: Store | null = store()
   }
 }
 
+/** Aide « Corriger une image : le parcours » masquée par l’utilisateur (page Images, réglage dans Affichage). */
+export const GUIDE_HIDDEN_KEY = "console.guide.remediation.hidden";
+
 /** Booléen réactif mémorisé sous `key` (par navigateur). */
 export function usePersistedFlag(key: string, fallback: boolean): Ref<boolean> {
   const value = ref(readJson<unknown>(key, fallback) === true);

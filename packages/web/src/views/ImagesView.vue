@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
+import { usePersistedFlag, GUIDE_HIDDEN_KEY } from "../persist";
 import { ago, api, describeError, fmtDate, shortId, type ImageView, type RemediationJob } from "../api";
 import RemediationDialog from "../components/RemediationDialog.vue";
 import RemediationGuide from "../components/RemediationGuide.vue";
@@ -24,6 +25,7 @@ const fixing = ref<ImageView | null>(null);
 const error = ref("");
 const info = ref("");
 const route = useRoute();
+const guideHidden = usePersistedFlag(GUIDE_HIDDEN_KEY, false);
 const filter = ref<"" | "managed" | "never" | "vulnerable" | "failed" | "updates">(route.query.filter === "updates" ? "updates" : "");
 const search = ref("");
 const open = reactive<Record<string, boolean>>({});
@@ -162,6 +164,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-3 text-sm">
+        <button v-if="guideHidden" type="button" class="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-slate-600 hover:bg-slate-100" title="Afficher l’aide : corriger une image" @click="guideHidden = false">
+          <FaIcon :icon="['fas', 'circle-question']" /> Aide
+        </button>
         <button class="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700" @click="scanAll = true">
           <FaIcon :icon="['fas', 'shield-halved']" /> Scanner tout…
         </button>
@@ -180,7 +185,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </select>
       </div>
     </div>
-    <RemediationGuide :scanned-images="scannedImages" :jobs="jobs.length" :to-review="toReview.length" :applied="appliedCount" />
+    <RemediationGuide v-if="!guideHidden" :scanned-images="scannedImages" :jobs="jobs.length" :to-review="toReview.length" :applied="appliedCount" @close="guideHidden = true" />
     <section v-if="toReview.length > 0" aria-label="Correctifs à relire" class="rounded-xl border border-green-300 bg-green-50 p-4 text-sm text-green-900">
       <p class="font-medium">{{ toReview.length }} correctif(s) préparé(s) automatiquement, à relire</p>
       <p class="text-xs">Rien n'a été appliqué ni déployé : relisez le bilan, puis utilisez l'image corrigée dans une application si vous le souhaitez.</p>
