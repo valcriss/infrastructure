@@ -6808,6 +6808,9 @@
                   },
                   "message": {
                     "type": "string"
+                  },
+                  "amend": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -6895,7 +6898,7 @@
     "/api/v1/stacks/{id}/services/{service}/image-tag": {
       "patch": {
         "summary": "Changer l'étiquette de l'image d'un service",
-        "description": "Refuse une image paramétrée par une variable, épinglée par digest ou construite localement.",
+        "description": "Refuse une image paramétrée par une variable, épinglée par digest ou construite localement. Avec `amend: true`, la modification est ajoutée à la révision courante si elle n'est pas déployée (409 `revision_not_amendable` sinon) au lieu de créer une révision.",
         "tags": [
           "Stacks"
         ],
@@ -6944,6 +6947,9 @@
                   },
                   "message": {
                     "type": "string"
+                  },
+                  "amend": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
