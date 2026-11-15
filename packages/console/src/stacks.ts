@@ -295,6 +295,12 @@ export interface ChangeOptions {
    * à jour d'étiquette d'image ; toute modification à la main d'une stack gérée est refusée (423).
    */
   allowManaged?: boolean;
+  /**
+   * Ajoute la modification à la révision courante au lieu d'en créer une nouvelle. Réservé à une révision enregistrée
+   * mais jamais déployée (et non abandonnée), sans opération en cours : sinon 409 `revision_not_amendable`. Le message
+   * est ajouté à celui de la révision, et l'amendement est consigné dans l'audit.
+   */
+  amend?: boolean;
 }
 
 /** Refuse (423) la modification manuelle d'une stack générée et entretenue par la console. */
@@ -316,8 +322,8 @@ export async function changeStack(
   options: ChangeOptions = {},
 ): Promise<ChangeResult> {
   return withTx(pool, async (c) => {
-    const stack = await c.query<{ current_revision: number; managed_by: string | null }>(
-      "SELECT current_revision, managed_by FROM stacks WHERE id = $1 FOR UPDATE",
+    const stack = await c.query<{ current_revision: number; deployed_revision: number | null; managed_by: string | null }>(
+      "SELECT current_revision, deployed_revision, managed_by FROM stacks WHERE id = $1 FOR UPDATE",
       [stackId],
     );
     const row = stack.rows[0];
@@ -341,6 +347,30 @@ export async function changeStack(
     assertValidContent(next);
     const digest = digestOf(next);
     if (digest === current.digest) return { revision: current.revision, changed: false };
+
+    if (options.amend) {
+      const meta = await c.query<{ abandoned_at: Date | null; message: string | null }>(
+        "SELECT abandoned_at, message FROM stack_revisions WHERE stack_id = $1 AND revision = $2",
+        [stackId, current.revision],
+      );
+      const busy = await c.query("SELECT 1 FROM operations WHERE stack_id = $1 AND status IN ('pending', 'running')", [stackId]);
+      if (row.deployed_revision === current.revision || meta.rows[0]?.abandoned_at || busy.rowCount) {
+        throw new HttpError(409, "revision_not_amendable", "La révision courante est déjà déployée, abandonnée ou en cours de déploiement : créez une nouvelle révision.", {
+          currentRevision: current.revision,
+        });
+      }
+      const previous = meta.rows[0]?.message ?? null;
+      const merged = previous && previous !== message ? `${previous} ; ${message}` : message;
+      await c.query(
+        `UPDATE stack_revisions SET compose = $3, variables = $4, files = $5, sensitive_files = $6, compose_sensitive = $7, digest = $8, message = $9
+          WHERE stack_id = $1 AND revision = $2`,
+        [stackId, current.revision, next.compose, JSON.stringify(next.variables), JSON.stringify(next.files), JSON.stringify(next.sensitiveFiles), next.composeSensitive, digest, merged],
+      );
+      await c.query("UPDATE stacks SET updated_at = now() WHERE id = $1", [stackId]);
+      await bumpConfigRevision(c);
+      await audit(c, author, "stack.revision.amend", `${stackId}@${current.revision}`, "success");
+      return { revision: current.revision, changed: true };
+    }
 
     const revision = current.revision + 1;
     await c.query(

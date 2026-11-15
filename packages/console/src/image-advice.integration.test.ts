@@ -329,6 +329,35 @@ describe.skipIf(!url)("CVE : corrigeables, risques acceptés, comparaison de ver
     expect(((await call("GET", `/api/v1/stacks/${stackId}/candidate-scans`)).json.candidates as any[]).map((c) => c.ref)).not.toContain(REF);
   });
 
+  it("ajoute la version à la révision non déployée au lieu d'en créer une, sauf si elle est déployée ou en cours de déploiement", async () => {
+    const fresh = (await call("POST", "/api/v1/stacks", { name: "retag-amend", hostId, compose: `services:
+  web:
+    image: ${REF}
+`, variables: {} })).json.id as string;
+    const base = `/api/v1/stacks/${fresh}/services`;
+    const rev = (await call("GET", `/api/v1/stacks/${fresh}`)).json.currentRevision as number;
+    expect((await call("PATCH", `${base}/web/image-tag`, { expectedRevision: rev, tag: "2.0-alpine" })).json.revision).toBe(rev + 1);
+    const amended = await call("PATCH", `${base}/web/image-tag`, { expectedRevision: rev + 1, tag: "2.1-alpine", amend: true });
+    expect(amended.status).toBe(200);
+    expect(amended.json).toMatchObject({ revision: rev + 1, changed: true });
+    const after = (await call("GET", `/api/v1/stacks/${fresh}`)).json;
+    expect(after.currentRevision).toBe(rev + 1);
+    expect(after.compose).toContain("image: myreg.invalid/team/app:2.1-alpine");
+    const amendedRev = (await call("GET", `/api/v1/stacks/${fresh}/revisions/${rev + 1}`)).json;
+    expect(amendedRev.message).toBe("Image du service web : étiquette 2.0-alpine ; Image du service web : étiquette 2.1-alpine");
+    await pool.query("INSERT INTO operations (type, stack_id, host_id, revision, status, requested_by) VALUES ('deploy', $1, $2, $3, 'running', 'test')", [fresh, hostId, rev + 1]);
+    expect((await call("PATCH", `${base}/web/image-tag`, { expectedRevision: rev + 1, tag: "2.2-alpine", amend: true })).status).toBe(409);
+    await pool.query("UPDATE operations SET status = 'succeeded' WHERE stack_id = $1", [fresh]);
+    await pool.query("UPDATE stacks SET deployed_revision = $2 WHERE id = $1", [fresh, rev + 1]);
+    const refused = await call("PATCH", `${base}/web/image-tag`, { expectedRevision: rev + 1, tag: "2.2-alpine", amend: true });
+    expect(refused.status).toBe(409);
+    expect(refused.json.code ?? refused.json.error?.code).toBe("revision_not_amendable");
+    // Sans amendement, une révision déployée donne bien une nouvelle révision.
+    expect((await call("PATCH", `${base}/web/image-tag`, { expectedRevision: rev + 1, tag: "2.2-alpine" })).json.revision).toBe(rev + 2);
+    await pool.query("UPDATE stacks SET deployed_revision = NULL WHERE id = $1", [fresh]);
+
+  });
+
   it("signale l'échec d'un téléchargement refusé par le registre", async () => {
     inbox.length = 0;
     const started = await call("POST", `/api/v1/stacks/${stackId}/services/web/candidate-scans`, { tag: "9.9" });

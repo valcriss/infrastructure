@@ -1,3 +1,8 @@
+<script lang="ts">
+// Dernier choix « ajouter au brouillon / nouvelle révision » par application, gardé pour les composants suivants.
+const amendChoice = new Map<string, boolean>();
+</script>
+
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, describeError, type CandidateView, type TagSuggestions } from "../api";
@@ -104,13 +109,18 @@ const adoptMessage = ref("");
 const adoptError = ref("");
 const adoptBusy = ref(false);
 const adoptDone = ref("");
+/** Une révision enregistrée mais non déployée existe : on peut y ajouter la modification. */
+const pending = ref(false);
+const amend = ref(true);
 
 async function startAdopt(c: CandidateView) {
   adoptError.value = adoptDone.value = "";
   adoptBusy.value = true;
   try {
-    const stack = await api<{ currentRevision: number }>(`/api/v1/stacks/${props.stackId}`);
+    const stack = await api<{ currentRevision: number; pendingDeploy?: boolean }>(`/api/v1/stacks/${props.stackId}`);
     revision.value = stack.currentRevision;
+    pending.value = stack.pendingDeploy === true;
+    amend.value = amendChoice.get(props.stackId) ?? true;
     const r = await api<{ before: string; after: string; from: string; to: string; file?: string | null }>(`${adoptUrl()}/preview`, { method: "POST", body: JSON.stringify({ expectedRevision: revision.value, tag: c.tag }) });
     adopt.value = { tag: c.tag, ...r };
     adoptMessage.value = "";
@@ -126,8 +136,10 @@ async function confirmAdopt() {
   adoptBusy.value = true;
   adoptError.value = "";
   try {
-    const r = await api<{ revision: number }>(adoptUrl(), { method: "PATCH", body: JSON.stringify({ expectedRevision: revision.value, tag: adopt.value.tag, ...(adoptMessage.value ? { message: adoptMessage.value } : {}) }) });
-    adoptDone.value = `Révision ${r.revision} enregistrée avec ${adopt.value.to}. Elle n'est pas déployée : utilisez « Déployer » dans la vue d'ensemble.`;
+    const amending = pending.value && amend.value;
+    if (pending.value) amendChoice.set(props.stackId, amend.value);
+    const r = await api<{ revision: number }>(adoptUrl(), { method: "PATCH", body: JSON.stringify({ expectedRevision: revision.value, tag: adopt.value.tag, ...(amending ? { amend: true } : {}), ...(adoptMessage.value ? { message: adoptMessage.value } : {}) }) });
+    adoptDone.value = `${amending ? `${adopt.value.to} ajouté à la révision ${r.revision}` : `Révision ${r.revision} enregistrée avec ${adopt.value.to}`}. Elle n'est pas déployée : utilisez « Déployer » dans la vue d'ensemble.`;
     adopt.value = null;
     emit("changed");
   } catch (err) {
@@ -208,14 +220,19 @@ const noneNewer = computed(() => suggestions.value !== null && suggestions.value
         <h2 class="text-lg font-semibold">Utiliser {{ adopt.to }}</h2>
         <p class="text-slate-600">
           <template v-if="adopt.file">L'image de base de « {{ service }} » (ligne FROM de <code>{{ adopt.file }}</code>)</template><template v-else>L'image de « {{ service }} »</template>
-          passe de <code>{{ adopt.from }}</code> à <code>{{ adopt.to }}</code> dans une nouvelle révision. Rien n'est déployé : vous déployez ensuite, quand vous le décidez.
+          passe de <code>{{ adopt.from }}</code> à <code>{{ adopt.to }}</code> dans {{ pending && amend ? `la révision ${revision} en cours` : "une nouvelle révision" }}. Rien n'est déployé : vous déployez ensuite, quand vous le décidez.
         </p>
+        <fieldset v-if="pending" class="space-y-1 rounded border border-slate-200 p-3">
+          <legend class="px-1 text-xs font-medium text-slate-700">La révision {{ revision }} est enregistrée mais pas encore déployée</legend>
+          <label class="flex items-start gap-2"><input v-model="amend" type="radio" :value="true" class="mt-1" /><span>Ajouter à la révision {{ revision }} <span class="text-slate-500">(recommandé : une seule révision à déployer)</span></span></label>
+          <label class="flex items-start gap-2"><input v-model="amend" type="radio" :value="false" class="mt-1" /><span>Créer une nouvelle révision {{ revision + 1 }}</span></label>
+        </fieldset>
         <DiffView :before="adopt.before" :after="adopt.after" />
         <input v-model="adoptMessage" maxlength="200" placeholder="Message de révision (optionnel)" aria-label="Message de révision" class="w-full rounded border border-slate-300 px-3 py-2" />
         <p v-if="adoptError" role="alert" class="text-red-700">{{ adoptError }}</p>
         <div class="flex justify-end gap-3">
           <button class="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100" @click="adopt = null">Annuler</button>
-          <button :disabled="adoptBusy" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="confirmAdopt">Enregistrer une révision</button>
+          <button :disabled="adoptBusy" class="rounded bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50" @click="confirmAdopt">{{ pending && amend ? "Ajouter à la révision" : "Enregistrer une révision" }}</button>
         </div>
       </div>
     </div>
